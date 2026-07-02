@@ -142,34 +142,31 @@ See [migration log entry](./log/03-chokidar-wrapper.md) for detailed implementat
 
 ### Phase 4: BundleManager Migration
 
-**Status**: Planned
+**Status**: ✅ Complete
 
-Migrate BundleManager to Effect-based BundleService using EventEmitter utilities from Phase 3.
+Migrated the class-based `BundleManager` to an Effect-based `BundleService` built on the Phase 3 chokidar wrapper.
 
 **Implementation**:
 
-- **Location**: `workspaces/mooncg/src/server/bundle-manager.ts` → `bundle-service.ts`
+- **Location**: `workspaces/mooncg/src/server/server/bundle-manager.ts` → `bundle-service.ts` (old files deleted)
 - **Complexity**: ⭐⭐⭐ Complex (file watching, event distribution, hot-reloading)
-- **Approach**:
-  - Use EventEmitter utilities from Phase 3
-  - `Ref<Array<MoonCG.Bundle>>` for mutable bundle list state
-  - `PubSub<BundleEvent>` for event distribution
-  - `Stream` for Chokidar file watching (general-purpose wrapper)
-  - `Effect.acquireRelease` for watcher lifecycle
-- **Consumers to migrate**: GraphicsLib, DashboardLib, ExtensionManager, SentryConfig, server/index.ts
-- **New utilities**:
-  - `_effect/file-watcher.ts` - Chokidar → Stream wrapper with retry logic
-  - `_effect/git-parser.ts` - Git parsing wrapper
+- `Ref<MoonCG.Bundle[]>` for the bundle list, `PubSub<BundleEvent>` for event distribution (`Data.TaggedEnum`: Ready, BundleChanged, GitChanged, InvalidBundle, BundleRemoved)
+- File watching via the existing `_effect/chokidar.ts` wrapper (streams + `Effect.forkScoped`); no new `file-watcher.ts` was needed
+- Debounce/backoff timers (100ms change delay, 500ms backoff, 250ms git debounce, 1s ready threshold) rebuilt with `Effect.sleep` and interruptible fibers stored in `Ref<Option<Fiber>>`
+- `Effect.Service` with parameterized `scoped: (options) => Effect`, so `BundleService.Default(options)` acts as the parameterized layer factory; `createServer` builds the instance in its scope and passes it to consumers
+- Readiness exposed as `awaitReady` (Deferred) instead of a `ready` flag + event
+- Consumers migrated (server/index.ts, dashboard.ts, extensions.ts, graphics/index.ts, graphics/registration.ts, sentry-config.ts): EventEmitter listeners → eager `PubSub.subscribe` + `Stream.fromQueue` forked with `Effect.forkScoped`; sync Express/Socket.IO handlers bridge via captured `Runtime.runSync`
+- Tests migrated to `bundle-service.test.ts` using the `testEffect()` helper
 
-**Key Patterns**:
+**Key Patterns Established**:
 
 - `Data.TaggedEnum` for event types
-- Chokidar → Stream conversion for file watching
-- EventEmitter → PubSub migration for event distribution
+- EventEmitter → PubSub migration with **eager subscription** (`PubSub.subscribe` before `Effect.forkScoped`, otherwise events published before the fiber starts are lost)
 - Stateful service with Ref for bundle list
-- Background stream processing with Effect.forkScoped
+- Interruptible fiber in a `Ref<Option<Fiber>>` as functional `clearTimeout`/`setTimeout` (debounce/backoff)
+- Queue-based decoupling to break mutually recursive `Effect.fn` definitions
 
-See [migration log entry](./log/04-bundle-manager.md) for detailed implementation plan.
+See [migration log entry](./log/04-bundle-manager.md) for detailed implementation notes.
 
 ### Phase 5: Route Libraries Migration
 

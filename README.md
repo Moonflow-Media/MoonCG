@@ -16,7 +16,6 @@ MoonCG is a broadcast graphics framework and application. It enables you to writ
 
 > Don't see your preferred streaming software on this list? MoonCG graphics require a modern browser engine. If your streaming software's implementation of browser source uses a recent-ish browser engine, chances are that MoonCG graphics will work in it. You can check what version your streaming software uses for its browser sources by opening [whatversion.net/chrome](https://www.whatversion.net/browser/) as a browser source.
 
-Have questions about MoonCG, or just want to say 'hi'? [Join our Discord server](https://discord.gg/nsXXDFGBEt)!
 
 ## Documentation & API Reference
 
@@ -76,6 +75,9 @@ By building on the web platform, and not building too many abstractions on top o
 MoonCG's roots are in small broadcasts with no budget. More recently, MoonCG has begun seeing use in increasingly elaborate productions. We believe that one set of tools can and should be able to scale up from the smallest show all the way to the biggest fathomable show. Whether you're using OBS for everything, or a hardware switcher with a traditional key/fill workflow, MoonCG can be a part of any broadcast graphics system.
 
 ## Maintainers
+- [Dominik "ElyFura" Seng](https://github.com/ElyFura)
+
+## Original Maintainers
 
 - [Matt "Bluee" McNamara](https://mattmcn.com/)
 - [Keiichiro "Hoishin" Amemiya](https://twitter.com/hoishinxii)

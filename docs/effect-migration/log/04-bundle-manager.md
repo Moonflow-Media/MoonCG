@@ -1,6 +1,6 @@
-# Phase 3: BundleManager Migration to Effect-TS
+# Phase 4: BundleManager Migration to Effect-TS
 
-**Status**: Planned
+**Status**: ✅ Complete
 **Complexity**: ⭐⭐⭐ Complex
 
 ## Overview
@@ -560,19 +560,110 @@ Once all consumers migrated and tests passing:
 
 ## Next Steps
 
-- [ ] Create file-watcher.ts wrapper
-- [ ] Create git-parser.ts wrapper
-- [ ] Implement BundleService core
-- [ ] Implement file event processing
-- [ ] Update server/index.ts consumer
-- [ ] Update graphics consumer
-- [ ] Update dashboard consumer
-- [ ] Update other consumers
-- [ ] Update tests
-- [ ] Verify all tests pass
-- [ ] Delete bundle-manager.ts
-- [ ] Update this log with problems/solutions
-- [ ] Mark as Completed
+- [x] ~~Create file-watcher.ts wrapper~~ (superseded by existing `_effect/chokidar.ts`, see Implementation Notes)
+- [x] ~~Create git-parser.ts wrapper~~ (not needed, see Implementation Notes)
+- [x] Implement BundleService core
+- [x] Implement file event processing
+- [x] Update server/index.ts consumer
+- [x] Update graphics consumer
+- [x] Update dashboard consumer
+- [x] Update other consumers
+- [x] Update tests
+- [x] Verify all tests pass
+- [x] Delete bundle-manager.ts
+- [x] Update this log with problems/solutions
+- [x] Mark as Completed
+
+## Implementation Notes
+
+Implemented 2026-07-03. The plan above was written before the Phase 3 chokidar wrapper landed; the final implementation deviates from it in several places, documented below.
+
+### Final Shape
+
+- **New file**: `workspaces/mooncg/src/server/server/bundle-service.ts` (note: `src/server/server/`, next to the old `bundle-manager.ts`, not `src/server/` as the plan said)
+  - `BundleEvent` via `Data.TaggedEnum` (`Ready`, `BundleChanged`, `GitChanged`, `InvalidBundle`, `BundleRemoved`)
+  - `makeBundleService(options)` — `Effect.fn` returning the scoped service implementation (`all`, `find`, `add`, `remove`, `subscribe` (the `PubSub`), `awaitReady`)
+  - `class BundleService extends Effect.Service<BundleService>()("BundleService", { scoped: makeBundleService })`
+- **Deleted**: `bundle-manager.ts`, `bundle-manager.test.ts` (no legacy code kept)
+- **Tests**: `bundle-service.test.ts` (all 9 test cases of the old suite migrated)
+
+### Deviations from the Plan
+
+1. **No `_effect/file-watcher.ts`** — The plan predates Phase 3. The existing `_effect/chokidar.ts` wrapper (`getWatcher` + `listenToAdd/Change/Unlink/Error` streams built on `_effect/event-listener.ts`) is used instead. Streams are subscribed _before_ initial bundle loading (mirroring the old handler registration order) and consumed with `Effect.forkScoped`.
+
+2. **No `_effect/git-parser.ts`, and no `GitService` usage** — The existing `_effect/git-service.ts` (isomorphic-git) returns a different shape than `MoonCG.Bundle.GitData` (`branch` is `Option<string>` there, plain `string` here) and `parseBundle` itself still calls the synchronous `parseGit` (git-rev-sync) internally. To keep behavior and data shape identical, the `gitChanged` handler keeps calling the synchronous `parseGit` wrapped in `Effect.sync`. Unifying on `GitService` is deferred until the bundle-parser itself is migrated.
+
+3. **Layer creation via `Effect.Service` args instead of a custom `makeBundleServiceLayer`** — `Effect.Service` supports `scoped: (…args) => Effect`, which turns the generated `BundleService.Default` into a _function_ `(options) => Layer<BundleService>`. That is the parameterized layer factory the plan asked for, with zero extra code.
+
+4. **`createServer` builds the service directly, not via Layer** — The constructor parameters (`bundlesPaths`, `cfgPath`, version, config) are computed inside `createServer`, so it does `BundleService.make(yield* makeBundleService(options))` in the server scope and passes the instance to consumers as a parameter (same call topology as before). Full context-based DI (providing `BundleService.Default(options)` in bootstrap) is deferred; `BundleService.Default(options)` exists for tests and future use.
+
+5. **`awaitReady` instead of `ready` flag + event** — Readiness is a `Deferred<void>`. `createServer` waits on `bundleService.awaitReady` with the same 15s timeout; this covers both the "already ready" and "not yet ready" branches of the old code. The `Ready` event is still published on the PubSub for parity.
+
+### Behavior Parity
+
+All timing/behavior of the old class was reproduced functionally:
+
+- **READY_WAIT_THRESHOLD (1s, refreshed by `add` events)**: a `lastAddTime` Ref updated by `add` events (only before ready) plus a sleep-loop fiber that publishes `Ready` once 1s has elapsed since the last add.
+- **100ms change delay**: `handleChange` forks `Effect.sleep("100 millis") → processChange` (does not block the event stream, like the old `setTimeout`).
+- **500ms backoff**: a backoff fiber stored in a `Ref<Option<Fiber>>`; `resetBackoffTimer` interrupts and re-forks it (functional `clearTimeout`/`setTimeout`). Pending bundle names accumulate in a `Ref<HashSet<string>>`.
+- **250ms git debounce**: same interruptible-fiber pattern; matches lodash `debounce` semantics (only the _last_ invocation's arguments within the window are processed, one shared debounce state for all bundles).
+- **Blacklist** (`node_modules`, `bower_components`, dot-directories), **enabled/disabled config filter**, **compatibleRange check only in legacy mode**, and the **`watcher.add()` symlink workaround** (chokidar#419) were ported 1:1.
+- **`add()` still publishes `BundleRemoved`** when replacing an existing bundle (the old `add` → `remove` → `emit` chain), so replicant updates behave identically.
+- Log messages were kept semantically identical, emitted via `yield* Effect.log*` with `Effect.annotateLogs("module", "bundle-manager")` applied to the whole service scope (forked fibers inherit the annotation).
+
+### Problems & Solutions
+
+#### Problem 1: PubSub subscription race lost events
+
+**Problem**: E2E test `bundles replicant` failed (6 bundles instead of 5) — the `BundleRemoved` event published while the ExtensionManager unloads a bundle with unsatisfied dependencies never reached the replicant updater.
+
+**Root Cause**: `Stream.fromPubSub` only subscribes when the forked fiber actually starts running. The old `EventEmitter.addListener` subscribed synchronously. Events published between `Effect.forkScoped(...)` and the fiber's startup were dropped.
+
+**Solution**: Subscribe eagerly with `yield* PubSub.subscribe(pubsub)` (scoped `Dequeue`) at setup time and consume with `Stream.fromQueue(subscription)` inside the forked fiber. Applied to all consumers (server/index.ts, dashboard.ts, graphics/registration.ts, sentry-config.ts).
+
+```typescript
+const subscription = yield * PubSub.subscribe(bundleService.subscribe);
+yield *
+  Effect.forkScoped(
+    Stream.fromQueue(subscription).pipe(
+      Stream.filter((event) => event._tag === "BundleChanged"),
+      Stream.runForEach(handle),
+    ),
+  );
+```
+
+#### Problem 2: Mutual recursion between backoff and change handler
+
+**Problem**: The old logic is cyclic: `handleChange → processChange → resetBackoffTimer → (timer fires) → handleChange`. With `const`-bound `Effect.fn` definitions and the "no return type annotations" rule, TypeScript cannot infer types in a reference cycle.
+
+**Solution**: The backoff fiber does not call `handleChange` directly; it offers the pending bundle names to a `Queue<string>` (`delayedChanges`), and a separately forked consumer stream calls `handleChange`. This breaks the static reference cycle while preserving runtime behavior exactly.
+
+#### Problem 3: Sync Express/Socket.IO handlers need `all()`/`find()`
+
+**Problem**: Route and socket handlers are synchronous callbacks, but the service API is effectful.
+
+**Solution**: The Phase-2 bridge pattern — capture the runtime once (`const runtime = yield* Effect.runtime()`) and call `Runtime.runSync(runtime, bundleService.find(name))` inside the callbacks. `all`/`find` are pure `Ref` reads, so `runSync` is safe.
+
+#### Problem 4: Latent bug in sentry-config's `ready` listener
+
+**Problem (pre-existing)**: The old code registered `once("ready")` inside `sentryConfigRouter`, but `createServer` only calls `sentryConfigRouter` _after_ awaiting the ready event — so the listener could never fire and the Sentry bundle metadata stayed empty.
+
+**Solution**: `sentry-config.ts` now uses `bundleService.awaitReady` (a `Deferred`), which resolves even when readiness happened earlier. This intentionally fixes the latent bug (metadata is now populated); noted here as the one deliberate behavior change.
+
+### Testing
+
+- `bundle-service.test.ts` uses the `testEffect()` helper (repo is on vitest v4, so `@effect/vitest` was avoided per the guidelines; it would also inject `TestClock`, which conflicts with the service's live `Effect.sleep`-based timers).
+- The long-lived service instance is created in `beforeAll` inside a manually managed `Scope.make()` and closed in `afterAll` (`Scope.close`), matching the old shared-`BundleManager` test structure. `MOONCG_ROOT` is set before a dynamic `import()` of the module, as before.
+- Watcher tests subscribe eagerly via `PubSub.subscribe` _before_ touching files, then take the first matching event from the stream.
+- The server handle now exposes `bundleService` instead of `bundleManager`; `test/helpers/setup.ts`, `test/installed-mode/setup.ts` and `test/legacy-mode/core.test.ts` were updated (`Effect.runSync(server.bundleService.all())`).
+
+### Verification
+
+- `npm run build`, `npm run typecheck`, `npm run lint` — clean
+- `bundle-service.test.ts`: 9/9 passed
+- `test/legacy-mode`: 184 passed, 5 skipped (18 files)
+- `test/installed-mode`: 11 passed
+- All other unit tests (`workspaces/mooncg/src`): 113 passed (18 files)
 
 ## Effect Patterns to Establish
 
