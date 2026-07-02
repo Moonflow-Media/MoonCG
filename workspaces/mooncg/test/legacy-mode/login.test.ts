@@ -60,11 +60,23 @@ async function logIn(
 	username = "admin",
 	password = "password",
 ): Promise<void | Page> {
+	console.error("logIn: start", Date.now());
+	loginPage.on("request", (r) => {
+		console.error("REQ", r.method(), r.url());
+	});
+	loginPage.on("requestfinished", (r) => {
+		console.error("FIN", r.method(), r.url());
+	});
+	loginPage.on("requestfailed", (r) => {
+		console.error("FAILED", r.method(), r.url(), r.failure()?.errorText);
+	});
 	await loginPage.bringToFront();
 	await loginPage.goto(C.dashboardUrl()); // Should redirect to the login page, but set our returnTo to the dashboard, which we want.
+	console.error("logIn: after goto", Date.now(), loginPage.url());
 	expect(loginPage.url()).toBe(C.loginUrl());
 
 	await loginPage.waitForNetworkIdle();
+	console.error("logIn: after first idle", Date.now());
 
 	// Use this instead of .type to ensure that any previous input is cleared.
 	await loginPage.evaluate(
@@ -83,7 +95,9 @@ async function logIn(
 	);
 
 	await loginPage.click("#localSubmit");
+	console.error("logIn: after click", Date.now());
 	await loginPage.waitForNetworkIdle();
+	console.error("logIn: after second idle", Date.now(), loginPage.url());
 
 	expect(loginPage.url()).toBe(C.dashboardUrl());
 }

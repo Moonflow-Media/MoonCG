@@ -1,6 +1,6 @@
 # MoonCG
 
-[![MoonCG](https://raw.githubusercontent.com/Moonflow-Media/MoonCG/refs/heads/main/media/splash.png)](https://mooncg.dev/)
+[![MoonCG](https://github.com/Moonflow-Media/MoonCG/blob/da349cc261fb0929c8f41b391dbe29b497c89cd4/media/splash.png)](https://mooncg.dev/)
 
 [![Discord](https://img.shields.io/discord/754749209722486814)](https://discord.gg/nsXXDFGBEt)
 [![Build Status](https://github.com/Moonflow-Media/MoonCG/workflows/CI/badge.svg)](https://github.com/hoishin/mooncg/actions?query=workflow%3ACI)
