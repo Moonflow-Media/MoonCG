@@ -3,9 +3,9 @@
 [![MoonCG](https://github.com/Moonflow-Media/MoonCG/blob/da349cc261fb0929c8f41b391dbe29b497c89cd4/media/splash.png)](https://mooncg.dev/)
 
 [![Discord](https://img.shields.io/discord/754749209722486814)](https://discord.gg/nsXXDFGBEt)
-[![Build Status](https://github.com/Moonflow-Media/MoonCG/workflows/CI/badge.svg)](https://github.com/hoishin/mooncg/actions?query=workflow%3ACI)
-[![Coverage Status](https://codecov.io/gh/Moonflow-Media/MoonCG/branch/main/graph/badge.svg)](https://codecov.io/gh/mooncg/mooncg)
-[![Docker Build Status](https://ghcr-badge.egpl.dev/Moonflow-Media/MoonCG/latest_tag)](https://ghcr.io/mooncg/mooncg)
+[![Build Status](https://github.com/Moonflow-Media/MoonCG/workflows/CI/badge.svg)](https://github.com/Moonflow-Media/MoonCG/actions?query=workflow%3ACI)
+[![Coverage Status](https://codecov.io/gh/Moonflow-Media/MoonCG/branch/main/graph/badge.svg)](https://codecov.io/gh/Moonflow-Media/MoonCG)
+[![Docker Build Status](https://ghcr-badge.egpl.dev/Moonflow-Media/MoonCG/latest_tag)](https://ghcr.io/Moonflow-Media/MoonCG)
 
 MoonCG is a broadcast graphics framework and application. It enables you to write complex, dynamic broadcast graphics using the web platform. MoonCG has no graphics or drawing primitives of its own. Instead, MoonCG provides a structure for your code and an API to facilitate moving data between the dashboard, the server, and your graphics. It makes few assumptions about how to best code a graphic, and gives you freedom to use whatever libraries, frameworks, tools, and methodologies you want. As such, MoonCG graphics can be rendered in any environment that can render HTML, including:
 
