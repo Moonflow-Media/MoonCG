@@ -19,11 +19,6 @@
 				workspaces: <%= JSON.stringify(workspaces) %>
 			};
 			Object.freeze(window.__renderData__);
-
-			// An unfortunate hack used by tests to account for some Polymer-related race conditions.
-			window.addEventListener('WebComponentsReady', () => {
-				window.WebComponentsReady = true
-			});
 		</script>
 
 		<% if (sentryEnabled) { %>
@@ -67,6 +62,6 @@
 		</style>
 	</head>
 	<body>
-		<ncg-dashboard id="mooncg_dashboard"></ncg-dashboard>
+		<div id="dashboard-root"></div>
 	</body>
 </html>

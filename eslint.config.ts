@@ -52,12 +52,6 @@ export default defineConfig(
 		},
 	},
 	{
-		files: ["workspaces/mooncg/src/client/dashboard/**/*"],
-		rules: {
-			"@typescript-eslint/no-unused-expressions": "off",
-		},
-	},
-	{
 		plugins: {
 			"simple-import-sort": simpleImportSort,
 		},

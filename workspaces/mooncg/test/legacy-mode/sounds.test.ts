@@ -146,12 +146,10 @@ test("mixer - assignable cues - should list new sound Assets as they are uploade
 	const ret = await dashboard.evaluate(
 		async () =>
 			new Promise<string | void>((resolve) => {
-				const el = (document as any)
-					.querySelector("ncg-dashboard")
-					.shadowRoot.querySelector("ncg-mixer")
-					.shadowRoot.querySelector('ncg-sounds[bundle-name="test-bundle"]')
-					.shadowRoot.querySelector("ncg-sound-cue:nth-child(1)").$.select
-					.$.select;
+				const el = document.querySelector<HTMLSelectElement>(
+					'[data-testid="mixer"] [data-bundle-name="test-bundle"]' +
+						' [data-testid="sound-cue-name-only"] select',
+				);
 
 				if (!el) {
 					resolve("NoSuchElement");

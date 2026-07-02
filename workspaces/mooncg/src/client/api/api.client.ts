@@ -343,9 +343,9 @@ export class MoonCGAPIClient<
 			return undefined;
 		}
 
-		const dialog = topDoc
-			.querySelector("ncg-dashboard")
-			?.shadowRoot?.querySelector(`#dialogs #${bundle}_${name}`);
+		const dialog = topDoc.querySelector(
+			`#dialogs [data-dialog-bundle="${bundle}"][data-dialog-name="${name}"]`,
+		);
 		return (dialog as any) ?? undefined;
 	}
 

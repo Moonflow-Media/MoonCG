@@ -2,12 +2,9 @@
 	"extends": "../../tsconfig.json",
 	"compilerOptions": {
 		"module": "preserve",
-		"lib": ["ESNext", "DOM"],
-		"noPropertyAccessFromIndexSignature": false,
-
-		"paths": {
-			"@polymer/polymer": ["./src/client/types/polymer-element.d.ts"]
-		}
+		"lib": ["ESNext", "DOM", "DOM.Iterable"],
+		"jsx": "react-jsx",
+		"noPropertyAccessFromIndexSignature": false
 	},
 	"exclude": ["./typetest"]
 }

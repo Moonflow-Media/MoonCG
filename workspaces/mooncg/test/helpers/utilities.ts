@@ -29,24 +29,6 @@ export const waitForRegistration = async (
 	return response;
 };
 
-export const shadowSelector = <T extends Element>(
-	page: Puppeteer.Page,
-	...selectors: string[]
-): Promise<Puppeteer.ElementHandle<T>> =>
-	page.evaluateHandle((selectors) => {
-		let foundDom = document.querySelector(selectors[0]);
-		if (!foundDom) throw new Error(`Failed to find selector "${selectors[0]}"`);
-		for (const selector of selectors.slice(1)) {
-			if (foundDom!.shadowRoot) {
-				foundDom = foundDom!.shadowRoot.querySelector(selector);
-			} else {
-				foundDom = foundDom!.querySelector(selector);
-			}
-		}
-
-		return foundDom;
-	}, selectors) as any;
-
 export function invokeAck(ack?: MoonCG.Acknowledgement, ...args: any[]): void {
 	if (!ack) {
 		throw new Error("no callback provided");

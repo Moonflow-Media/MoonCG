@@ -19,6 +19,7 @@ ncg-dashboard (Root Container)
 ## 2. Kern-Verhalten
 
 ### ncg-dashboard (Root)
+
 - Hash-Routing (app-location), Breakpoint 640px (Drawer auf Mobile)
 - Daten: `window.__renderData__.bundles`, `window.__renderData__.workspaces`
 - Pages: Workspaces + Graphics, Mixer, Assets, Settings
@@ -26,11 +27,13 @@ ncg-dashboard (Root Container)
 - Logout: `window.location.href = "/logout"`
 
 ### ncg-workspace
+
 - Masonry-Layout: Packery (columnWidth 128, gutter 16) + Draggabilly (Handle `#dragHandle`)
 - Panel-Reihenfolge persistiert: `localStorage['{workspace}_workspace_panel_sort_order']` (JSON-Array der Panelnamen)
 - fullbleed-Workspaces: ein Panel, volle Fläche, kein Packery
 
 ### ncg-dashboard-panel
+
 - Attribute: bundle, panel, displayTitle, headerColor, width (1–10 → 128×n + 16×(n−1) px), opened, fullbleed
 - Collapse-State persistiert: Key `{bundle}.{panel}.opened`
 - Header-Buttons: Standalone öffnen (`?standalone=true`), Collapse-Toggle, Drag-Handle
@@ -38,25 +41,30 @@ ncg-dashboard (Root Container)
 - Sentry-Fehlerweiterleitung aus iframe.contentWindow wenn `ncgConfig.sentry.enabled`
 
 ### ncg-dialog
+
 - Modal mit Backdrop, ESC-Close, iframe-Inhalt, Confirm/Dismiss-Buttons
 - Custom Events an iframe.contentDocument: `dialog-opened`, `dialog-confirmed`, `dialog-dismissed`
 - **Öffentlicher Vertrag**: `window.dashboardApi.getDialog(name)` liefert ein Element mit imperativem `open()`/`close()`; `getDialogDocument(name)` liefert das iframe-Document. Bundles rufen `.open()` selbst auf (dialog_opener.js).
 
 ### Graphics-Seite
+
 - Replicant `graphics:instances` (ns `mooncg`)
 - Socket: `graphic:requestBundleRefresh` (bundleName), `graphic:kill`, `graphic:reload` ({bundleName, pathName, instance})
 - Status-Farben: nominal #00A651, out-of-date #FFC700, inaktiv #CACACA; URL kopieren mit Toast
 
 ### Mixer-Seite
+
 - Replicants: `volume:master` (ns `_sounds`, 0–100), `volume:{bundle}` (ns `_sounds`), `soundCues` (ns {bundle}), `assets:sounds` (ns {bundle})
 - Fader (two-way), Datei-Auswahl pro Cue
 
 ### Assets-Seite
+
 - Replicants: `collections` (ns `_assets`), `assets:{categoryName}` (ns {collectionName})
 - Upload: POST multipart an `/assets/{collectionName}/{categoryName}` (multer), Accept-Filter aus `category.allowedTypes`
 - Delete: HTTP DELETE auf File-URL
 
 ### Settings-Seite
+
 - `window.token`, Copy Key, Show Key, Reset Key (Socket `regenerateToken`, danach reload)
 
 ## 3. Bootstrapping / Globals (Server-injiziert via dashboard.tmpl)
@@ -94,4 +102,4 @@ Script-Reihenfolge im Template: inline Globals → soundjs → socket.js → api
 - Upload: eigene Dropzone + fetch (ersetzt vaadin-upload)
 - Clipboard: navigator.clipboard (ersetzt clipboard.js)
 - Dialoge: natives <dialog> mit imperativem Handle (open/close aufs DOM-Element)
-- Entfernen: @polymer/*, iron-*/paper-*, @vaadin/vaadin-upload, draggabilly, packery, clipboard.js
+- Entfernen: @polymer/_, iron-_/paper-*, @vaadin/vaadin-upload, draggabilly, packery, clipboard.js

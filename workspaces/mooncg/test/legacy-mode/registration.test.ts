@@ -11,12 +11,8 @@ const test = await setupTest();
 test("singleInstance - scripts get injected into /instance/*.html routes", async ({
 	dashboard,
 }) => {
-	const graphicButton = await util.shadowSelector(
-		dashboard,
-		"ncg-dashboard",
-		'paper-tab[data-route="graphics"]',
-	);
-	await graphicButton.click();
+	await dashboard.bringToFront();
+	await dashboard.click('[data-testid="tab-graphics"]');
 
 	const response = await fetch(`${C.rootUrl()}instance/killed.html`);
 	expect(response.status).toBe(200);
@@ -50,24 +46,24 @@ test(
 	"singleInstance - should redirect to killed.html when the instance is killed",
 	{ skip: true },
 	async ({ dashboard, singleInstance }) => {
-		const graphicBoard = await util.shadowSelector(
-			dashboard,
-			"ncg-dashboard",
-			"ncg-graphics",
-			"ncg-graphics-bundle",
-			"ncg-graphic:nth-of-type(2)",
+		await dashboard.bringToFront();
+		await dashboard.click('[data-testid="tab-graphics"]');
+
+		const graphicBoard = await dashboard.waitForSelector(
+			'[data-testid="graphics-bundle-test-bundle"] [data-graphic-url$="single_instance.html"]',
 		);
 
-		await dashboard.bringToFront();
 		const expandButton: any = await dashboard.evaluateHandle(
-			(el: any) => el.shadowRoot.querySelector("paper-button#collapseButton"),
+			(el: any) => el.querySelector('[data-testid="graphic-collapse"]'),
 			graphicBoard,
 		);
 		await expandButton.click();
 
 		const button: any = await dashboard.evaluateHandle(
 			(el: any) =>
-				el.shadowRoot.querySelector("ncg-graphic-instance").$.killButton,
+				el.querySelector(
+					'[data-testid="graphic-instance"] [data-testid="instance-kill"]',
+				),
 			graphicBoard,
 		);
 		await button.click();
@@ -90,25 +86,19 @@ test(
 test("refresh all instances in a bundle", async ({ graphic, dashboard }) => {
 	await util.waitForRegistration(graphic);
 
-	const graphicBundle = await util.shadowSelector(
-		dashboard,
-		"ncg-dashboard",
-		"ncg-graphics",
-		"ncg-graphics-bundle",
-	);
-
 	await dashboard.bringToFront();
-	const reload: any = await dashboard.evaluateHandle(
-		(el: any) => el.$.reloadButton,
-		graphicBundle,
+	await dashboard.click('[data-testid="tab-graphics"]');
+
+	const reload = await dashboard.waitForSelector(
+		'[data-testid="graphics-bundle-test-bundle"] [data-testid="bundle-reload-all"]',
 	);
-	await reload.click();
-	const confirm: any = await dashboard.evaluateHandle(
-		(el: any) => el.shadowRoot.querySelector("paper-button[dialog-confirm]"),
-		graphicBundle,
+	await reload!.click();
+
+	const confirm = await dashboard.waitForSelector(
+		'[data-testid="graphics-bundle-test-bundle"] [data-testid="bundle-reload-all-confirm"]',
 	);
 
-	await Promise.all([confirm.click(), graphic.waitForNavigation()]);
+	await Promise.all([confirm!.click(), graphic.waitForNavigation()]);
 
 	const refreshMarker = await util.waitForRegistration(graphic);
 	expect(refreshMarker).toBe(undefined);
@@ -118,14 +108,14 @@ test("refresh all instances of a graphic", async ({ graphic, dashboard }) => {
 	await util.waitForRegistration(graphic);
 
 	await dashboard.bringToFront();
-	const reload = await util.shadowSelector(
-		dashboard,
-		"ncg-dashboard",
-		"ncg-graphics",
-		"ncg-graphics-bundle",
-		"ncg-graphic",
-		"#reloadButton",
+	await dashboard.click('[data-testid="tab-graphics"]');
+
+	const reload = await dashboard.waitForSelector(
+		'[data-testid="graphic"] [data-testid="graphic-reload"]:not([disabled])',
 	);
+	if (!reload) {
+		throw new Error("graphic reload button not found");
+	}
 
 	await Promise.all([reload.click(), graphic.waitForNavigation()]);
 
@@ -137,15 +127,14 @@ test("refresh individual instance", async ({ graphic, dashboard }) => {
 	await util.waitForRegistration(graphic);
 
 	await dashboard.bringToFront();
-	const reload = await util.shadowSelector(
-		dashboard,
-		"ncg-dashboard",
-		"ncg-graphics",
-		"ncg-graphics-bundle",
-		"ncg-graphic",
-		"ncg-graphic-instance:last-of-type",
-		"#reloadButton",
+	// The instance list may be collapsed (hidden), so the click is dispatched
+	// directly on the DOM node instead of through Puppeteer's mouse emulation.
+	const reload = await dashboard.waitForSelector(
+		'[data-testid="graphic"] [data-testid="graphic-instance"]:last-of-type [data-testid="instance-reload"]',
 	);
+	if (!reload) {
+		throw new Error("instance reload button not found");
+	}
 
 	await Promise.all([
 		graphic.waitForNavigation(),
@@ -162,14 +151,15 @@ test("refresh individual instance", async ({ graphic, dashboard }) => {
 test("dragging the graphic generates the correct url for obs", async ({
 	dashboard,
 }) => {
-	const graphicLink = await util.shadowSelector(
-		dashboard,
-		"ncg-dashboard",
-		"ncg-graphics",
-		"ncg-graphics-bundle",
-		"ncg-graphic",
-		"#url",
+	await dashboard.bringToFront();
+	await dashboard.click('[data-testid="tab-graphics"]');
+
+	const graphicLink = await dashboard.waitForSelector(
+		'[data-testid="graphic"] [data-testid="graphic-url"]',
 	);
+	if (!graphicLink) {
+		throw new Error("graphic url link not found");
+	}
 
 	await dashboard.evaluateHandle((gl: HTMLElement) => {
 		gl.addEventListener("dragstart", (ev: DragEvent) => {

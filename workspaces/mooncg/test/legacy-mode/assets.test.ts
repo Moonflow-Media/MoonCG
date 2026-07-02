@@ -7,7 +7,6 @@ import { expect } from "vitest";
 import type { MoonCG } from "../../src/types/mooncg";
 import { setupTest } from "../helpers/setup";
 import * as C from "../helpers/test-constants";
-import * as util from "../helpers/utilities";
 
 const test = await setupTest();
 
@@ -72,49 +71,42 @@ test.for([0, 1])(
 			).toBeTruthy();
 		}
 
-		const assetTab = await util.shadowSelector(
-			dashboard,
-			"ncg-dashboard",
-			'paper-tab[data-route="assets"]',
+		await dashboard.bringToFront();
+		await dashboard.click('[data-testid="tab-assets"]');
+		const categorySelector =
+			'[data-testid="asset-category-test-bundle-assets"]';
+		await dashboard.waitForSelector(categorySelector);
+
+		const uploadsBefore = await dashboard.$eval(categorySelector, (el) =>
+			Number(el.getAttribute("data-successful-uploads")),
 		);
-		await assetTab.click();
-		const assetCategoryEl = await util.shadowSelector(
-			dashboard,
-			"ncg-dashboard",
-			"ncg-assets",
-			'ncg-asset-category[collection-name="test-bundle"][category-name="assets"]',
-		);
-		const addEl: puppeteer.ElementHandle = (await dashboard.evaluateHandle(
-			(el: any) => el.$.add,
-			assetCategoryEl,
-		)) as any;
-		await addEl.click();
-		const fileInputEl = await dashboard.evaluateHandle(
-			(el: any) => el.$.uploader.$.fileInput,
-			assetCategoryEl,
-		);
+
+		await dashboard.click(`${categorySelector} [data-testid="asset-add"]`);
+		const fileInputEl: puppeteer.ElementHandle<HTMLInputElement> =
+			(await dashboard.waitForSelector(
+				`${categorySelector} [data-testid="asset-file-input"]`,
+			)) as any;
 
 		// Upload the file
-		(fileInputEl as any).uploadFile(UPLOAD_SOURCE_PATH);
+		await fileInputEl.uploadFile(UPLOAD_SOURCE_PATH);
 
 		// Wait for upload to complete on the server
-		await dashboard.evaluate(
-			async (assetCategoryEl: any) =>
-				new Promise<void>((resolve) => {
-					if (assetCategoryEl._successfulUploads === 1) {
-						resolve();
-					} else {
-						assetCategoryEl.$.uploader.addEventListener(
-							"upload-success",
-							resolve,
-							{
-								once: true,
-								passive: true,
-							},
-						);
-					}
-				}),
-			assetCategoryEl,
+		await dashboard.waitForFunction(
+			(selector: string, expected: number) => {
+				const el = document.querySelector(selector);
+				return (
+					Boolean(el) &&
+					Number(el!.getAttribute("data-successful-uploads")) >= expected
+				);
+			},
+			{},
+			categorySelector,
+			uploadsBefore + 1,
+		);
+
+		// Close the upload dialog again so it doesn't block later interactions.
+		await dashboard.click(
+			`${categorySelector} [data-testid="upload-dialog-close"]`,
 		);
 
 		expect(fs.existsSync(TWITTER_BANNER_PATH)).toBe(true);
@@ -176,38 +168,18 @@ test("deletion - 200", async ({ apis, dashboard }) => {
 	// Should have 2 files: initial.png and #twitter_banner.png
 	expect(assetRep.value).toHaveLength(2);
 
-	const assetTab = await util.shadowSelector(
-		dashboard,
-		"ncg-dashboard",
-		'paper-tab[data-route="assets"]',
-	);
-	await assetTab.click();
+	await dashboard.bringToFront();
+	await dashboard.click('[data-testid="tab-assets"]');
 
 	// Find the #twitter_banner file specifically
-	const assetCategoryEl = await util.shadowSelector(
-		dashboard,
-		"ncg-dashboard",
-		"ncg-assets",
-		'ncg-asset-category[collection-name="test-bundle"][category-name="assets"]',
+	const deleteButton = await dashboard.waitForSelector(
+		'[data-testid="asset-category-test-bundle-assets"]' +
+			' [data-testid="asset-file"][data-file-name="#twitter_banner"]' +
+			' [data-testid="asset-delete"]',
 	);
-
-	const deleteButton: puppeteer.ElementHandle = (await dashboard.evaluateHandle(
-		(categoryEl: any) => {
-			const assetFiles = categoryEl.shadowRoot.querySelectorAll(
-				"util-scrollable > ncg-asset-file",
-			);
-			for (const assetFile of assetFiles) {
-				if (assetFile.file?.name === "#twitter_banner") {
-					return assetFile.$.delete;
-				}
-			}
-			const names = Array.from(assetFiles).map((f: any) => f.file?.name);
-			throw new Error(
-				`#twitter_banner asset file not found. Found: ${names.join(", ")}`,
-			);
-		},
-		assetCategoryEl,
-	)) as any;
+	if (!deleteButton) {
+		throw new Error("#twitter_banner asset file not found");
+	}
 
 	await deleteButton.click();
 

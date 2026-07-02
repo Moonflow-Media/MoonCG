@@ -1,5 +1,3 @@
-import type { PaperDialogElement } from "@polymer/paper-dialog";
-
 import type { MoonCGAPIClient } from "../../api/api.client";
 
 document.addEventListener(
@@ -10,12 +8,11 @@ document.addEventListener(
 			.composedPath()[0]
 			.closest("[mooncg-dialog]");
 		if (elWithDialogAttr) {
-			const dialogName = elWithDialogAttr.getAttribute("mooncg-dialog");
-			const dialogId = `${mooncg.bundleName}_${dialogName as string}`;
-			const dialogElement = window
-				.top!.document.querySelector("ncg-dashboard")!
-				.shadowRoot!.getElementById(dialogId) as PaperDialogElement;
-			dialogElement.open();
+			const dialogName = elWithDialogAttr.getAttribute(
+				"mooncg-dialog",
+			) as string;
+			const dialogElement = mooncg.getDialog(dialogName);
+			dialogElement?.open();
 		}
 	},
 	false,

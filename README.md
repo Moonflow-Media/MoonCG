@@ -2,9 +2,8 @@
 
 [![MoonCG](https://github.com/Moonflow-Media/MoonCG/blob/da349cc261fb0929c8f41b391dbe29b497c89cd4/media/splash.png)](https://mooncg.dev/)
 
-[![Discord](https://img.shields.io/discord/754749209722486814)](https://discord.gg/nsXXDFGBEt)
 [![Build Status](https://github.com/Moonflow-Media/MoonCG/workflows/CI/badge.svg)](https://github.com/Moonflow-Media/MoonCG/actions?query=workflow%3ACI)
-[![Coverage Status](https://codecov.io/gh/Moonflow-Media/MoonCG/branch/main/graph/badge.svg)](https://codecov.io/gh/Moonflow-Media/MoonCG)
+[![Coverage Status](https://codecov.io/gh/Moonflow-Media/MoonCG/graph/badge.svg?token=8DJ802MHOR)](https://codecov.io/gh/Moonflow-Media/MoonCG)
 [![Docker Build Status](https://ghcr-badge.egpl.dev/Moonflow-Media/MoonCG/latest_tag)](https://ghcr.io/Moonflow-Media/MoonCG)
 
 MoonCG is a broadcast graphics framework and application. It enables you to write complex, dynamic broadcast graphics using the web platform. MoonCG has no graphics or drawing primitives of its own. Instead, MoonCG provides a structure for your code and an API to facilitate moving data between the dashboard, the server, and your graphics. It makes few assumptions about how to best code a graphic, and gives you freedom to use whatever libraries, frameworks, tools, and methodologies you want. As such, MoonCG graphics can be rendered in any environment that can render HTML, including:
@@ -15,7 +14,6 @@ MoonCG is a broadcast graphics framework and application. It enables you to writ
 - [CasparCG](https://github.com/CasparCG/server/releases) (v2.2.0+)
 
 > Don't see your preferred streaming software on this list? MoonCG graphics require a modern browser engine. If your streaming software's implementation of browser source uses a recent-ish browser engine, chances are that MoonCG graphics will work in it. You can check what version your streaming software uses for its browser sources by opening [whatversion.net/chrome](https://www.whatversion.net/browser/) as a browser source.
-
 
 ## Documentation & API Reference
 
@@ -75,6 +73,7 @@ By building on the web platform, and not building too many abstractions on top o
 MoonCG's roots are in small broadcasts with no budget. More recently, MoonCG has begun seeing use in increasingly elaborate productions. We believe that one set of tools can and should be able to scale up from the smallest show all the way to the biggest fathomable show. Whether you're using OBS for everything, or a hardware switcher with a traditional key/fill workflow, MoonCG can be a part of any broadcast graphics system.
 
 ## Maintainers
+
 - [Dominik "ElyFura" Seng](https://github.com/ElyFura)
 
 ## Original Maintainers

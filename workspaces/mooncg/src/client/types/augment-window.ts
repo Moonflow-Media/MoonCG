@@ -14,7 +14,6 @@ declare global {
 			bundles: MoonCG.Bundle[];
 			workspaces: MoonCG.Workspace[];
 		};
-		WebComponentsReady: boolean;
 	}
 
 	var MoonCG: ConstructorType;

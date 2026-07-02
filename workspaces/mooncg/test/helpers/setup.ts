@@ -177,10 +177,10 @@ export async function setupTest(mooncgConfigName = "mooncg.json") {
 				if (!dashboard) {
 					const page = await browser.newPage();
 					await page.goto(C.dashboardUrl());
+					await page.waitForSelector('[data-testid="dashboard-app"]');
 					await page.waitForFunction(
 						() => typeof window.dashboardApi !== "undefined",
 					);
-					await page.waitForFunction(() => window.WebComponentsReady);
 					dashboard = page;
 				}
 				await use(dashboard);
