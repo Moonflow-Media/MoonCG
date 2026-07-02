@@ -1,9 +1,9 @@
 # MoonCG
 
-[![MoonCG](https://raw.githubusercontent.com/Moonflow-Media/MoonCG/main/media/splash.png)](https://mooncg.dev/)
+[![MoonCG](https://raw.githubusercontent.com/Moonflow-Media/MoonCG/refs/heads/main/media/splash.png)](https://mooncg.dev/)
 
 [![Discord](https://img.shields.io/discord/754749209722486814)](https://discord.gg/nsXXDFGBEt)
-[![Build Status](https://github.com/hoishin/mooncg/workflows/CI/badge.svg)](https://github.com/hoishin/mooncg/actions?query=workflow%3ACI)
+[![Build Status](https://github.com/Moonflow-Media/MoonCG/workflows/CI/badge.svg)](https://github.com/hoishin/mooncg/actions?query=workflow%3ACI)
 [![Coverage Status](https://codecov.io/gh/Moonflow-Media/MoonCG/branch/main/graph/badge.svg)](https://codecov.io/gh/mooncg/mooncg)
 [![Docker Build Status](https://ghcr-badge.egpl.dev/Moonflow-Media/MoonCG/latest_tag)](https://ghcr.io/mooncg/mooncg)
 
