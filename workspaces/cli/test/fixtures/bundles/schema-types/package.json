@@ -1,6 +1,6 @@
 {
   "name": "schema-types",
-  "nodecg": {
+  "mooncg": {
     "compatibleRange": "^1.3.0"
   }
 }

@@ -17,7 +17,7 @@ beforeEach(() => {
 	// Set up environment.
 	const tempFolder = setupTmpDir();
 	process.chdir(tempFolder);
-	fs.writeFileSync("package.json", JSON.stringify({ name: "nodecg" }));
+	fs.writeFileSync("package.json", JSON.stringify({ name: "mooncg" }));
 
 	// Copy fixtures.
 	fs.cpSync(path.resolve(dirname, "../../test/fixtures/"), "./", {
@@ -26,7 +26,7 @@ beforeEach(() => {
 
 	// Build program.
 	program = createMockProgram();
-	schemaTypesCommand(program as any);
+	schemaTypesCommand(program);
 });
 
 it("should successfully create d.ts files from the replicant schemas and create an index.d.ts file", async () => {

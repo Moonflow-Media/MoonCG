@@ -1,6 +1,6 @@
 {
   "name": "uninstall-test",
-  "nodecg": {
+  "mooncg": {
     "compatibleRange": "^1.3.0"
   }
 }

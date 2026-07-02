@@ -4,9 +4,9 @@ import packageJson from "../package.json" with { type: "json" };
 import { setupCommands } from "./commands/index.js";
 
 export function setupCLI() {
-	process.title = "nodecg";
+	process.title = "mooncg";
 
-	const program = new Command("nodecg");
+	const program = new Command("mooncg");
 
 	// Initialise CLI
 	program.version(packageJson.version).usage("<command> [options]");

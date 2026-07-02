@@ -1,6 +1,6 @@
 # Effect Migration Log
 
-This directory contains detailed log entries for the NodeCG Effect-TS migration. Each entry documents a meaningful chunk of work (e.g., completing a phase, migrating a subsystem, solving a major architectural challenge).
+This directory contains detailed log entries for the MoonCG Effect-TS migration. Each entry documents a meaningful chunk of work (e.g., completing a phase, migrating a subsystem, solving a major architectural challenge).
 
 ## How to Use This Log
 

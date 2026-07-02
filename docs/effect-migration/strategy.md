@@ -1,16 +1,16 @@
-# Effect-TS Migration Strategy for NodeCG
+# Effect-TS Migration Strategy for MoonCG
 
 ## Overview
 
-NodeCG is migrating to Effect-TS using a top-down approach:
+MoonCG is migrating to Effect-TS using a top-down approach:
 
-- Single `NodeRuntime.runMain` call at application startup (`workspaces/nodecg/src/server/bootstrap.ts`)
+- Single `NodeRuntime.runMain` call at application startup (`workspaces/mooncg/src/server/bootstrap.ts`)
 - Entire server runs as one Effect program
-- Effect HTTP Router for core NodeCG routes
+- Effect HTTP Router for core MoonCG routes
 - Express as catchall fallback for user-registered routes
 - HTTP layer entirely within Effect runtime
 
-This ensures full Effect benefits (context propagation, error handling, interruption) throughout the HTTP layer while maintaining backward compatibility for user routes via `nodecg.mount()`.
+This ensures full Effect benefits (context propagation, error handling, interruption) throughout the HTTP layer while maintaining backward compatibility for user routes via `mooncg.mount()`.
 
 ## Migration Phases
 
@@ -18,7 +18,7 @@ This ensures full Effect benefits (context propagation, error handling, interrup
 
 **Status**: ✅ Completed (2025-11-15)
 
-Transform `workspaces/nodecg/src/server/bootstrap.ts` into an Effect program with single execution point.
+Transform `workspaces/mooncg/src/server/bootstrap.ts` into an Effect program with single execution point.
 
 **Implementation**:
 
@@ -31,7 +31,7 @@ Transform `workspaces/nodecg/src/server/bootstrap.ts` into an Effect program wit
 - Log level configuration from `LOG_LEVEL` environment variable
 - Removed custom exit hooks - Effect's interruption handles SIGTERM/SIGINT
 
-**Utilities Created** (`workspaces/nodecg/src/server/_effect/`):
+**Utilities Created** (`workspaces/mooncg/src/server/_effect/`):
 
 - `boundary.ts` - `UnknownError` for wrapping non-Effect exceptions
 - `expect-error.ts` - Type utility for documenting expected errors
@@ -51,7 +51,7 @@ See [migration log entry](./log/01-phase-1-bootstrap.md) for detailed implementa
 
 **Status**: ✅ Core Implementation Complete (testing in progress)
 
-Replace `NodeCGServer` class with functional Effect-based architecture.
+Replace `MoonCGServer` class with functional Effect-based architecture.
 
 **Approach**:
 
@@ -148,11 +148,11 @@ Migrate BundleManager to Effect-based BundleService using EventEmitter utilities
 
 **Implementation**:
 
-- **Location**: `workspaces/nodecg/src/server/bundle-manager.ts` → `bundle-service.ts`
+- **Location**: `workspaces/mooncg/src/server/bundle-manager.ts` → `bundle-service.ts`
 - **Complexity**: ⭐⭐⭐ Complex (file watching, event distribution, hot-reloading)
 - **Approach**:
   - Use EventEmitter utilities from Phase 3
-  - `Ref<Array<NodeCG.Bundle>>` for mutable bundle list state
+  - `Ref<Array<MoonCG.Bundle>>` for mutable bundle list state
   - `PubSub<BundleEvent>` for event distribution
   - `Stream` for Chokidar file watching (general-purpose wrapper)
   - `Effect.acquireRelease` for watcher lifecycle
@@ -192,7 +192,7 @@ Migrate login system to Effect.
 
 **Components**:
 
-- Login middleware (`workspaces/nodecg/src/server/login/`)
+- Login middleware (`workspaces/mooncg/src/server/login/`)
 - Session management (Passport integration)
 - Socket.IO authentication middleware
 
@@ -202,7 +202,7 @@ Migrate Replicator to Effect-based state management.
 
 **Components**:
 
-- Replicator class (`workspaces/nodecg/src/server/replicant/replicator.ts`)
+- Replicator class (`workspaces/mooncg/src/server/replicant/replicator.ts`)
 - ReplicantAPI
 - Database integration for persistence
 
@@ -233,7 +233,7 @@ Evaluate whether to replace Express with Effect Platform HTTP Server.
 **Considerations**:
 
 - Effect HTTP Router for core routes
-- Express as fallback for user-registered routes via `nodecg.mount()`
+- Express as fallback for user-registered routes via `mooncg.mount()`
 - Migration complexity vs benefits
 - Backward compatibility requirements
 
@@ -404,11 +404,11 @@ import express from "express";
 
 const expressApp = express();
 
-// Users register custom routes via nodecg.mount()
+// Users register custom routes via mooncg.mount()
 // which internally does: expressApp.use(path, handler)
 
 const router = HttpRouter.empty.pipe(
-  // Core NodeCG routes use Effect
+  // Core MoonCG routes use Effect
   HttpRouter.get("/api/bundles",
     Effect.gen(function* () {
       const bundles = yield* BundleService;
@@ -458,7 +458,7 @@ Long-running servers should use `Effect.never` to represent operations that run 
 ```typescript
 const program = Effect.acquireRelease(
   Effect.gen(function* () {
-    const server = new NodeCGServer();
+    const server = new MoonCGServer();
     yield* Effect.promise(() => server.start());
 
     // Server runs indefinitely - only completes when interrupted
@@ -481,7 +481,7 @@ Use native system events (e.g., HTTP server's 'close') instead of manually-emitt
 ```typescript
 const program = Effect.acquireRelease(
   Effect.gen(function* () {
-    const server = new NodeCGServer();
+    const server = new MoonCGServer();
 
     // Create error promise from native event
     const errorPromise = new Promise<never>((_, reject) => {
@@ -614,7 +614,7 @@ The current SQLite database adapter is marked as "legacy" and uses deprecated Ty
 
 ## Success Criteria
 
-- Maintain NodeCG's functionality throughout the migration
+- Maintain MoonCG's functionality throughout the migration
 - Single execution point at application startup using `NodeRuntime.runMain`
 - Improved error handling and type safety across the entire stack
 - Full Effect benefits (interruption, resource management, context propagation)

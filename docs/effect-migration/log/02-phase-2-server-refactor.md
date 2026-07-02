@@ -5,7 +5,7 @@
 
 ## Overview
 
-Replace `NodeCGServer` class with functional Effect-based architecture. The current class-based design with EventEmitter is replaced with plain Effect functions using `Effect.acquireRelease` for resource management.
+Replace `MoonCGServer` class with functional Effect-based architecture. The current class-based design with EventEmitter is replaced with plain Effect functions using `Effect.acquireRelease` for resource management.
 
 ## Goals
 
@@ -68,11 +68,11 @@ export const createServer = Effect.fn("createServer")(function* () {
 
 ### 3. Remove EventEmitter, Keep Public API
 
-**Decision**: Remove NodeCGServer's internal EventEmitter, but keep ExtensionManager's `emitToAllInstances` calls
+**Decision**: Remove MoonCGServer's internal EventEmitter, but keep ExtensionManager's `emitToAllInstances` calls
 
 **Rationale**:
 
-- NodeCGServer's events (`error`, `started`, `stopped`, `extensionsLoaded`) are not used by any internal code
+- MoonCGServer's events (`error`, `started`, `stopped`, `extensionsLoaded`) are not used by any internal code
 - ExtensionManager's broadcasts (`extensionsLoaded`, `serverStarted`, `serverStopping`, `login`, `logout`) are documented public API for bundle extensions
 - Removing unused internal events simplifies code
 - Maintaining public API ensures backward compatibility
@@ -86,10 +86,10 @@ export const createServer = Effect.fn("createServer")(function* () {
 
 **Events kept** (public API):
 
-- `extensionManager.emitToAllInstances("extensionsLoaded")` - documented in /nodecg/docs
-- `extensionManager.emitToAllInstances("serverStarted")` - documented in /nodecg/docs
-- `extensionManager.emitToAllInstances("serverStopping")` - documented in /nodecg/docs
-- `extensionManager.emitToAllInstances("login/logout")` - documented in /nodecg/docs
+- `extensionManager.emitToAllInstances("extensionsLoaded")` - documented in /mooncg/docs
+- `extensionManager.emitToAllInstances("serverStarted")` - documented in /mooncg/docs
+- `extensionManager.emitToAllInstances("serverStopping")` - documented in /mooncg/docs
+- `extensionManager.emitToAllInstances("login/logout")` - documented in /mooncg/docs
 
 ### 4. Test Access via Handle, Not Type Casting
 
@@ -286,9 +286,9 @@ Check documentation and external usage before removing events.
 
 ## Files Modified
 
-- `workspaces/nodecg/src/server/server/index.ts` - Complete rewrite as Effect functions
-- `workspaces/nodecg/src/server/bootstrap.ts` - Simplified to call createServer() and run
-- `workspaces/nodecg/test/legacy-mode/core.test.ts` - Update to use handle pattern
+- `workspaces/mooncg/src/server/server/index.ts` - Complete rewrite as Effect functions
+- `workspaces/mooncg/src/server/bootstrap.ts` - Simplified to call createServer() and run
+- `workspaces/mooncg/test/legacy-mode/core.test.ts` - Update to use handle pattern
 - `docs/effect-migration/strategy.md` - Added Phase 2 section
 - `docs/effect-migration/log/02-phase-2-server-refactor.md` - This file
 
@@ -325,7 +325,7 @@ The scope stays open because the fiber waits on `Fiber.join(serverFiber)`. Inter
 
 ### Issue 2: Ready Signaling Too Early
 
-**Problem**: Tests need to know when the server is actually listening (to access `NODECG_TEST_PORT`), but initial implementation signaled ready immediately after forking `run`:
+**Problem**: Tests need to know when the server is actually listening (to access `MOONCG_TEST_PORT`), but initial implementation signaled ready immediately after forking `run`:
 
 ```typescript
 const serverFiber = yield * Effect.fork(handle.run);
@@ -347,7 +347,7 @@ server.listen({ host, port }, () => {
   Runtime.runSync(
     runtime,
     Effect.gen(function* () {
-      // Set NODECG_TEST_PORT for tests
+      // Set MOONCG_TEST_PORT for tests
       if (isReady) {
         yield* Deferred.succeed(isReady, undefined);
       }
@@ -430,7 +430,7 @@ const run = Effect.fn(function* () {
 - [x] Implement resource management with `Effect.acquireRelease` for io, replicator, extensionManager
 - [x] Implement `createServer` function with all setup logic
 - [x] Update bootstrap.ts to use new Effect-based pattern
-- [x] Remove NodeCGServer class, EventMap interface, TypedEmitter import
+- [x] Remove MoonCGServer class, EventMap interface, TypedEmitter import
 - [x] Create test compatibility wrapper (Promise-based API wrapping Effect fibers)
 - [x] Fix scope management (fiber-based scoping with `Effect.scoped`)
 - [x] Use Deferred for ready synchronization instead of manual promises
@@ -507,8 +507,8 @@ The wrapper:
 
 ## Files Modified
 
-- `workspaces/nodecg/src/server/server/index.ts` - Complete rewrite from class to Effect functions
-- `workspaces/nodecg/src/server/bootstrap.ts` - Simplified to call createServer() and run
-- `workspaces/nodecg/test/helpers/setup.ts` - Test compatibility wrapper for legacy mode
-- `workspaces/nodecg/test/installed-mode/setup.ts` - Test compatibility wrapper for installed mode
+- `workspaces/mooncg/src/server/server/index.ts` - Complete rewrite from class to Effect functions
+- `workspaces/mooncg/src/server/bootstrap.ts` - Simplified to call createServer() and run
+- `workspaces/mooncg/test/helpers/setup.ts` - Test compatibility wrapper for legacy mode
+- `workspaces/mooncg/test/installed-mode/setup.ts` - Test compatibility wrapper for installed mode
 - `docs/effect-migration/log/02-phase-2-server-refactor.md` - This file

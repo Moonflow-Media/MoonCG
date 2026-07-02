@@ -52,7 +52,7 @@ export default defineConfig(
 		},
 	},
 	{
-		files: ["workspaces/nodecg/src/client/dashboard/**/*"],
+		files: ["workspaces/mooncg/src/client/dashboard/**/*"],
 		rules: {
 			"@typescript-eslint/no-unused-expressions": "off",
 		},
@@ -74,9 +74,9 @@ export default defineConfig(
 			"**/dist",
 			"**/out",
 			"bundles",
-			"workspaces/nodecg/test/fixtures",
+			"workspaces/mooncg/test/fixtures",
 			"coverage",
-			"workspaces/nodecg/typetest/fake-bundle",
+			"workspaces/mooncg/typetest/fake-bundle",
 			"generated-types/client",
 			"generated-types/server",
 		],

@@ -2,7 +2,6 @@ import "../../test/mocks/nano-spawn-mock.js";
 
 import fs from "node:fs";
 
-import { Command } from "commander";
 import type { PackageJson } from "type-fest";
 import { beforeEach, expect, test, vi } from "vitest";
 
@@ -18,8 +17,8 @@ vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
 
 	// Mock npm registry version list
 	if (
-		/registry\.npmjs\.org\/nodecg$/.exec(urlString) ||
-		/registry\.npmjs\.org\/nodecg\?/.exec(urlString)
+		/registry\.npmjs\.org\/mooncg$/.exec(urlString) ||
+		/registry\.npmjs\.org\/mooncg\?/.exec(urlString)
 	) {
 		return new Response(
 			JSON.stringify({
@@ -36,7 +35,7 @@ vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
 	}
 
 	// Mock npm dist-tags endpoint
-	if (/registry\.npmjs\.org\/-\/package\/nodecg\/dist-tags/.exec(urlString)) {
+	if (/registry\.npmjs\.org\/-\/package\/mooncg\/dist-tags/.exec(urlString)) {
 		return new Response(
 			JSON.stringify({
 				latest: "2.6.1",
@@ -47,12 +46,12 @@ vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
 	}
 
 	// Mock package metadata (matches both regular versions like 2.0.0 and canary like 0.0.0-canary.abc)
-	if (/registry\.npmjs\.org\/nodecg\/[\d]/.exec(urlString)) {
-		const version = /nodecg\/([\d.]+(?:-[a-zA-Z0-9.-]+)?)/.exec(urlString)?.[1];
+	if (/registry\.npmjs\.org\/mooncg\/[\d]/.exec(urlString)) {
+		const version = /mooncg\/([\d.]+(?:-[a-zA-Z0-9.-]+)?)/.exec(urlString)?.[1];
 		return new Response(
 			JSON.stringify({
 				dist: {
-					tarball: `https://mock-registry.test/nodecg/-/nodecg-${version}.tgz`,
+					tarball: `https://mock-registry.test/mooncg/-/mooncg-${version}.tgz`,
 				},
 			}),
 		);
@@ -61,7 +60,7 @@ vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
 	// Mock tarball download
 	if (urlString.includes("mock-registry.test")) {
 		const version =
-			/nodecg-([\d.]+(?:-[a-zA-Z0-9.-]+)?)\.tgz/.exec(urlString)?.[1] ??
+			/mooncg-([\d.]+(?:-[a-zA-Z0-9.-]+)?)\.tgz/.exec(urlString)?.[1] ??
 			"2.0.0";
 
 		// Create minimal gzipped tar archive with package/package.json
@@ -72,11 +71,11 @@ vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
 		const { pipeline } = await import("node:stream");
 		const { promisify } = await import("node:util");
 
-		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nodecg-test-tar-"));
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mooncg-test-tar-"));
 		const packageDir = path.join(tmpDir, "package");
 		fs.mkdirSync(packageDir, { recursive: true });
 
-		const packageJson = { name: "nodecg", version };
+		const packageJson = { name: "mooncg", version };
 		fs.writeFileSync(
 			path.join(packageDir, "package.json"),
 			JSON.stringify(packageJson, null, 2),
@@ -127,19 +126,19 @@ const readPackageJson = (): PackageJson => {
 beforeEach(() => {
 	chdir(true);
 	program = createMockProgram();
-	setupCommand(program as unknown as Command);
+	setupCommand(program);
 });
 
-test("should install the latest NodeCG when no version is specified", async () => {
+test("should install the latest MoonCG when no version is specified", async () => {
 	chdir();
 	await program.runWith("setup --skip-dependencies");
-	expect(readPackageJson().name).toBe("nodecg");
+	expect(readPackageJson().name).toBe("mooncg");
 });
 
-test("should install v2 NodeCG when specified", async () => {
+test("should install v2 MoonCG when specified", async () => {
 	chdir();
 	await program.runWith("setup 2.0.0 --skip-dependencies");
-	expect(readPackageJson().name).toBe("nodecg");
+	expect(readPackageJson().name).toBe("mooncg");
 	expect(readPackageJson().version).toBe("2.0.0");
 
 	await program.runWith("setup 2.1.0 -u --skip-dependencies");
@@ -149,21 +148,21 @@ test("should install v2 NodeCG when specified", async () => {
 	expect(readPackageJson().version).toBe("2.0.0");
 });
 
-test("install NodeCG with dependencies", async () => {
+test("install MoonCG with dependencies", async () => {
 	chdir();
 	await program.runWith("setup 2.6.1");
-	expect(readPackageJson().name).toBe("nodecg");
+	expect(readPackageJson().name).toBe("mooncg");
 	expect(readPackageJson().version).toBe("2.6.1");
 	expect(fs.readdirSync(".")).toContain("node_modules");
 });
 
-test("should throw when trying to install v1 NodeCG", async () => {
+test("should throw when trying to install v1 MoonCG", async () => {
 	chdir();
 	const spy = vi.spyOn(console, "error");
 	await program.runWith("setup 1.9.0 -u --skip-dependencies");
 	expect(spy.mock.calls[0]).toMatchInlineSnapshot(`
 		[
-		  "CLI does not support NodeCG versions older than v2.0.0.",
+		  "CLI does not support MoonCG versions older than v2.0.0.",
 		]
 	`);
 	spy.mockRestore();
@@ -194,47 +193,47 @@ test("should print an error when the target version doesn't exist", async () => 
 	spy.mockRestore();
 });
 
-test("should print an error and exit, when nodecg is already installed in the current directory ", async () => {
+test("should print an error and exit, when mooncg is already installed in the current directory ", async () => {
 	chdir();
 	const spy = vi.spyOn(console, "error");
 	await program.runWith("setup 2.0.0 --skip-dependencies");
 	await program.runWith("setup 2.0.0 --skip-dependencies");
-	expect(spy).toBeCalledWith("NodeCG is already installed in this directory.");
+	expect(spy).toBeCalledWith("MoonCG is already installed in this directory.");
 	spy.mockRestore();
 });
 
 test("should install canary versions (0.0.0-*)", async () => {
 	chdir();
 	await program.runWith("setup 0.0.0-canary.abc123 --skip-dependencies");
-	expect(readPackageJson().name).toBe("nodecg");
+	expect(readPackageJson().name).toBe("mooncg");
 	expect(readPackageJson().version).toBe("0.0.0-canary.abc123");
 });
 
 test("should install PR release versions (0.0.0-pr.*)", async () => {
 	chdir();
 	await program.runWith("setup 0.0.0-pr.456.commit.def789 --skip-dependencies");
-	expect(readPackageJson().name).toBe("nodecg");
+	expect(readPackageJson().name).toBe("mooncg");
 	expect(readPackageJson().version).toBe("0.0.0-pr.456.commit.def789");
 });
 
 test("should install using 'latest' dist-tag", async () => {
 	chdir();
 	await program.runWith("setup latest --skip-dependencies");
-	expect(readPackageJson().name).toBe("nodecg");
+	expect(readPackageJson().name).toBe("mooncg");
 	expect(readPackageJson().version).toBe("2.6.1");
 });
 
 test("should install using 'next' dist-tag", async () => {
 	chdir();
 	await program.runWith("setup next --skip-dependencies");
-	expect(readPackageJson().name).toBe("nodecg");
+	expect(readPackageJson().name).toBe("mooncg");
 	expect(readPackageJson().version).toBe("0.0.0-canary.abc123");
 });
 
 test("should install using 'canary' dist-tag", async () => {
 	chdir();
 	await program.runWith("setup canary --skip-dependencies");
-	expect(readPackageJson().name).toBe("nodecg");
+	expect(readPackageJson().name).toBe("mooncg");
 	expect(readPackageJson().version).toBe("0.0.0-canary.abc123");
 });
 

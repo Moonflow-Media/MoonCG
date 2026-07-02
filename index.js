@@ -1,1 +1,1 @@
-import "nodecg";
+import "mooncg";

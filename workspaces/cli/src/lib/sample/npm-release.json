@@ -1,8 +1,8 @@
 {
-	"name": "nodecg-cli",
+	"name": "mooncg-cli",
 	"version": "8.7.0",
 	"license": "MIT",
-	"_id": "nodecg-cli@8.7.0",
+	"_id": "mooncg-cli@8.7.0",
 	"maintainers": [
 		{ "name": "mattmcnam", "email": "matt@mattmcn.com" },
 		{ "name": "hoishin", "email": "hoishinxii@gmail.com" }
@@ -20,12 +20,12 @@
 		},
 		{ "name": "Keiichiro Amemiya", "email": "kei@hoishin.dev" }
 	],
-	"homepage": "https://github.com/nodecg/nodecg-cli#readme",
-	"bugs": { "url": "http://github.com/nodecg/nodecg-cli/issues" },
-	"bin": { "nodecg": "dist/bin/nodecg.js" },
+	"homepage": "https://github.com/mooncg/mooncg-cli#readme",
+	"bugs": { "url": "http://github.com/mooncg/mooncg-cli/issues" },
+	"bin": { "mooncg": "dist/bin/mooncg.js" },
 	"dist": {
 		"shasum": "bd59db2d98c2077bc03623cb9be59ff45fb511a2",
-		"tarball": "https://registry.npmjs.org/nodecg-cli/-/nodecg-cli-8.7.0.tgz",
+		"tarball": "https://registry.npmjs.org/mooncg-cli/-/mooncg-cli-8.7.0.tgz",
 		"fileCount": 28,
 		"integrity": "sha512-RcoE8PhtivBz1dtKDmgBh3MTozckwymcPr9UC1oiagYMlDLoTvLC1Bqssef5h+rNNK/aBeVB33leySFEQWNbjQ==",
 		"signatures": [
@@ -54,11 +54,11 @@
 	"_npmUser": { "name": "hoishin", "email": "hoishinxii@gmail.com" },
 	"prettier": {},
 	"repository": {
-		"url": "git://github.com/nodecg/nodecg-cli.git",
+		"url": "git://github.com/mooncg/mooncg-cli.git",
 		"type": "git"
 	},
 	"_npmVersion": "10.9.0",
-	"description": "The NodeCG command line interface.",
+	"description": "The MoonCG command line interface.",
 	"directories": {},
 	"_nodeVersion": "22.12.0",
 	"dependencies": {
@@ -92,7 +92,7 @@
 		"eslint-plugin-simple-import-sort": "^12.1.1"
 	},
 	"_npmOperationalInternal": {
-		"tmp": "tmp/nodecg-cli_8.7.0_1735252303987_0.756945223884677",
+		"tmp": "tmp/mooncg-cli_8.7.0_1735252303987_0.756945223884677",
 		"host": "s3://npm-registry-packages-npm-production"
 	}
 }

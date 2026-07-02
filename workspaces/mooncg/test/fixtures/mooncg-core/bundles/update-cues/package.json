@@ -1,0 +1,22 @@
+{
+  "name": "update-cues",
+  "version": "0.0.0",
+  "description": "",
+  "homepage": "",
+  "author": {
+    "name": "MoonCG",
+    "url": "https://mooncg.dev"
+  },
+  "mooncg": {
+    "compatibleRange": "*",
+    "soundCues": [
+      {
+        "name": "updated-cue",
+        "assignable": false,
+        "defaultFile": "sound/default-file.ogg"
+      }
+    ]
+  },
+  "repository": "https://github.com/mooncg/mooncg.git",
+  "license": "MIT"
+}

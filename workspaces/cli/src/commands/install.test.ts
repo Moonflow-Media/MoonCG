@@ -2,7 +2,6 @@ import "../../test/mocks/nano-spawn-mock.js";
 
 import fs from "node:fs";
 
-import { Command } from "commander";
 import semver from "semver";
 import { beforeEach, expect, it, vi } from "vitest";
 
@@ -13,11 +12,11 @@ import { installCommand } from "./install.js";
 let program: MockCommand;
 const tempFolder = setupTmpDir();
 process.chdir(tempFolder);
-fs.writeFileSync("package.json", JSON.stringify({ name: "nodecg" }));
+fs.writeFileSync("package.json", JSON.stringify({ name: "mooncg" }));
 
 beforeEach(() => {
 	program = createMockProgram();
-	installCommand(program as unknown as Command);
+	installCommand(program);
 });
 
 it(

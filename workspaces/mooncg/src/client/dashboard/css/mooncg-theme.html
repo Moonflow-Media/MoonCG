@@ -1,0 +1,143 @@
+<dom-module id="mooncg-theme">
+	<template>
+		<style>
+			:host,
+			html {
+				color: white;
+
+				--mooncg-brand-blue: #00bebe;
+				--mooncg-brand-blue-dark: #004949;
+				--default-primary-color: var(--mooncg-brand-blue);
+				--primary-color: var(--mooncg-brand-blue);
+
+				--mooncg-accept-color: #32784a;
+				--mooncg-benign-color: #525f78;
+				--mooncg-configure-color: #6155bd;
+				--mooncg-danger-color: #cf7e44;
+				--mooncg-disabled-color: #8d8e91;
+				--mooncg-execute-color: #ffc700;
+				--mooncg-reject-color: #a33b3b;
+				--mooncg-selected-color: #5280d9;
+
+				--paper-toggle-button-checked-bar-color: var(--mooncg-brand-blue-dark);
+				--paper-toggle-button-checked-button-color: var(--mooncg-brand-blue);
+				--paper-toggle-button-checked-ink-color: var(--mooncg-brand-blue);
+				--paper-toggle-button-label-color: white;
+				--paper-toggle-button-unchecked-bar-color: #000000;
+				--paper-toggle-button-unchecked-button-color: #7f7f7f;
+
+				--paper-dialog-color: white;
+
+				--paper-input-container-color: white;
+				--paper-input-container-focus-color: white;
+				--paper-input-container-input-color: white;
+				--paper-slider-active-color: white;
+				--paper-slider-knob-color: white;
+
+				--paper-input-container: {
+					--paper-input-container-color: var(--mooncg-brand-blue);
+					--paper-input-container-focus-color: white;
+					--paper-input-container-input-color: white;
+				}
+
+				--paper-input-suffix: {
+					color: var(--mooncg-brand-blue);
+				}
+
+				--paper-dropdown-menu-icon: {
+					color: var(--mooncg-brand-blue);
+				}
+			}
+
+			vaadin-combo-box {
+				--iron-icon-fill-color: var(--mooncg-brand-blue);
+				--paper-input-suffix: {
+					height: 24px;
+					transform: translateY(-2px);
+				}
+			}
+
+			vaadin-upload {
+				--vaadin-upload-file-status-icon-complete: {
+					color: var(--mooncg-brand-blue);
+				}
+				--vaadin-upload-file-name: {
+					color: white;
+				}
+			}
+
+			paper-button {
+				background: var(--mooncg-background-color);
+				border-radius: 0;
+				color: var(--mooncg-foreground-color, white);
+				font-size: 16px;
+				font-weight: 300;
+			}
+
+			paper-button.mooncg-accept {
+				--mooncg-background-color: var(--mooncg-accept-color);
+			}
+
+			paper-button.mooncg-benign {
+				--mooncg-background-color: var(--mooncg-benign-color);
+			}
+
+			paper-button.mooncg-configure {
+				--mooncg-background-color: var(--mooncg-configure-color);
+			}
+
+			paper-button.mooncg-danger {
+				--mooncg-background-color: var(--mooncg-danger-color);
+			}
+
+			paper-button.mooncg-execute {
+				--mooncg-background-color: var(--mooncg-execute-color);
+				--mooncg-foreground-color: black;
+			}
+
+			paper-button.mooncg-reject {
+				--mooncg-background-color: var(--mooncg-reject-color);
+			}
+
+			paper-button.mooncg-selected {
+				--mooncg-background-color: var(--mooncg-selected-color);
+			}
+
+			paper-button[disabled] {
+				--mooncg-background-color: var(--mooncg-disabled-color);
+				color: #54575c;
+			}
+
+			paper-card {
+				--paper-card-header-color: white;
+				background-color: #2f3a4f;
+				width: 100%;
+			}
+
+			paper-card[heading] {
+				--paper-card-header: {
+					background-color: #525f78;
+					border-bottom: 5px solid var(--mooncg-brand-blue);
+					font-weight: bold;
+				}
+			}
+
+			.card-content > * {
+				padding: 0 16px;
+			}
+
+			paper-dialog,
+			paper-dialog-scrollable {
+				background-color: #2f3a4f;
+				color: white;
+			}
+
+			a {
+				color: white;
+				font-weight: 500;
+				letter-spacing: 0.018em;
+				text-decoration: underline;
+			}
+		</style>
+	</template>
+</dom-module>

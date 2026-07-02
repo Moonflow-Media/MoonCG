@@ -9,21 +9,21 @@ let _cachedProjectType: ProjectType | undefined;
 
 export function getProjectType(): ProjectType {
 	if (_cachedProjectType === undefined) {
-		const rootPackageJson: { name?: string; nodecgRoot?: boolean } = JSON.parse(
+		const rootPackageJson: { name?: string; mooncgRoot?: boolean } = JSON.parse(
 			fs.readFileSync(
 				path.join(getNearestProjectDirFromCwd(), "package.json"),
 				"utf-8",
 			),
 		);
 
-		if (rootPackageJson.nodecgRoot === true) {
+		if (rootPackageJson.mooncgRoot === true) {
 			_cachedProjectType = "monorepo";
-		} else if (rootPackageJson.name === "nodecg") {
+		} else if (rootPackageJson.name === "mooncg") {
 			_cachedProjectType = "standalone";
 		} else {
 			_cachedProjectType = "dependency";
 			console.warn(
-				"NodeCG is installed as a dependency. This is an experimental feature. Please report any issues you encounter.",
+				"MoonCG is installed as a dependency. This is an experimental feature. Please report any issues you encounter.",
 			);
 		}
 	}

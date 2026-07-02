@@ -9,7 +9,7 @@ let originalCwd: string;
 
 beforeEach(() => {
 	originalCwd = process.cwd();
-	tempDir = mkdtempSync(path.join(tmpdir(), "nodecg-cli-import-test-"));
+	tempDir = mkdtempSync(path.join(tmpdir(), "mooncg-cli-import-test-"));
 	process.chdir(tempDir);
 });
 

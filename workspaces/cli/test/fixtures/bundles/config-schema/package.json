@@ -1,6 +1,6 @@
 {
   "name": "config-schema",
-  "nodecg": {
+  "mooncg": {
     "compatibleRange": "^1.3.0"
   }
 }

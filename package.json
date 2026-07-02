@@ -1,9 +1,9 @@
 {
-  "name": "nodecg-monorepo",
+  "name": "mooncg-monorepo",
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/nodecg/nodecg.git"
+    "url": "https://github.com/Moonflow-Media/MoonCG.git"
   },
   "license": "MIT",
   "type": "module",
@@ -12,7 +12,7 @@
     "workspaces/database-adapter-types",
     "workspaces/database-adapter-sqlite-legacy",
     "workspaces/cli",
-    "workspaces/nodecg"
+    "workspaces/mooncg"
   ],
   "scripts": {
     "start": "node index.js",
@@ -22,31 +22,31 @@
     "build": "tsdown",
     "typecheck": "tsc -b tsconfig.typecheck.json",
     "test": "vitest",
-    "typetest": "npm -w nodecg run typetest",
+    "typetest": "npm -w mooncg run typetest",
     "lint": "eslint && prettier --check .",
     "fix": "eslint --fix && prettier --write ."
   },
   "prettier": {},
   "devDependencies": {
-    "@effect/cli": "^0.72.1",
-    "@effect/language-service": "^0.55.5",
-    "@effect/platform": "^0.93.0",
-    "@effect/platform-node": "^0.100.0",
+    "@effect/cli": "^0.75.2",
+    "@effect/language-service": "^0.86.3",
+    "@effect/platform": "^0.96.2",
+    "@effect/platform-node": "^0.107.0",
     "@eslint/js": "^9.39.0",
     "@vitest/coverage-v8": "^4.0.12",
-    "effect": "^3.19.3",
-    "eslint": "^9.39.0",
+    "effect": "^3.21.4",
+    "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-simple-import-sort": "^12.1.1",
-    "jiti": "^2.6.1",
+    "jiti": "^2.7.0",
     "npm-run-all2": "^7.0.2",
-    "prettier": "^3.4.2",
-    "tsdown": "^0.16.6",
-    "tsx": "^4.19.2",
+    "prettier": "^3.9.4",
+    "tsdown": "^0.16.8",
+    "tsx": "^4.22.5",
     "typescript": "~5.9.3",
-    "typescript-eslint": "^8.46.2",
+    "typescript-eslint": "^8.62.1",
     "vitest": "^4.0.12"
   },
   "packageManager": "npm@11.6.2+sha512.ee22b335fcbc95662cdf3ab8a053daf045d9cf9c6df6040d28965abb707512b2c16fa6c5eec049d34c74f78f390cebd14f697919eadb97756564d4f9eccc4954",
-  "nodecgRoot": true
+  "mooncgRoot": true
 }

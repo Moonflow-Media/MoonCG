@@ -58,7 +58,7 @@ Migrate BundleManager from class-based EventEmitter architecture to Effect-based
 // Service with Ref for mutable state, PubSub for events
 class BundleService extends Effect.Service<BundleService>()("BundleService", {
   scoped: Effect.gen(function* () {
-    const bundles = yield* Ref.make<Array<NodeCG.Bundle>>([]);
+    const bundles = yield* Ref.make<Array<MoonCG.Bundle>>([]);
     const pubsub = yield* PubSub.unbounded<BundleEvent>();
     const watcher = yield* createFileWatcher([], watchOptions);
 
@@ -103,9 +103,9 @@ import { Data } from "effect";
 // Define events using Effect's TaggedEnum
 const BundleEvent = Data.taggedEnum<{
   Ready: {};
-  BundleChanged: { readonly bundle: NodeCG.Bundle };
-  GitChanged: { readonly bundle: NodeCG.Bundle };
-  InvalidBundle: { readonly bundle: NodeCG.Bundle; readonly error: Error };
+  BundleChanged: { readonly bundle: MoonCG.Bundle };
+  GitChanged: { readonly bundle: MoonCG.Bundle };
+  InvalidBundle: { readonly bundle: MoonCG.Bundle; readonly error: Error };
   BundleRemoved: { readonly bundleName: string };
 }>();
 
@@ -121,7 +121,7 @@ BundleEvent.BundleRemoved({ bundleName });
 
 ### Key Patterns
 
-- `Ref<Array<NodeCG.Bundle>>` for mutable bundle list
+- `Ref<Array<MoonCG.Bundle>>` for mutable bundle list
 - `PubSub<BundleEvent>` for event distribution (replaces EventEmitter)
 - `Stream` for Chokidar file watching events
 - `Effect.acquireRelease` for watcher lifecycle management
@@ -178,9 +178,9 @@ BundleEvent.BundleRemoved({ bundleName });
 
 ### Step 1: Create General-Purpose File Watching Layer
 
-**New file**: `workspaces/nodecg/src/server/_effect/file-watcher.ts`
+**New file**: `workspaces/mooncg/src/server/_effect/file-watcher.ts`
 
-General-purpose Chokidar → Effect Stream wrapper for reusable file watching across NodeCG.
+General-purpose Chokidar → Effect Stream wrapper for reusable file watching across MoonCG.
 
 ```typescript
 import { Data, Stream, Effect, Scope, Schedule, Duration } from "effect";
@@ -371,7 +371,7 @@ yield *
   );
 ```
 
-**New file**: `workspaces/nodecg/src/server/_effect/git-parser.ts`
+**New file**: `workspaces/mooncg/src/server/_effect/git-parser.ts`
 
 Effect wrapper for git parsing (isolates process.chdir side effect):
 
@@ -386,7 +386,7 @@ export const parseGit = Effect.fn("parseGit")(function* (bundleDir: string) {
 
 ### Step 2: Implement BundleService
 
-**New file**: `workspaces/nodecg/src/server/bundle-service.ts`
+**New file**: `workspaces/mooncg/src/server/bundle-service.ts`
 
 Core service implementation with:
 
@@ -455,8 +455,8 @@ yield *
 export const makeBundleServiceLayer = (
   bundlesPaths: string[],
   cfgPath: string,
-  nodecgVersion: string,
-  nodecgConfig: Record<string, any>,
+  mooncgVersion: string,
+  mooncgConfig: Record<string, any>,
 ) => Layer.scoped(BundleService /* implementation */);
 ```
 
@@ -467,7 +467,7 @@ export const makeBundleServiceLayer = (
 const bundleServiceLayer = makeBundleServiceLayer(
   bundlesPaths,
   cfgPath,
-  nodecgPackageJson.version,
+  mooncgPackageJson.version,
   config,
 );
 
@@ -504,36 +504,36 @@ test("bundle loading", async () => {
 
 **Files to update**:
 
-- `workspaces/nodecg/src/server/bundle-manager.test.ts` - Rewrite for Effect
-- `workspaces/nodecg/test/helpers/setup.ts` - Provide BundleService layer
+- `workspaces/mooncg/src/server/bundle-manager.test.ts` - Rewrite for Effect
+- `workspaces/mooncg/test/helpers/setup.ts` - Provide BundleService layer
 
 ### Step 6: Delete Old Code
 
 Once all consumers migrated and tests passing:
 
-- Delete `workspaces/nodecg/src/server/bundle-manager.ts`
+- Delete `workspaces/mooncg/src/server/bundle-manager.ts`
 
 ## Files Modified
 
 **New files**:
 
-- `workspaces/nodecg/src/server/bundle-service.ts` - Main service
-- `workspaces/nodecg/src/server/_effect/file-watcher.ts` - Chokidar wrapper
-- `workspaces/nodecg/src/server/_effect/git-parser.ts` - Git parsing wrapper
+- `workspaces/mooncg/src/server/bundle-service.ts` - Main service
+- `workspaces/mooncg/src/server/_effect/file-watcher.ts` - Chokidar wrapper
+- `workspaces/mooncg/src/server/_effect/git-parser.ts` - Git parsing wrapper
 
 **Modified files**:
 
-- `workspaces/nodecg/src/server/server/index.ts` - Use BundleService
-- `workspaces/nodecg/src/server/graphics/index.ts` - Subscribe to events
-- `workspaces/nodecg/src/server/graphics/registration.ts` - Subscribe to events
-- `workspaces/nodecg/src/server/dashboard/index.ts` - Subscribe to events
-- `workspaces/nodecg/src/server/util/sentry-config.ts` - Subscribe to events
-- `workspaces/nodecg/src/server/bundle-manager.test.ts` - Update to Effect
-- `workspaces/nodecg/test/helpers/setup.ts` - Provide BundleService layer
+- `workspaces/mooncg/src/server/server/index.ts` - Use BundleService
+- `workspaces/mooncg/src/server/graphics/index.ts` - Subscribe to events
+- `workspaces/mooncg/src/server/graphics/registration.ts` - Subscribe to events
+- `workspaces/mooncg/src/server/dashboard/index.ts` - Subscribe to events
+- `workspaces/mooncg/src/server/util/sentry-config.ts` - Subscribe to events
+- `workspaces/mooncg/src/server/bundle-manager.test.ts` - Update to Effect
+- `workspaces/mooncg/test/helpers/setup.ts` - Provide BundleService layer
 
 **Deleted files**:
 
-- `workspaces/nodecg/src/server/bundle-manager.ts` - Replaced by bundle-service.ts
+- `workspaces/mooncg/src/server/bundle-manager.ts` - Replaced by bundle-service.ts
 
 ## Testing Strategy
 

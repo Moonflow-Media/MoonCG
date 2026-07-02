@@ -1,7 +1,7 @@
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
-	entry: "src/bin/nodecg.ts",
+	entry: "src/bin/mooncg.ts",
 	target: "node20",
 	tsconfig: true,
 	sourcemap: true,

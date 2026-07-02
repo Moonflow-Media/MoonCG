@@ -4,27 +4,27 @@ import { pathToFileURL } from "node:url";
 
 import { Command } from "commander";
 
-import { pathContainsNodeCG } from "../lib/util.js";
+import { pathContainsMoonCG } from "../lib/util.js";
 
 export function startCommand(program: Command) {
 	program
 		.command("start")
 		.option("-d, --disable-source-maps", "Disable source map support")
-		.description("Start NodeCG")
+		.description("Start MoonCG")
 		.action(async () => {
 			const projectDir = recursivelyFindProject(process.cwd());
 
-			// Check if nodecg is already installed
-			if (pathContainsNodeCG(projectDir)) {
+			// Check if mooncg is already installed
+			if (pathContainsMoonCG(projectDir)) {
 				await import(pathToFileURL(path.join(projectDir, "index.js")).href);
 				return;
 			}
 
-			// Check if NodeCG is installed as a dependency
-			const nodecgDependencyPath = path.join(projectDir, "node_modules/nodecg");
-			if (pathContainsNodeCG(nodecgDependencyPath)) {
+			// Check if MoonCG is installed as a dependency
+			const mooncgDependencyPath = path.join(projectDir, "node_modules/mooncg");
+			if (pathContainsMoonCG(mooncgDependencyPath)) {
 				await import(
-					pathToFileURL(path.join(nodecgDependencyPath, "index.js")).href
+					pathToFileURL(path.join(mooncgDependencyPath, "index.js")).href
 				);
 			}
 		});

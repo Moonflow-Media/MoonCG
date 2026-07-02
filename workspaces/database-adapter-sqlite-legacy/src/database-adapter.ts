@@ -1,6 +1,6 @@
 import "reflect-metadata";
 
-import type { DatabaseAdapter } from "@nodecg/database-adapter-types";
+import type { DatabaseAdapter } from "@mooncg/database-adapter-types";
 
 import { getConnection } from "./connection.ts";
 import { ApiKey } from "./entity/ApiKey.ts";

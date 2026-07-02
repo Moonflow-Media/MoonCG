@@ -12,46 +12,46 @@ function getRuntimeRootPath(): string {
 	return _cachedRuntimeRootPath;
 }
 
-let _cachedNodecgInstalledPath: string | undefined;
+let _cachedMooncgInstalledPath: string | undefined;
 
-function getNodecgInstalledPath(): string {
-	if (_cachedNodecgInstalledPath === undefined) {
+function getMooncgInstalledPath(): string {
+	if (_cachedMooncgInstalledPath === undefined) {
 		const runtimeRoot = getRuntimeRootPath();
 		switch (getProjectType()) {
 			case "monorepo":
-				_cachedNodecgInstalledPath = path.join(
+				_cachedMooncgInstalledPath = path.join(
 					runtimeRoot,
-					"workspaces/nodecg",
+					"workspaces/mooncg",
 				);
 				break;
 			case "standalone":
-				_cachedNodecgInstalledPath = runtimeRoot;
+				_cachedMooncgInstalledPath = runtimeRoot;
 				break;
 			case "dependency":
-				_cachedNodecgInstalledPath = path.join(
+				_cachedMooncgInstalledPath = path.join(
 					runtimeRoot,
-					"node_modules/nodecg",
+					"node_modules/mooncg",
 				);
 				break;
 		}
 	}
-	return _cachedNodecgInstalledPath;
+	return _cachedMooncgInstalledPath;
 }
 
 export const rootPaths = {
 	get runtimeRootPath() {
 		return getRuntimeRootPath();
 	},
-	get nodecgInstalledPath() {
-		return getNodecgInstalledPath();
+	get mooncgInstalledPath() {
+		return getMooncgInstalledPath();
 	},
 	/**
 	 * Allow overriding the runtime root path via environment variable mainly for tests
 	 */
 	getRuntimeRoot: () => {
-		const { NODECG_ROOT } = process.env;
-		if (NODECG_ROOT) {
-			return NODECG_ROOT;
+		const { MOONCG_ROOT } = process.env;
+		if (MOONCG_ROOT) {
+			return MOONCG_ROOT;
 		}
 		return getRuntimeRootPath();
 	},

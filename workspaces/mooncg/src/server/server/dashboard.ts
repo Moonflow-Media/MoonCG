@@ -1,0 +1,189 @@
+import * as path from "node:path";
+
+import { rootPaths } from "@mooncg/internal-util";
+import { Effect, PubSub, Runtime, Stream } from "effect";
+import express from "express";
+import { klona as clone } from "klona/json";
+
+import type { MoonCG } from "../../types/mooncg.js";
+import { config, filteredConfig, sentryEnabled } from "../config/index.js";
+import { authCheck } from "../util/authcheck.js";
+import { injectScripts } from "../util/injectscripts.js";
+import { sendFile } from "../util/send-file/index.js";
+import { sendNodeModulesFile } from "../util/send-node-modules-file/index.js";
+import type { BundleService } from "./bundle-service.js";
+
+type Workspace = MoonCG.Workspace;
+
+interface DashboardContext {
+	bundles: MoonCG.Bundle[];
+	publicConfig: typeof filteredConfig;
+	privateConfig: typeof config;
+	workspaces: Workspace[];
+	sentryEnabled: boolean;
+}
+
+export const dashboardRouter = Effect.fn("dashboardRouter")(function* (
+	bundleService: BundleService,
+) {
+	const runtime = yield* Effect.runtime();
+
+	const BUILD_PATH = path.join(rootPaths.mooncgInstalledPath, "dist/client");
+
+	const app = express();
+
+	let dashboardContext: DashboardContext | undefined = undefined;
+
+	app.use(express.static(BUILD_PATH));
+
+	app.use("/node_modules/:filePath(*)", (req, res, next) => {
+		const startDir = rootPaths.mooncgInstalledPath;
+		const limitDir = rootPaths.runtimeRootPath;
+		const filePath = req.params.filePath!;
+		sendNodeModulesFile(startDir, limitDir, filePath, res, next);
+	});
+
+	app.get("/", (_, res) => {
+		res.redirect("/dashboard/");
+	});
+
+	app.get("/dashboard", authCheck, (req, res) => {
+		if (!req.url.endsWith("/")) {
+			res.redirect("/dashboard/");
+			return;
+		}
+
+		if (!dashboardContext) {
+			dashboardContext = getDashboardContext(
+				Runtime.runSync(runtime, bundleService.all()),
+			);
+		}
+
+		res.render(
+			path.join(
+				rootPaths.mooncgInstalledPath,
+				"dist/server/templates/dashboard.tmpl",
+			),
+			dashboardContext,
+		);
+	});
+
+	app.get("/bundles/:bundleName/dashboard/*", authCheck, (req, res, next) => {
+		const { bundleName } = req.params;
+		const bundle = Runtime.runSync(runtime, bundleService.find(bundleName!));
+		if (!bundle) {
+			next();
+			return;
+		}
+
+		const resName = req.params[0]!;
+		// If the target file is a panel or dialog, inject the appropriate scripts.
+		// Else, serve the file as-is.
+		const panel = bundle.dashboard.panels.find((p) => p.file === resName);
+		if (panel) {
+			const resourceType = panel.dialog ? "dialog" : "panel";
+			injectScripts(
+				panel.html,
+				resourceType,
+				{
+					createApiInstance: bundle,
+					standalone: Boolean(req.query.standalone),
+					fullbleed: panel.fullbleed,
+					sound: bundle.soundCues && bundle.soundCues.length > 0,
+				},
+				(html) => res.send(html),
+			);
+		} else {
+			const parentDir = bundle.dashboard.dir;
+			const fileLocation = path.join(parentDir, resName);
+			sendFile(parentDir, fileLocation, res, next);
+		}
+	});
+
+	// When a bundle changes, delete the cached dashboard context
+	const bundleEventsSubscription = yield* PubSub.subscribe(
+		bundleService.subscribe,
+	);
+	yield* Effect.forkScoped(
+		Stream.fromQueue(bundleEventsSubscription).pipe(
+			Stream.filter((event) => event._tag === "BundleChanged"),
+			Stream.runForEach(() =>
+				Effect.sync(() => {
+					dashboardContext = undefined;
+				}),
+			),
+		),
+	);
+
+	return app;
+});
+
+function getDashboardContext(bundles: MoonCG.Bundle[]): DashboardContext {
+	return {
+		bundles: bundles.map((bundle) => {
+			const cleanedBundle = clone(bundle);
+			if (cleanedBundle.dashboard.panels) {
+				cleanedBundle.dashboard.panels.forEach((panel) => {
+					// @ts-expect-error This is a performance hack.
+					delete panel.html;
+				});
+			}
+
+			return cleanedBundle;
+		}),
+		publicConfig: filteredConfig,
+		privateConfig: config,
+		workspaces: parseWorkspaces(bundles),
+		sentryEnabled,
+	};
+}
+
+function parseWorkspaces(bundles: MoonCG.Bundle[]): Workspace[] {
+	let defaultWorkspaceHasPanels = false;
+	let otherWorkspacesHavePanels = false;
+	const workspaces: Workspace[] = [];
+	const workspaceNames = new Set<string>();
+	bundles.forEach((bundle) => {
+		bundle.dashboard.panels.forEach((panel) => {
+			if (panel.dialog) {
+				return;
+			}
+
+			if (panel.fullbleed) {
+				otherWorkspacesHavePanels = true;
+				const workspaceName = `__mooncg_fullbleed__${bundle.name}_${panel.name}`;
+				workspaces.push({
+					name: workspaceName,
+					label: panel.title,
+					route: `fullbleed/${panel.name}`,
+					fullbleed: true,
+				});
+			} else if (panel.workspace === "default") {
+				defaultWorkspaceHasPanels = true;
+			} else {
+				workspaceNames.add(panel.workspace);
+				otherWorkspacesHavePanels = true;
+			}
+		});
+	});
+
+	workspaceNames.forEach((name) => {
+		workspaces.push({
+			name,
+			label: name,
+			route: `workspace/${name}`,
+		});
+	});
+
+	workspaces.sort((a, b) => a.label.localeCompare(b.label));
+
+	if (defaultWorkspaceHasPanels || !otherWorkspacesHavePanels) {
+		workspaces.unshift({
+			name: "default",
+			label: otherWorkspacesHavePanels ? "Main Workspace" : "Workspace",
+			route: "",
+		});
+	}
+
+	return workspaces;
+}

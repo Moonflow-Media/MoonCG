@@ -9,7 +9,7 @@ export default defineConfig({
 	fixedExtension: false,
 	exports: true,
 	attw: {
-		profile: "esmOnly",
+		profile: "esm-only",
 	},
 	publint: {
 		strict: true,

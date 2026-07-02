@@ -92,7 +92,7 @@ watcher.on("add", (path, stats) => {
 
 ## Implemented Architecture
 
-**Implementation**: `workspaces/nodecg/src/server/_effect/chokidar.ts`
+**Implementation**: `workspaces/mooncg/src/server/_effect/chokidar.ts`
 
 Effect-friendly chokidar wrapper API:
 
@@ -211,7 +211,7 @@ See [Problems & Solutions](#problems--solutions) for implementation patterns lea
 - `Effect.all` runs in whichever fiber it's yielded in - keep outside `Effect.forkScoped`
 - `eventEmitter.once()` auto-removes listener - no manual cleanup needed
 
-**See implementation**: `workspaces/nodecg/src/server/_effect/event-listener.ts` for full details.
+**See implementation**: `workspaces/mooncg/src/server/_effect/event-listener.ts` for full details.
 
 ### Chokidar Wrapper (Step 2 - ✅ Solved)
 

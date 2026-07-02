@@ -1,9 +1,9 @@
 {
-  "name": "@nodecg/database-adapter-sqlite-legacy",
+  "name": "@mooncg/database-adapter-sqlite-legacy",
   "version": "2.7.2",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nodecg/nodecg.git",
+    "url": "git+https://github.com/mooncg/mooncg.git",
     "directory": "workspaces/database-adapter-sqlite-legacy"
   },
   "type": "module",
@@ -11,8 +11,6 @@
     ".": "./dist/database-adapter.js",
     "./package.json": "./package.json"
   },
-  "main": "./dist/database-adapter.js",
-  "module": "./dist/database-adapter.js",
   "types": "./dist/database-adapter.d.ts",
   "files": [
     "dist",
@@ -24,23 +22,25 @@
     "watch": "tsdown --watch"
   },
   "dependencies": {
-    "@nodecg/database-adapter-types": "2.7.0",
-    "@nodecg/internal-util": "2.7.2",
+    "@mooncg/database-adapter-types": "2.7.0",
+    "@mooncg/internal-util": "2.7.2",
     "@types/better-sqlite3": "^7.6.13",
-    "better-sqlite3": "^12.4.1",
+    "better-sqlite3": "^12.11.1",
     "reflect-metadata": "^0.2.2",
     "typeorm": "0.3.27"
   },
   "devDependencies": {
-    "@arethetypeswrong/core": "^0.18.2",
-    "publint": "^0.3.15",
+    "@arethetypeswrong/core": "^0.18.4",
+    "publint": "^0.3.21",
     "ts-node": "^10.9.2",
-    "tsdown": "^0.16.6",
+    "tsdown": "^0.16.8",
     "typescript": "~5.9.3"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true,
     "registry": "https://registry.npmjs.org"
-  }
+  },
+  "main": "./dist/database-adapter.js",
+  "module": "./dist/database-adapter.js"
 }

@@ -12,8 +12,8 @@
 		},
 		{
 			"type": "linked-versions",
-			"groupName": "nodecg",
-			"components": ["cli", "nodecg"]
+			"groupName": "mooncg",
+			"components": ["cli", "mooncg"]
 		}
 	],
 	"packages": {
@@ -23,7 +23,7 @@
 		"workspaces/database-adapter-types": {},
 		"workspaces/database-adapter-sqlite-legacy": {},
 		"workspaces/cli": { "component": "cli" },
-		"workspaces/nodecg": { "component": "nodecg" }
+		"workspaces/mooncg": { "component": "mooncg" }
 	},
 	"bootstrap-sha": "ae3433f07d41ccf0b7406ae60425e9730e65e0d0"
 }

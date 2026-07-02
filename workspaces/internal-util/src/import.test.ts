@@ -10,7 +10,7 @@ let originalCwd: string;
 describe("import from directories without package.json", () => {
 	beforeEach(() => {
 		originalCwd = process.cwd();
-		tempDir = mkdtempSync(path.join(tmpdir(), "nodecg-internal-util-test-"));
+		tempDir = mkdtempSync(path.join(tmpdir(), "mooncg-internal-util-test-"));
 		process.chdir(tempDir);
 	});
 
@@ -42,7 +42,7 @@ describe("import from directories without package.json", () => {
 		expect(() => rootPaths.runtimeRootPath).toThrow(
 			"Could not find Node.js project",
 		);
-		expect(() => rootPaths.nodecgInstalledPath).toThrow(
+		expect(() => rootPaths.mooncgInstalledPath).toThrow(
 			"Could not find Node.js project",
 		);
 	});
@@ -52,7 +52,7 @@ describe("import from directories with package.json", () => {
 	beforeEach(() => {
 		originalCwd = process.cwd();
 		tempDir = mkdtempSync(
-			path.join(tmpdir(), "nodecg-internal-util-valid-test-"),
+			path.join(tmpdir(), "mooncg-internal-util-valid-test-"),
 		);
 
 		writeFileSync(
@@ -60,7 +60,7 @@ describe("import from directories with package.json", () => {
 			JSON.stringify({
 				name: "test-project",
 				version: "1.0.0",
-				nodecgRoot: true,
+				mooncgRoot: true,
 			}),
 			"utf-8",
 		);

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { rootPaths } from "@nodecg/internal-util";
+import { rootPaths } from "@mooncg/internal-util";
 import { Ajv, type JSONSchemaType } from "ajv";
 import chalk from "chalk";
 import { Command } from "commander";

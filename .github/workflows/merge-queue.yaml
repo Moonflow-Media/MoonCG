@@ -56,8 +56,8 @@ jobs:
 
       - name: Ensure that bundle git parsing functionality works
         run: |
-          git config --global user.email "ci@nodecg.dev"
-          git config --global user.name "NodeCG Bot"
+          git config --global user.email "ci@mooncg.dev"
+          git config --global user.name "MoonCG Bot"
 
       - name: Restore Puppeteer cache (Linux)
         if: runner.os == 'Linux'

@@ -15,10 +15,10 @@ function writePackageJson(contents: object) {
 	);
 }
 
-describe("nodecgInstalledPath per project layout", () => {
+describe("mooncgInstalledPath per project layout", () => {
 	beforeEach(() => {
 		originalCwd = process.cwd();
-		tempDir = mkdtempSync(path.join(tmpdir(), "nodecg-root-paths-test-"));
+		tempDir = mkdtempSync(path.join(tmpdir(), "mooncg-root-paths-test-"));
 		process.chdir(tempDir);
 		vi.resetModules();
 	});
@@ -28,34 +28,34 @@ describe("nodecgInstalledPath per project layout", () => {
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
-	test("standalone install (name 'nodecg') resolves to the runtime root", async () => {
-		writePackageJson({ name: "nodecg", version: "2.6.4" });
+	test("standalone install (name 'mooncg') resolves to the runtime root", async () => {
+		writePackageJson({ name: "mooncg", version: "2.6.4" });
 
 		const { rootPaths, getProjectType } = await import("./main.js");
 
 		expect(getProjectType()).toBe("standalone");
-		expect(rootPaths.nodecgInstalledPath).toBe(rootPaths.runtimeRootPath);
+		expect(rootPaths.mooncgInstalledPath).toBe(rootPaths.runtimeRootPath);
 	});
 
-	test("monorepo root (nodecgRoot true) resolves to workspaces/nodecg", async () => {
-		writePackageJson({ name: "nodecg-monorepo", nodecgRoot: true });
+	test("monorepo root (mooncgRoot true) resolves to workspaces/mooncg", async () => {
+		writePackageJson({ name: "mooncg-monorepo", mooncgRoot: true });
 
 		const { rootPaths, getProjectType } = await import("./main.js");
 
 		expect(getProjectType()).toBe("monorepo");
-		expect(rootPaths.nodecgInstalledPath).toBe(
-			path.join(rootPaths.runtimeRootPath, "workspaces/nodecg"),
+		expect(rootPaths.mooncgInstalledPath).toBe(
+			path.join(rootPaths.runtimeRootPath, "workspaces/mooncg"),
 		);
 	});
 
-	test("dependency install resolves to node_modules/nodecg", async () => {
-		writePackageJson({ name: "my-nodecg-project", version: "1.0.0" });
+	test("dependency install resolves to node_modules/mooncg", async () => {
+		writePackageJson({ name: "my-mooncg-project", version: "1.0.0" });
 
 		const { rootPaths, getProjectType } = await import("./main.js");
 
 		expect(getProjectType()).toBe("dependency");
-		expect(rootPaths.nodecgInstalledPath).toBe(
-			path.join(rootPaths.runtimeRootPath, "node_modules/nodecg"),
+		expect(rootPaths.mooncgInstalledPath).toBe(
+			path.join(rootPaths.runtimeRootPath, "node_modules/mooncg"),
 		);
 	});
 });

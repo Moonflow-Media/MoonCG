@@ -11,14 +11,14 @@ import * as tar from "tar";
 
 import { listNpmDistTags, listNpmVersions } from "../lib/list-npm-versions.js";
 import type { NpmRelease } from "../lib/sample/npm-release.js";
-import { getCurrentNodeCGVersion, pathContainsNodeCG } from "../lib/util.js";
+import { getCurrentMoonCGVersion, pathContainsMoonCG } from "../lib/util.js";
 
 export function setupCommand(program: Command) {
 	program
 		.command("setup [version]")
-		.option("-u, --update", "Update the local NodeCG installation")
+		.option("-u, --update", "Update the local MoonCG installation")
 		.option("-k, --skip-dependencies", "Skip installing npm dependencies")
-		.description("Install a new NodeCG instance")
+		.description("Install a new MoonCG instance")
 		.action(decideActionVersion);
 }
 
@@ -26,17 +26,17 @@ async function decideActionVersion(
 	version: string,
 	options: { update: boolean; skipDependencies: boolean },
 ) {
-	// If NodeCG is already installed but the `-u` flag was not supplied, display an error and return.
+	// If MoonCG is already installed but the `-u` flag was not supplied, display an error and return.
 	let isUpdate = false;
 
-	// If NodeCG exists in the cwd, but the `-u` flag was not supplied, display an error and return.
+	// If MoonCG exists in the cwd, but the `-u` flag was not supplied, display an error and return.
 	// If it was supplied, fetch the latest tags and set the `isUpdate` flag to true for later use.
-	// Else, if this is a clean, empty directory, then we need to clone a fresh copy of NodeCG into the cwd.
-	if (pathContainsNodeCG(process.cwd())) {
+	// Else, if this is a clean, empty directory, then we need to clone a fresh copy of MoonCG into the cwd.
+	if (pathContainsMoonCG(process.cwd())) {
 		if (!options.update) {
-			console.error("NodeCG is already installed in this directory.");
+			console.error("MoonCG is already installed in this directory.");
 			console.error(
-				`Use ${chalk.cyan("nodecg setup [version] -u")} if you want update your existing install.`,
+				`Use ${chalk.cyan("mooncg setup [version] -u")} if you want update your existing install.`,
 			);
 			return;
 		}
@@ -64,7 +64,7 @@ async function decideActionVersion(
 
 	let tags;
 	try {
-		tags = await listNpmVersions("nodecg");
+		tags = await listNpmVersions("mooncg");
 	} catch (error) {
 		process.stdout.write(chalk.red("failed!") + os.EOL);
 		console.error(error instanceof Error ? error.message : error);
@@ -81,7 +81,7 @@ async function decideActionVersion(
 			// Resolve dist-tag to actual version
 			let distTags;
 			try {
-				distTags = await listNpmDistTags("nodecg");
+				distTags = await listNpmDistTags("mooncg");
 			} catch (error) {
 				process.stdout.write(chalk.red("failed!") + os.EOL);
 				console.error(error instanceof Error ? error.message : error);
@@ -120,7 +120,7 @@ async function decideActionVersion(
 	let downgrade = false;
 
 	if (isUpdate) {
-		current = getCurrentNodeCGVersion();
+		current = getCurrentMoonCGVersion();
 
 		if (semver.eq(target, current)) {
 			console.log(
@@ -150,13 +150,13 @@ async function decideActionVersion(
 	// Allow canary/PR releases (0.0.0-*) which are test releases for newer versions
 	const isCanaryRelease = /^v?0\.0\.0-.+/.test(target);
 	if (!isCanaryRelease && semver.lt(target, "v2.0.0")) {
-		console.error("CLI does not support NodeCG versions older than v2.0.0.");
+		console.error("CLI does not support MoonCG versions older than v2.0.0.");
 		return;
 	}
 
-	await installNodecg(current, target, isUpdate);
+	await installMooncg(current, target, isUpdate);
 
-	// Install NodeCG's dependencies
+	// Install MoonCG's dependencies
 	// This operation takes a very long time, so we don't test it.
 	if (!options.skipDependencies) {
 		await installDependencies();
@@ -164,13 +164,13 @@ async function decideActionVersion(
 
 	if (isUpdate) {
 		const verb = downgrade ? "downgraded" : "upgraded";
-		console.log(`NodeCG ${verb} to ${chalk.magenta(target)}`);
+		console.log(`MoonCG ${verb} to ${chalk.magenta(target)}`);
 	} else {
-		console.log(`NodeCG (${target}) installed to ${process.cwd()}`);
+		console.log(`MoonCG (${target}) installed to ${process.cwd()}`);
 	}
 }
 
-async function installNodecg(
+async function installMooncg(
 	current: string | undefined,
 	target: string,
 	isUpdate: boolean,
@@ -191,14 +191,14 @@ async function installNodecg(
 	const targetVersion =
 		semver.parse(target)?.version ?? semver.coerce(target)?.version;
 	if (!targetVersion) {
-		throw new Error(`Failed to determine target NodeCG version`);
+		throw new Error(`Failed to determine target MoonCG version`);
 	}
 	const releaseResponse = await fetch(
-		`http://registry.npmjs.org/nodecg/${targetVersion}`,
+		`http://registry.npmjs.org/mooncg/${targetVersion}`,
 	);
 	if (!releaseResponse.ok) {
 		throw new Error(
-			`Failed to fetch NodeCG release information from npm, status code ${releaseResponse.status}`,
+			`Failed to fetch MoonCG release information from npm, status code ${releaseResponse.status}`,
 		);
 	}
 	const release = (await releaseResponse.json()) as NpmRelease;

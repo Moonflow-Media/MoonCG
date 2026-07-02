@@ -1,4 +1,4 @@
-import type { Permission as PermissionModel } from "@nodecg/database-adapter-types";
+import type { Permission as PermissionModel } from "@mooncg/database-adapter-types";
 import {
 	Column,
 	Entity,

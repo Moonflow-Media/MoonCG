@@ -1,0 +1,6 @@
+{
+  "name": "no-manifest-version",
+  "mooncg": {
+    "compatibleRange": "~0.7.0"
+  }
+}

@@ -1,5 +1,5 @@
 /.nyc_output
-/workspaces/nodecg/assets/
+/workspaces/mooncg/assets/
 /bower_components
 /build
 /bundles
@@ -20,10 +20,10 @@ package-lock.json
 CHANGELOG.md
 
 # Intentionally broken as part of tests
-workspaces/nodecg/test/fixtures/bundle-parser/bad-json/bundleConfig.json
-workspaces/nodecg/test/fixtures/bundle-parser/bad-schema/configschema.json
-workspaces/nodecg/test/fixtures/bundle-parser/invalid-manifest-json/package.json
-workspaces/nodecg/test/fixtures/nodecg-core/bundles/test-bundle/schemas/badSchema.json
-workspaces/nodecg/test/fixtures/nodecg-core/cfg/invalidJSON.json
+workspaces/mooncg/test/fixtures/bundle-parser/bad-json/bundleConfig.json
+workspaces/mooncg/test/fixtures/bundle-parser/bad-schema/configschema.json
+workspaces/mooncg/test/fixtures/bundle-parser/invalid-manifest-json/package.json
+workspaces/mooncg/test/fixtures/mooncg-core/bundles/test-bundle/schemas/badSchema.json
+workspaces/mooncg/test/fixtures/mooncg-core/cfg/invalidJSON.json
 
 /coverage

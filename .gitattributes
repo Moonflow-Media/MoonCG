@@ -20,4 +20,4 @@
 *.webm binary
 *.woff binary
 
-workspaces/nodecg/test/fixtures/nodecg-core/bundles/test-bundle/git/* text eol=lf
+workspaces/mooncg/test/fixtures/mooncg-core/bundles/test-bundle/git/* text eol=lf

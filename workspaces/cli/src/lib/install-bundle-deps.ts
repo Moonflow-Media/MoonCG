@@ -8,8 +8,8 @@ import spawn from "nano-spawn";
 import { isBundleFolder } from "./util.js";
 
 /**
- * Installs npm dependencies for the NodeCG bundle present at the given path.
- * @param bundlePath - The path of the NodeCG bundle to install dependencies for.
+ * Installs npm dependencies for the MoonCG bundle present at the given path.
+ * @param bundlePath - The path of the MoonCG bundle to install dependencies for.
  * @param installDev - Whether to install devDependencies.
  */
 export async function installBundleDeps(
@@ -18,7 +18,7 @@ export async function installBundleDeps(
 ) {
 	if (!isBundleFolder(bundlePath)) {
 		console.error(
-			`${chalk.red("Error:")} There doesn't seem to be a valid NodeCG bundle in this folder:\n\t${chalk.magenta(bundlePath)}`,
+			`${chalk.red("Error:")} There doesn't seem to be a valid MoonCG bundle in this folder:\n\t${chalk.magenta(bundlePath)}`,
 		);
 		process.exit(1);
 	}

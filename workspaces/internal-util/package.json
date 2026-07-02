@@ -1,9 +1,9 @@
 {
-  "name": "@nodecg/internal-util",
+  "name": "@mooncg/internal-util",
   "version": "2.7.2",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nodecg/nodecg.git",
+    "url": "git+https://github.com/mooncg/mooncg.git",
     "directory": "workspaces/internal-util"
   },
   "type": "module",
@@ -11,8 +11,6 @@
     ".": "./dist/main.js",
     "./package.json": "./package.json"
   },
-  "main": "./dist/main.js",
-  "module": "./dist/main.js",
   "types": "./dist/main.d.ts",
   "files": [
     "dist",
@@ -23,14 +21,16 @@
     "watch": "tsdown --watch"
   },
   "devDependencies": {
-    "@arethetypeswrong/core": "^0.18.2",
-    "publint": "^0.3.15",
-    "tsdown": "^0.16.6",
+    "@arethetypeswrong/core": "^0.18.4",
+    "publint": "^0.3.21",
+    "tsdown": "^0.16.8",
     "typescript": "~5.9.3"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true,
     "registry": "https://registry.npmjs.org"
-  }
+  },
+  "main": "./dist/main.js",
+  "module": "./dist/main.js"
 }

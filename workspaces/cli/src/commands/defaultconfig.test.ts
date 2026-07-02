@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createMockProgram, MockCommand } from "../../test/mocks/program.js";
@@ -16,9 +15,9 @@ let program: MockCommand;
 beforeEach(() => {
 	// Set up environment.
 	const tempFolder = setupTmpDir();
-	process.env["NODECG_ROOT"] = tempFolder;
+	process.env["MOONCG_ROOT"] = tempFolder;
 	process.chdir(tempFolder);
-	fs.writeFileSync("package.json", JSON.stringify({ name: "nodecg" }));
+	fs.writeFileSync("package.json", JSON.stringify({ name: "mooncg" }));
 
 	// Copy fixtures.
 	fs.cpSync(path.resolve(dirname, "../../test/fixtures/"), "./", {
@@ -27,7 +26,7 @@ beforeEach(() => {
 
 	// Build program.
 	program = createMockProgram();
-	defaultconfigCommand(program as unknown as Command);
+	defaultconfigCommand(program);
 });
 
 describe("when run with a bundle argument", () => {
@@ -51,7 +50,7 @@ describe("when run with a bundle argument", () => {
 			"./bundles/missing-schema-bundle/package.json",
 			JSON.stringify({
 				name: "missing-schema-bundle",
-				nodecg: { compatibleRange: "^2.0.0" },
+				mooncg: { compatibleRange: "^2.0.0" },
 			}),
 		);
 		await program.runWith("defaultconfig missing-schema-bundle");
@@ -123,19 +122,19 @@ describe("when run with no arguments", () => {
 	});
 });
 
-describe("installed mode (NodeCG as dependency)", () => {
+describe("installed mode (MoonCG as dependency)", () => {
 	beforeEach(() => {
 		// Set up installed mode environment.
 		const tempFolder = setupTmpDir();
-		process.env["NODECG_ROOT"] = tempFolder;
+		process.env["MOONCG_ROOT"] = tempFolder;
 		process.chdir(tempFolder);
 
-		// Root is a bundle project with nodecg field
+		// Root is a bundle project with mooncg field
 		fs.writeFileSync(
 			"package.json",
 			JSON.stringify({
 				name: "my-awesome-bundle",
-				nodecg: { compatibleRange: "^2.0.0" },
+				mooncg: { compatibleRange: "^2.0.0" },
 			}),
 		);
 
@@ -153,7 +152,7 @@ describe("installed mode (NodeCG as dependency)", () => {
 
 		// Build program.
 		program = createMockProgram();
-		defaultconfigCommand(program as unknown as Command);
+		defaultconfigCommand(program);
 	});
 
 	it("should create config for root bundle when bundle name matches root package", async () => {
@@ -181,7 +180,7 @@ describe("installed mode (NodeCG as dependency)", () => {
 			"./bundles/another-bundle/package.json",
 			JSON.stringify({
 				name: "another-bundle",
-				nodecg: { compatibleRange: "^2.0.0" },
+				mooncg: { compatibleRange: "^2.0.0" },
 			}),
 		);
 		fs.writeFileSync(

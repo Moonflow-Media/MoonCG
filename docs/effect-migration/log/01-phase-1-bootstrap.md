@@ -5,7 +5,7 @@
 
 ## Overview
 
-Migrated NodeCG's server entry point (`bootstrap.ts`) to Effect-TS with single execution point using `NodeRuntime.runMain`. This establishes the foundation for the entire Effect migration by running the server within the Effect runtime with proper error handling, resource management, and graceful shutdown.
+Migrated MoonCG's server entry point (`bootstrap.ts`) to Effect-TS with single execution point using `NodeRuntime.runMain`. This establishes the foundation for the entire Effect migration by running the server within the Effect runtime with proper error handling, resource management, and graceful shutdown.
 
 ## Goals
 
@@ -94,7 +94,7 @@ yield *
 **Solution**: Listen to HTTP server's native 'close' event and emit "stopped" from there
 
 ```typescript
-// In NodeCGServer constructor
+// In MoonCGServer constructor
 server.on("close", () => {
   this.emitStoppedOnce();
 });
@@ -155,7 +155,7 @@ export const withSpanProcessorLive = Effect.fn(function* <A, E, R>(
   const runtime = yield* Effect.runtime<never>();
 
   const layer = NodeSdk.layer(() => ({
-    resource: { serviceName: "nodecg" },
+    resource: { serviceName: "mooncg" },
     spanProcessor: {
       onStart: (span) => {
         Runtime.runSync(runtime, Effect.logTrace(`▶️  ${span.name}`));
@@ -196,7 +196,7 @@ export const withSpanProcessorLive = Effect.fn(function* <A, E, R>(
 
 ### Utility Files Created
 
-Created `workspaces/nodecg/src/server/_effect/` directory with reusable Effect utilities:
+Created `workspaces/mooncg/src/server/_effect/` directory with reusable Effect utilities:
 
 **1. `boundary.ts`** - Error boundary for non-Effect code
 
@@ -254,7 +254,7 @@ NodeRuntime.runMain(
 ```typescript
 export const instantiateServer = Effect.fn("instantiateServer")(() =>
   Effect.acquireRelease(
-    Effect.sync(() => new NodeCGServer()),
+    Effect.sync(() => new MoonCGServer()),
     Effect.fn("instantiateServer/release")((server) =>
       Effect.promise(() => server.stop()),
     ),
@@ -422,14 +422,14 @@ const { Module } = yield * Effect.promise(() => import("heavy-package"));
 
 ## Files Modified
 
-- `workspaces/nodecg/src/server/bootstrap.ts`
-- `workspaces/nodecg/src/server/server/index.ts`
-- `workspaces/nodecg/src/server/config/index.ts`
-- `workspaces/nodecg/src/server/_effect/boundary.ts` (new)
-- `workspaces/nodecg/src/server/_effect/expect-error.ts` (new)
-- `workspaces/nodecg/src/server/_effect/log-level.ts` (new)
-- `workspaces/nodecg/src/server/_effect/span-logger.ts` (new)
-- `workspaces/nodecg/package.json`
+- `workspaces/mooncg/src/server/bootstrap.ts`
+- `workspaces/mooncg/src/server/server/index.ts`
+- `workspaces/mooncg/src/server/config/index.ts`
+- `workspaces/mooncg/src/server/_effect/boundary.ts` (new)
+- `workspaces/mooncg/src/server/_effect/expect-error.ts` (new)
+- `workspaces/mooncg/src/server/_effect/log-level.ts` (new)
+- `workspaces/mooncg/src/server/_effect/span-logger.ts` (new)
+- `workspaces/mooncg/package.json`
 - `package.json`
 - `scripts/workspaces-parallel.ts`
 - `.node-version` (new)

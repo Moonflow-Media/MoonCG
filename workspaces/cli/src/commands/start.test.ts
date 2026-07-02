@@ -1,4 +1,3 @@
-import type { Command } from "commander";
 import { beforeEach, expect, test, vi } from "vitest";
 
 import {
@@ -11,12 +10,12 @@ let program: MockCommand;
 
 beforeEach(() => {
 	program = createMockProgram();
-	startCommand(program as unknown as Command);
+	startCommand(program);
 });
 
-test("should start NodeCG", async () => {
+test("should start MoonCG", async () => {
 	const [port] = await Promise.all([
-		vi.waitUntil(() => process.env["NODECG_TEST_PORT"], { timeout: 5000 }),
+		vi.waitUntil(() => process.env["MOONCG_TEST_PORT"], { timeout: 5000 }),
 		program.runWith("start"),
 	]);
 	expect(port).toBeTypeOf("string");

@@ -6,7 +6,7 @@ import { confirm } from "@inquirer/prompts";
 import chalk from "chalk";
 import { Command } from "commander";
 
-import { getNodeCGPath } from "../lib/util.js";
+import { getMoonCGPath } from "../lib/util.js";
 
 export function uninstallCommand(program: Command) {
 	program
@@ -17,8 +17,8 @@ export function uninstallCommand(program: Command) {
 }
 
 function action(bundleName: string, options: { force: boolean }) {
-	const nodecgPath = getNodeCGPath();
-	const bundlePath = path.join(nodecgPath, "bundles/", bundleName);
+	const mooncgPath = getMoonCGPath();
+	const bundlePath = path.join(mooncgPath, "bundles/", bundleName);
 
 	if (!fs.existsSync(bundlePath)) {
 		console.error(

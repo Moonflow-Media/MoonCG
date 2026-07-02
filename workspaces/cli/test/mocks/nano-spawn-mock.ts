@@ -24,7 +24,7 @@ vi.mock("nano-spawn", async (importOriginal) => {
 						JSON.stringify({
 							name: path.basename(bundlePath),
 							version: "1.1.1",
-							nodecg: { compatibleRange: "^2.0.0" },
+							mooncg: { compatibleRange: "^2.0.0" },
 						}),
 					);
 				}

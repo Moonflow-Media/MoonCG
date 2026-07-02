@@ -1,0 +1,11 @@
+{
+  "name": "incompatible-range",
+  "version": "0.0.1",
+  "homepage": "http://github.com/mooncg",
+  "author": "Alex Van Camp <email@alexvan.camp>",
+  "description": "A test bundle",
+  "license": "MIT",
+  "mooncg": {
+    "compatibleRange": "~0.5.0"
+  }
+}

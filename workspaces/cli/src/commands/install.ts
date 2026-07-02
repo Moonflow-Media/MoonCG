@@ -11,7 +11,7 @@ import semver, { SemVer } from "semver";
 
 import { fetchTags } from "../lib/fetch-tags.js";
 import { installBundleDeps } from "../lib/install-bundle-deps.js";
-import { getNodeCGPath } from "../lib/util.js";
+import { getMoonCGPath } from "../lib/util.js";
 
 export function installCommand(program: Command) {
 	program
@@ -40,7 +40,7 @@ async function action(repo: string, options: { dev: boolean }) {
 		repo = repoParts[0] ?? "";
 	}
 
-	const nodecgPath = getNodeCGPath();
+	const mooncgPath = getMoonCGPath();
 	const parsed = npa(repo);
 	if (!parsed.hosted) {
 		console.error(
@@ -59,7 +59,7 @@ async function action(repo: string, options: { dev: boolean }) {
 	}
 
 	// Check that `bundles` exists
-	const bundlesPath = path.join(nodecgPath, "bundles");
+	const bundlesPath = path.join(mooncgPath, "bundles");
 	/* istanbul ignore next: Simple directory creation, not necessary to test */
 	if (!fs.existsSync(bundlesPath)) {
 		fs.mkdirSync(bundlesPath);
@@ -68,7 +68,7 @@ async function action(repo: string, options: { dev: boolean }) {
 	// Extract repo name from git url
 	const temp = repoUrl.split("/").pop() ?? "";
 	const bundleName = temp.slice(0, temp.length - 4);
-	const bundlePath = path.join(nodecgPath, "bundles/", bundleName);
+	const bundlePath = path.join(mooncgPath, "bundles/", bundleName);
 
 	// Figure out what version to checkout
 	process.stdout.write(`Fetching ${bundleName} release list... `);

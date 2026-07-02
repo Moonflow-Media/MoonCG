@@ -61,8 +61,8 @@ jobs:
 
       - name: Ensure that bundle git parsing functionality works
         run: |
-          git config --global user.email "ci@nodecg.dev"
-          git config --global user.name "NodeCG Bot"
+          git config --global user.email "ci@mooncg.dev"
+          git config --global user.name "MoonCG Bot"
 
       - name: Restore Puppeteer cache (Linux)
         if: runner.os == 'Linux'
@@ -146,14 +146,14 @@ jobs:
       - run: |
           npx tsx scripts/prepare-prerelease.ts --version 0.0.0-pr${{ github.event.number }}.${{ github.sha }}
           npm --workspaces publish --tag pr${{ github.event.number }}
-          (cd workspaces/nodecg && npx tsx scripts/prepare-publish-types.ts)
-          (cd workspaces/nodecg && npm publish --tag pr${{ github.event.number }})
+          (cd workspaces/mooncg && npx tsx scripts/prepare-publish-types.ts)
+          (cd workspaces/mooncg && npm publish --tag pr${{ github.event.number }})
 
       - name: Comment PR with install instructions
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh pr comment ${{ github.event.number }} --body "PR Release Published: \`npm install nodecg@pr${{ github.event.number }}\`"
+          gh pr comment ${{ github.event.number }} --body "PR Release Published: \`npm install mooncg@pr${{ github.event.number }}\`"
 
   release-please:
     permissions:
@@ -182,18 +182,18 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          token: ${{ secrets.NODECG_MONOREPO_GH_TOKEN }}
+          token: ${{ secrets.MOONCG_MONOREPO_GH_TOKEN }}
       - run: gh pr checkout ${{ fromJson(needs.release-please.outputs.pr).number }}
         env:
-          GH_TOKEN: ${{ secrets.NODECG_MONOREPO_GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.MOONCG_MONOREPO_GH_TOKEN }}
       - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
       - run: corepack enable npm
       - run: |
-          git config --global user.email "ci@nodecg.dev"
-          git config --global user.name "NodeCG"
+          git config --global user.email "ci@mooncg.dev"
+          git config --global user.name "MoonCG"
       - run: |
           npm ci
           if git diff --quiet package-lock.json; then
@@ -232,7 +232,7 @@ jobs:
         name: Publish to NPM
         run: |
           echo '${{ needs.release-please.outputs.release_paths }}' | jq -r '.[]' | while read -r path; do
-            if [[ "$path" == "workspaces/nodecg" ]]; then
+            if [[ "$path" == "workspaces/mooncg" ]]; then
               (cd "$path" && npm publish)
               (cd "$path" && npx tsx scripts/prepare-publish-types.ts)
               (cd "$path" && npm publish)
@@ -246,8 +246,8 @@ jobs:
         run: |
           npx tsx scripts/prepare-prerelease.ts --version 0.0.0-canary.${{ github.sha }}
           npm --workspaces publish --tag canary
-          (cd workspaces/nodecg && npx tsx scripts/prepare-publish-types.ts)
-          (cd workspaces/nodecg && npm publish --tag canary)
+          (cd workspaces/mooncg && npx tsx scripts/prepare-publish-types.ts)
+          (cd workspaces/mooncg && npm publish --tag canary)
 
   docker-image:
     permissions:

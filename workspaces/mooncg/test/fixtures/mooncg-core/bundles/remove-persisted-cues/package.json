@@ -1,0 +1,20 @@
+{
+  "name": "remove-persisted-cues",
+  "version": "0.0.0",
+  "description": "",
+  "homepage": "",
+  "author": {
+    "name": "MoonCG",
+    "url": "https://mooncg.dev"
+  },
+  "mooncg": {
+    "compatibleRange": "*",
+    "soundCues": [
+      {
+        "name": "persisted-cue-1"
+      }
+    ]
+  },
+  "repository": "https://github.com/mooncg/mooncg.git",
+  "license": "MIT"
+}
