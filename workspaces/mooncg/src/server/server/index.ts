@@ -36,7 +36,7 @@ import { databaseAdapter as defaultAdapter } from "@mooncg/database-adapter-sqli
 import { rootPaths } from "@mooncg/internal-util";
 import bodyParser from "body-parser";
 import compression from "compression";
-import { Data, Deferred, Effect, PubSub, Runtime, Stream } from "effect";
+import { Data, Deferred, Effect, Fiber, PubSub, Runtime, Stream } from "effect";
 import express from "express";
 import transformMiddleware from "express-transform-bare-module-specifiers";
 import memoize from "fast-memoize";
@@ -54,7 +54,9 @@ import { UnknownError } from "../_effect/boundary.js";
 import { listenToEvent, waitForEvent } from "../_effect/event-listener.js";
 import { createLogger } from "../logger/index.js";
 import { Replicator } from "../replicant/replicator.js";
+import { authCheck } from "../util/authcheck.js";
 import { assetsRouter } from "./assets.js";
+import { createAuthApiRouter } from "./auth-api/index.js";
 import { BundleService, makeBundleService } from "./bundle-service.js";
 import { dashboardRouter } from "./dashboard.js";
 import { createExtensionManager } from "./extensions.js";
@@ -63,7 +65,7 @@ import { createSocketAuthMiddleware } from "./login/socketAuthMiddleware.js";
 import { mountsRouter } from "./mounts.js";
 import { sentryConfigRouter } from "./sentry-config.js";
 import { sharedSourceRouter } from "./shared-sources.js";
-import { socketApiMiddleware } from "./socketApiMiddleware.js";
+import { createSocketApiMiddleware } from "./socketApiMiddleware.js";
 import { soundsRouter } from "./sounds.js";
 
 const renderTemplate = memoize((content, options) =>
@@ -122,14 +124,10 @@ export const createServer = Effect.fn("createServer")(function* (
 	);
 
 	const io = yield* Effect.acquireRelease(
-		Effect.sync(() => {
-			const io = new SocketIO.Server<
-				ClientToServerEvents,
-				ServerToClientEvents
-			>(server);
-			io.setMaxListeners(75);
-			return io;
-		}),
+		Effect.sync(
+			() =>
+				new SocketIO.Server<ClientToServerEvents, ServerToClientEvents>(server),
+		),
 		(io) =>
 			Effect.promise(async () => {
 				io.disconnectSockets(true);
@@ -251,7 +249,10 @@ export const createServer = Effect.fn("createServer")(function* (
 		});
 	}
 
-	io.use(socketApiMiddleware);
+	io.use(createSocketApiMiddleware(databaseAdapter));
+
+	// REST API for user management, 2FA and session management.
+	app.use("/api/v1", authCheck, createAuthApiRouter(databaseAdapter, io));
 
 	// Wait for Chokidar to finish its initial scan.
 	yield* bundleService.awaitReady.pipe(
@@ -390,13 +391,81 @@ export const createServer = Effect.fn("createServer")(function* (
 	);
 	yield* updateBundlesReplicant();
 
+	// Client hot-reload: tell open dashboards (and, if enabled, graphics) to
+	// refresh a bundle's views when the bundle changes. Debounced per bundle.
+	if (config.hotReload.dashboard || config.hotReload.graphics) {
+		const clientRefreshFibers = new Map<string, Fiber.RuntimeFiber<void>>();
+		const runClientRefresh = Effect.fn("runClientRefresh")(function* (
+			bundleName: string,
+		) {
+			yield* Effect.sleep("500 millis");
+			yield* Effect.sync(() => {
+				clientRefreshFibers.delete(bundleName);
+				if (config.hotReload.dashboard) {
+					io.emit("dashboard:bundleRefresh", bundleName);
+				}
+
+				if (config.hotReload.graphics) {
+					io.emit("graphic:bundleRefresh", bundleName);
+				}
+			});
+		});
+		const scheduleClientRefresh = Effect.fn("scheduleClientRefresh")(function* (
+			bundleName: string,
+		) {
+			const pending = clientRefreshFibers.get(bundleName);
+			if (pending) {
+				yield* Fiber.interrupt(pending);
+			}
+
+			const fiber = yield* Effect.forkScoped(runClientRefresh(bundleName));
+			yield* Effect.sync(() => clientRefreshFibers.set(bundleName, fiber));
+		});
+		// Subscribe eagerly so that no events published between here and the
+		// forked fiber's startup are missed.
+		const clientRefreshSubscription = yield* PubSub.subscribe(
+			bundleService.subscribe,
+		);
+		yield* Effect.forkScoped(
+			Stream.fromQueue(clientRefreshSubscription).pipe(
+				Stream.runForEach((event) =>
+					event._tag === "BundleChanged"
+						? scheduleClientRefresh(event.bundle.name)
+						: Effect.void,
+				),
+			),
+		);
+	}
+
 	const mount = (...args: any[]) => app.use(...args);
 	const extensionManager = yield* Effect.acquireRelease(
-		createExtensionManager(io, bundleService, replicator, mount),
+		createExtensionManager(
+			io,
+			bundleService,
+			replicator,
+			mount,
+			databaseAdapter,
+		),
 		(extensionManager) =>
 			Effect.sync(() => extensionManager.emitToAllInstances("serverStopping")),
 	);
 	extensionManager.emitToAllInstances("extensionsLoaded");
+
+	// Extension hot-reload: reload a bundle's extension when its code changes
+	// on disk. Subscribe eagerly so that no events published between here and
+	// the forked fiber's startup are missed.
+	const extensionEventsSubscription = yield* PubSub.subscribe(
+		bundleService.subscribe,
+	);
+	yield* Effect.forkScoped(
+		Stream.fromQueue(extensionEventsSubscription).pipe(
+			Stream.runForEach((event) =>
+				event._tag === "ExtensionChanged"
+					? extensionManager.reloadExtension(event.bundle.name)
+					: Effect.void,
+			),
+		),
+	);
 
 	const runtime = yield* Effect.runtime();
 

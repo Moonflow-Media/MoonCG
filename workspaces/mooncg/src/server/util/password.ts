@@ -32,7 +32,13 @@ export function hashPassword(password: string): string {
  */
 export function verifyPassword(password: string, storedHash: string): boolean {
 	const [scheme, params, saltB64, hashB64, ...rest] = storedHash.split("$");
-	if (scheme !== "scrypt" || !params || !saltB64 || !hashB64 || rest.length > 0) {
+	if (
+		scheme !== "scrypt" ||
+		!params ||
+		!saltB64 ||
+		!hashB64 ||
+		rest.length > 0
+	) {
 		return false;
 	}
 

@@ -33,9 +33,9 @@ describe("hasPermission", () => {
 	it("always allows the superuser role", () => {
 		expect(hasPermission(superuser, "dashboard", Action.READ)).toBe(true);
 		expect(hasPermission(superuser, "users:*", Action.WRITE)).toBe(true);
-		expect(hasPermission(superuser, "anything", Action.READ | Action.WRITE)).toBe(
-			true,
-		);
+		expect(
+			hasPermission(superuser, "anything", Action.READ | Action.WRITE),
+		).toBe(true);
 	});
 
 	it("denies users without roles", () => {
@@ -52,9 +52,9 @@ describe("hasPermission", () => {
 		expect(hasPermission(viewer, "replicants:bundle:rep", Action.WRITE)).toBe(
 			false,
 		);
-		expect(
-			hasPermission(viewer, "dashboard", Action.READ | Action.WRITE),
-		).toBe(false);
+		expect(hasPermission(viewer, "dashboard", Action.READ | Action.WRITE)).toBe(
+			false,
+		);
 	});
 
 	it("grants the operator role READ and WRITE but no user management", () => {

@@ -1,7 +1,12 @@
-import { useRef } from "react";
+import { toDataURL } from "qrcode";
+import type { FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { ApiSession, TotpEnrollment } from "./auth-api";
+import { authApi, formatApiError } from "./auth-api";
 import { Icon } from "./Icon";
 import { useToast } from "./toasts";
+import { SessionRow } from "./UsersPage";
 
 export function SettingsPage() {
 	const showToast = useToast();
@@ -78,6 +83,9 @@ export function SettingsPage() {
 				</div>
 			</div>
 
+			<TwoFactorCard />
+			<SessionsCard />
+
 			<dialog ref={showKeyDialogRef} className="confirm-dialog">
 				<h2>MoonCG Key</h2>
 				<div className="confirm-dialog-body">
@@ -127,6 +135,240 @@ export function SettingsPage() {
 					</button>
 				</div>
 			</dialog>
+		</div>
+	);
+}
+
+function TwoFactorCard() {
+	const showToast = useToast();
+	const [totpEnabled, setTotpEnabled] = useState<boolean | null>(null);
+	const [enrollment, setEnrollment] = useState<TotpEnrollment | null>(null);
+	const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+	const [token, setToken] = useState("");
+	const [busy, setBusy] = useState(false);
+
+	useEffect(() => {
+		authApi.getMe().then(
+			(me) => {
+				setTotpEnabled(me.totp_enabled);
+			},
+			(error: unknown) => {
+				showToast(`Failed to load 2FA status: ${formatApiError(error)}`);
+			},
+		);
+	}, [showToast]);
+
+	const enroll = () => {
+		setBusy(true);
+		authApi
+			.enrollTotp()
+			.then(async (result) => {
+				setEnrollment(result);
+				setQrDataUrl(await toDataURL(result.otpauthUrl));
+			})
+			.catch((error: unknown) => {
+				showToast(formatApiError(error));
+			})
+			.finally(() => {
+				setBusy(false);
+			});
+	};
+
+	const verify = (event: FormEvent) => {
+		event.preventDefault();
+		setBusy(true);
+		authApi
+			.verifyTotp(token)
+			.then(() => {
+				showToast("Two-factor authentication enabled.");
+				setTotpEnabled(true);
+				setEnrollment(null);
+				setQrDataUrl(null);
+				setToken("");
+			})
+			.catch((error: unknown) => {
+				showToast(formatApiError(error));
+			})
+			.finally(() => {
+				setBusy(false);
+			});
+	};
+
+	const disable = (event: FormEvent) => {
+		event.preventDefault();
+		setBusy(true);
+		authApi
+			.disableTotp(token)
+			.then(() => {
+				showToast("Two-factor authentication disabled.");
+				setTotpEnabled(false);
+				setToken("");
+			})
+			.catch((error: unknown) => {
+				showToast(formatApiError(error));
+			})
+			.finally(() => {
+				setBusy(false);
+			});
+	};
+
+	return (
+		<div className="ncg-card" data-testid="settings-2fa">
+			<div className="card-heading">Two-Factor Authentication</div>
+			<div className="card-content">
+				{totpEnabled === null && <div className="spinner" title="Loading" />}
+
+				{totpEnabled === false && !enrollment && (
+					<>
+						<p style={{ marginTop: 0 }}>
+							Two-factor authentication is currently <b>disabled</b>. Protect
+							your account with a one-time code from an authenticator app.
+						</p>
+						<div className="card-actions">
+							<button
+								type="button"
+								className="ncg-button mooncg-accept"
+								data-testid="settings-2fa-enroll"
+								disabled={busy}
+								onClick={enroll}
+							>
+								<Icon name="vpnKey" />
+								<span>Set Up 2FA</span>
+							</button>
+						</div>
+					</>
+				)}
+
+				{totpEnabled === false && enrollment && (
+					<form onSubmit={verify}>
+						<p style={{ marginTop: 0 }}>
+							Scan this QR code with your authenticator app, or enter the secret
+							manually. Then enter the current code to finish setup.
+						</p>
+						{qrDataUrl && (
+							<img
+								className="totp-qr"
+								data-testid="settings-2fa-qr"
+								src={qrDataUrl}
+								alt="QR code for authenticator app enrollment"
+							/>
+						)}
+						<code data-testid="settings-2fa-secret">{enrollment.secret}</code>
+						<label className="form-field">
+							<span>Authenticator code</span>
+							<input
+								type="text"
+								required
+								autoComplete="one-time-code"
+								inputMode="numeric"
+								data-testid="settings-2fa-token"
+								value={token}
+								onChange={(event) => {
+									setToken(event.target.value);
+								}}
+							/>
+						</label>
+						<div className="card-actions">
+							<button
+								type="submit"
+								className="ncg-button mooncg-accept"
+								data-testid="settings-2fa-verify"
+								disabled={busy}
+							>
+								<Icon name="check" />
+								<span>Verify &amp; Enable</span>
+							</button>
+						</div>
+					</form>
+				)}
+
+				{totpEnabled === true && (
+					<form onSubmit={disable}>
+						<p style={{ marginTop: 0 }} data-testid="settings-2fa-status">
+							Two-factor authentication is <b>enabled</b> for your account.
+							<br />
+							To disable it, enter a current authenticator code.
+						</p>
+						<label className="form-field">
+							<span>Authenticator code</span>
+							<input
+								type="text"
+								required
+								autoComplete="one-time-code"
+								inputMode="numeric"
+								data-testid="settings-2fa-token"
+								value={token}
+								onChange={(event) => {
+									setToken(event.target.value);
+								}}
+							/>
+						</label>
+						<div className="card-actions">
+							<button
+								type="submit"
+								className="ncg-button mooncg-reject"
+								data-testid="settings-2fa-disable"
+								disabled={busy}
+							>
+								<Icon name="delete" />
+								<span>Disable 2FA</span>
+							</button>
+						</div>
+					</form>
+				)}
+			</div>
+		</div>
+	);
+}
+
+function SessionsCard() {
+	const showToast = useToast();
+	const [sessions, setSessions] = useState<ApiSession[] | null>(null);
+
+	const refresh = useCallback(() => {
+		authApi.listMySessions().then(setSessions, (error: unknown) => {
+			showToast(`Failed to load sessions: ${formatApiError(error)}`);
+		});
+	}, [showToast]);
+
+	useEffect(() => {
+		refresh();
+	}, [refresh]);
+
+	const revoke = (sessionId: string) => {
+		authApi
+			.revokeMySession(sessionId)
+			.then(() => {
+				showToast("Session terminated.");
+				refresh();
+			})
+			.catch((error: unknown) => {
+				showToast(formatApiError(error));
+			});
+	};
+
+	return (
+		<div className="ncg-card" data-testid="settings-sessions">
+			<div className="card-heading">Active Sessions</div>
+			<div className="card-content">
+				{sessions === null ? (
+					<div className="spinner" title="Loading" />
+				) : (
+					<div className="session-list" data-session-count={sessions.length}>
+						{sessions.map((session) => (
+							<SessionRow
+								key={session.id}
+								session={session}
+								testId="settings-session-row"
+								revokeTestId="settings-session-revoke"
+								onRevoke={() => {
+									revoke(session.id);
+								}}
+							/>
+						))}
+					</div>
+				)}
+			</div>
 		</div>
 	);
 }

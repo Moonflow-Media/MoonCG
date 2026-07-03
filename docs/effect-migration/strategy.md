@@ -170,6 +170,8 @@ See [migration log entry](./log/04-bundle-manager.md) for detailed implementatio
 
 ### Phase 5: Route Libraries Migration
 
+**Status**: ✅ Complete
+
 Migrate route handler classes to Effect-based route services.
 
 **Candidates** (following execution order in createServer):
@@ -182,6 +184,16 @@ Migrate route handler classes to Effect-based route services.
 6. **SharedSourcesLib** - Shared source serving
 
 Each becomes a function returning Effect that sets up routes, replacing class-based design.
+
+**Implementation**:
+
+- All six route libs (plus `graphics/registration.ts` and `sentry-config.ts`) are `Effect.fn`-defined router factories (`graphicsRouter`, `dashboardRouter`, `mountsRouter`, `soundsRouter`, `assetsRouter`, `sharedSourceRouter`) that build and return an Express router; `createServer` yields them and mounts the result — no classes remain
+- BundleService events consumed via the eager `PubSub.subscribe` + `Stream.fromQueue` + `Effect.forkScoped` pattern (dashboard context invalidation, graphics instance status updates); assets file watching uses the `_effect/chokidar.ts` wrapper with scoped watcher and forked streams
+- Sync Express/Socket.IO handlers bridge into the service via captured `Runtime.runSync`; fire-and-forget delays (graphics registration cleanup) via `Runtime.runFork` + `Effect.sleep`
+- Snapshot-based libs (mounts, sounds, assets, shared-sources) keep receiving `yield* bundleService.all()` at setup, matching the old classes' `bundleManager.all()` snapshot semantics
+- Final cleanup pass removed the remaining imperative/non-idiomatic leftovers (type assertions, raw `setTimeout`); no route/path/status-code behavior changed
+
+See [migration log entry](./log/05-route-libs.md) for the per-module audit and details.
 
 ### Phase 6: Login & Authentication
 

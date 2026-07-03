@@ -41,6 +41,7 @@ const blacklistedBundleDirectories = ["node_modules", "bower_components"];
 export type BundleEvent = Data.TaggedEnum<{
 	Ready: object;
 	BundleChanged: { bundle: MoonCG.Bundle };
+	ExtensionChanged: { bundle: MoonCG.Bundle };
 	GitChanged: { bundle: MoonCG.Bundle };
 	InvalidBundle: { bundle: MoonCG.Bundle; error: Error };
 	BundleRemoved: { bundleName: string };
@@ -80,6 +81,11 @@ export const makeBundleService = Effect.fn("makeBundleService")(
 			Option.none<Fiber.RuntimeFiber<void>>(),
 		);
 		const delayedChanges = yield* Queue.unbounded<string>();
+		const pendingExtensionChanges = yield* Ref.make(HashSet.empty<string>());
+		const extensionBackoffFiber = yield* Ref.make(
+			Option.none<Fiber.RuntimeFiber<void>>(),
+		);
+		const delayedExtensionChanges = yield* Queue.unbounded<string>();
 
 		// Start up the watcher, but don't watch any files yet.
 		// We'll add the files we want to watch as bundles are loaded.
@@ -156,6 +162,28 @@ export const makeBundleService = Effect.fn("makeBundleService")(
 					bundle?.dashboard.panels.some((panel) =>
 						panel.path.endsWith(filePath),
 					) ?? false
+				);
+			},
+		);
+
+		/**
+		 * Checks if a given path is part of the extension code of a given
+		 * bundle (the `extension/` directory or the `extension`/`extension.js`
+		 * entry file).
+		 */
+		const isExtensionCode = Effect.fn("BundleService.isExtensionCode")(
+			function* (bundleName: string, filePath: string) {
+				const bundle = yield* find(bundleName);
+				if (!bundle) {
+					return false;
+				}
+
+				const resolvedPath = path.resolve(filePath);
+				const extensionDir = path.join(bundle.dir, "extension");
+				return (
+					resolvedPath === extensionDir ||
+					resolvedPath === path.join(bundle.dir, "extension.js") ||
+					isChildPath(extensionDir, resolvedPath)
 				);
 			},
 		);
@@ -300,6 +328,92 @@ export const makeBundleService = Effect.fn("makeBundleService")(
 			),
 		);
 
+		const runExtensionBackoff = Effect.fn("BundleService.runExtensionBackoff")(
+			function* () {
+				yield* Effect.sleep("500 millis");
+				yield* Ref.set(extensionBackoffFiber, Option.none());
+
+				const changed = yield* Ref.getAndSet(
+					pendingExtensionChanges,
+					HashSet.empty<string>(),
+				);
+				for (const bundleName of changed) {
+					yield* Effect.logDebug(
+						`Backoff finished, emitting extension change event for ${bundleName}`,
+					);
+					yield* Queue.offer(delayedExtensionChanges, bundleName);
+				}
+			},
+		);
+
+		/**
+		 * Resets the backoff timer used to avoid extension reload thrashing
+		 * when many extension files change rapidly.
+		 */
+		const resetExtensionBackoffTimer = Effect.fn(
+			"BundleService.resetExtensionBackoffTimer",
+		)(function* () {
+			const current = yield* Ref.get(extensionBackoffFiber);
+			if (Option.isSome(current)) {
+				yield* Fiber.interrupt(current.value);
+			}
+
+			const fiber = yield* Effect.forkScoped(runExtensionBackoff());
+			yield* Ref.set(extensionBackoffFiber, Option.some(fiber));
+		});
+
+		/**
+		 * Publishes an `ExtensionChanged` event for a bundle. Unlike regular
+		 * bundle changes, this intentionally does NOT reparse the manifest:
+		 * a change to extension code does not alter the bundle manifest.
+		 */
+		const processExtensionChange = Effect.fn(
+			"BundleService.processExtensionChange",
+		)(function* (bundleName: string) {
+			const bundle = yield* find(bundleName);
+			if (!bundle) {
+				return;
+			}
+
+			const backoffActive = yield* Ref.get(extensionBackoffFiber);
+			if (Option.isSome(backoffActive)) {
+				yield* Effect.logDebug(
+					`Backoff active, delaying processing of extension change detected in ${bundleName}`,
+				);
+				yield* Ref.update(pendingExtensionChanges, HashSet.add(bundleName));
+				yield* resetExtensionBackoffTimer();
+				return;
+			}
+
+			yield* Effect.logDebug(
+				`Processing extension change event for ${bundleName}`,
+			);
+			yield* resetExtensionBackoffTimer();
+			yield* PubSub.publish(pubsub, BundleEvent.ExtensionChanged({ bundle }));
+		});
+
+		/**
+		 * Processes an extension change after a 100ms delay, without blocking
+		 * the caller (mirrors the regular bundle change debounce).
+		 */
+		const handleExtensionChange = Effect.fn(
+			"BundleService.handleExtensionChange",
+		)(function* (bundleName: string) {
+			yield* Effect.forkScoped(
+				Effect.sleep("100 millis").pipe(
+					Effect.andThen(() => processExtensionChange(bundleName)),
+				),
+			);
+		});
+
+		// Extension changes released from the backoff buffer are processed
+		// like regular extension changes.
+		yield* Effect.forkScoped(
+			Stream.fromQueue(delayedExtensionChanges).pipe(
+				Stream.runForEach((bundleName) => handleExtensionChange(bundleName)),
+			),
+		);
+
 		const handleAddEvent = Effect.fn("BundleService.handleAddEvent")(function* (
 			filePath: string,
 		) {
@@ -316,6 +430,8 @@ export const makeBundleService = Effect.fn("makeBundleService")(
 				// Just in case though, its here.
 				if (yield* isPanelHTMLFile(bundleName, filePath)) {
 					yield* handleChange(bundleName);
+				} else if (yield* isExtensionCode(bundleName, filePath)) {
+					yield* handleExtensionChange(bundleName);
 				} else if (isGitData(bundleName, filePath)) {
 					yield* debouncedGitChangeHandler(bundleName);
 				}
@@ -340,6 +456,8 @@ export const makeBundleService = Effect.fn("makeBundleService")(
 						(yield* isPanelHTMLFile(bundleName, filePath))
 					) {
 						yield* handleChange(bundleName);
+					} else if (yield* isExtensionCode(bundleName, filePath)) {
+						yield* handleExtensionChange(bundleName);
 					} else if (isGitData(bundleName, filePath)) {
 						yield* debouncedGitChangeHandler(bundleName);
 					}
@@ -359,6 +477,8 @@ export const makeBundleService = Effect.fn("makeBundleService")(
 						// This will cause MoonCG to crash, because the parser will throw
 						// an error due to a panel's HTML file no longer being present.
 						yield* handleChange(bundleName);
+					} else if (yield* isExtensionCode(bundleName, filePath)) {
+						yield* handleExtensionChange(bundleName);
 					} else if (isGitData(bundleName, filePath)) {
 						yield* debouncedGitChangeHandler(bundleName);
 					}
@@ -475,6 +595,8 @@ export const makeBundleService = Effect.fn("makeBundleService")(
 						path.join(bundlePath, ".git"), // Watch `.git` directories.
 						path.join(bundlePath, "dashboard"), // Watch `dashboard` directories.
 						path.join(bundlePath, "package.json"), // Watch each bundle's `package.json`.
+						path.join(bundlePath, "extension"), // Watch `extension` directories (or extensionless entry files).
+						path.join(bundlePath, "extension.js"), // Watch `extension.js` entry files.
 					]);
 				});
 			},

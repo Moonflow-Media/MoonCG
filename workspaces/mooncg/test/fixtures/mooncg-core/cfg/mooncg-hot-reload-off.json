@@ -1,0 +1,7 @@
+{
+	"hotReload": {
+		"dashboard": false,
+		"graphics": false,
+		"extensions": false
+	}
+}

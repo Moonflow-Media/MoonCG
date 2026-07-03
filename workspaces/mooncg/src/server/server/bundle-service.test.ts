@@ -288,6 +288,33 @@ test(
 );
 
 test(
+	"watcher - should emit an `ExtensionChanged` (and no `BundleChanged`) event when extension code changes",
+	testEffect(
+		Effect.gen(function* () {
+			const firstEvent = yield* subscribeToEvents(
+				"ExtensionChanged",
+				"BundleChanged",
+				"InvalidBundle",
+			);
+
+			const extensionPath = `${tmpDir}/bundles/change-extension/extension/index.js`;
+			let extension = fs.readFileSync(extensionPath, "utf8");
+			extension += "\n";
+			yield* Effect.sync(() => {
+				fs.writeFileSync(extensionPath, extension);
+			});
+
+			const event = yield* firstEvent;
+			if (event._tag !== "ExtensionChanged") {
+				throw new Error(`Unexpected event: ${event._tag}`);
+			}
+
+			expect(event.bundle.name).toBe("change-extension");
+		}),
+	),
+);
+
+test(
 	"watcher - should emit an `InvalidBundle` event when a panel HTML file is removed",
 	testEffect(
 		Effect.gen(function* () {

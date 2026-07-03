@@ -31,7 +31,9 @@ export class authUsers1783038858752 implements MigrationInterface {
 		await queryRunner.query(
 			`ALTER TABLE "user" ADD COLUMN "enabled" boolean NOT NULL DEFAULT (1)`,
 		);
-		await queryRunner.query(`ALTER TABLE "session" ADD COLUMN "user_id" varchar`);
+		await queryRunner.query(
+			`ALTER TABLE "session" ADD COLUMN "user_id" varchar`,
+		);
 		await queryRunner.query(
 			`CREATE INDEX "IDX_session_user_id" ON "session" ("user_id")`,
 		);
@@ -75,7 +77,9 @@ export class authUsers1783038858752 implements MigrationInterface {
 		await queryRunner.query(`DELETE FROM permission WHERE id = ?`, [
 			OPERATOR_PERMISSION_ID,
 		]);
-		await queryRunner.query(`DELETE FROM role WHERE id = ?`, [OPERATOR_ROLE_ID]);
+		await queryRunner.query(`DELETE FROM role WHERE id = ?`, [
+			OPERATOR_ROLE_ID,
+		]);
 		await queryRunner.query(`DELETE FROM permission WHERE id = ?`, [
 			ADMIN_USERS_PERMISSION_ID,
 		]);

@@ -43,10 +43,15 @@ function calcButtonsGradient(headerColor: string) {
 /**
  * Wires up Sentry error forwarding and (for non-fullbleed panels) the iframe
  * auto-resizer, once the embedded document has loaded.
+ *
+ * `reattachKey` must change whenever the iframe element is replaced (e.g.
+ * when a bundle hot-reload bumps the iframe's React key), so that the
+ * wiring is re-attached to the new element.
  */
 export function useEmbeddedIframe(
 	iframeRef: RefObject<HTMLIFrameElement | null>,
 	{ resize }: { resize: boolean },
+	reattachKey = 0,
 ) {
 	useEffect(() => {
 		const iframe = iframeRef.current;
@@ -91,7 +96,7 @@ export function useEmbeddedIframe(
 		return () => {
 			iframe.removeEventListener("load", attach);
 		};
-	}, []);
+	}, [reattachKey]);
 }
 
 const OPENED_STORAGE_SUFFIX = "opened";
@@ -99,6 +104,11 @@ const OPENED_STORAGE_SUFFIX = "opened";
 export interface PanelProps {
 	panel: MoonCG.Bundle.Panel;
 	fullbleed: boolean;
+	/**
+	 * Bumped whenever the panel's bundle requests a client refresh; used as
+	 * the iframe's React key so that the iframe reloads.
+	 */
+	refreshCount?: number;
 	dragHandleRef?: Ref<HTMLButtonElement>;
 	dragHandleAttributes?: DraggableAttributes;
 	dragHandleListeners?: DraggableSyntheticListeners;
@@ -107,6 +117,7 @@ export interface PanelProps {
 export function Panel({
 	panel,
 	fullbleed,
+	refreshCount = 0,
 	dragHandleRef,
 	dragHandleAttributes,
 	dragHandleListeners,
@@ -129,7 +140,7 @@ export function Panel({
 	});
 
 	const iframeRef = useRef<HTMLIFrameElement>(null);
-	useEmbeddedIframe(iframeRef, { resize: !fullbleed });
+	useEmbeddedIframe(iframeRef, { resize: !fullbleed }, refreshCount);
 
 	const toggleCollapse = () => {
 		setOpened((current) => {
@@ -201,6 +212,7 @@ export function Panel({
 
 			<div className="panel-body" hidden={!fullbleed && !opened}>
 				<iframe
+					key={refreshCount}
 					ref={iframeRef}
 					src={iframeSrc}
 					id={`${panel.bundleName}_${panel.name}_iframe`}

@@ -329,9 +329,7 @@ async function destroySessionById(id: SessionModel["id"]): Promise<void> {
 	await database.getRepository(Session).delete({ id });
 }
 
-async function listSessionsByUser(
-	userId: User["id"],
-): Promise<SessionModel[]> {
+async function listSessionsByUser(userId: User["id"]): Promise<SessionModel[]> {
 	const database = await getConnection();
 	return database.getRepository(Session).find({
 		where: { user_id: userId },

@@ -172,9 +172,7 @@ export const registrationCoordinator = Effect.fn("registrationCoordinator")(
 					app.emit("graphicAvailable", registration.pathName);
 				}
 
-				setTimeout(() => {
-					removeRegistration(socket.id);
-				}, 1000);
+				Runtime.runFork(runtime, removeRegistrationLater(socket.id));
 			});
 		});
 
@@ -194,6 +192,15 @@ export const registrationCoordinator = Effect.fn("registrationCoordinator")(
 				next();
 			}
 		});
+
+		const removeRegistrationLater = Effect.fn("removeRegistrationLater")(
+			function* (socketId: string) {
+				yield* Effect.sleep("1 second");
+				yield* Effect.sync(() => {
+					removeRegistration(socketId);
+				});
+			},
+		);
 
 		function addRegistration(registration: GraphicsInstance): void {
 			instancesRep.value.push({

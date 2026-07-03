@@ -1,1 +1,5 @@
-{}
+{
+	"bundles": {
+		"disabled": ["hot-reload-bundle"]
+	}
+}

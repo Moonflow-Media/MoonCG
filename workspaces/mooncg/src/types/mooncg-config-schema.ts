@@ -357,6 +357,29 @@ export const mooncgConfigSchema = z
 				},
 			),
 
+		hotReload: z
+			.object({
+				dashboard: z
+					.boolean()
+					.default(true)
+					.describe(
+						"Whether to automatically reload open dashboard panels of a bundle when the bundle changes.",
+					),
+				graphics: z
+					.boolean()
+					.default(false)
+					.describe(
+						"Whether to automatically reload open graphics of a bundle when the bundle changes. Off by default, because graphics are usually part of a live broadcast output.",
+					),
+				extensions: z
+					.boolean()
+					.default(true)
+					.describe(
+						"Whether to reload a bundle's extension at runtime when its extension code changes.",
+					),
+			})
+			.prefault({}),
+
 		sentry: z
 			.object({
 				enabled: z

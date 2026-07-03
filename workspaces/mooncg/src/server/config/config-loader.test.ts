@@ -58,13 +58,13 @@ test('should validate the "ssl" object when "ssl.enabled" is "true"', () => {
 });
 
 test("should load defaults when the config file does not exist", () => {
-	const result = loadConfig(testDirPath("fixtures/mooncg-core/cfg"));
+	const result = loadConfig(testDirPath("fixtures/mooncg-core/cfg-empty"));
 	expect(result.config.host).toBe("0.0.0.0");
 	expect(result.config.port).toBe(9090);
 });
 
 test("should not have any whitelisted nor blacklisted bundles by default", () => {
-	const result = loadConfig(testDirPath("fixtures/mooncg-core/cfg"));
+	const result = loadConfig(testDirPath("fixtures/mooncg-core/cfg-empty"));
 	expect(result.config.bundles.enabled).toBe(null);
 	expect(result.config.bundles.disabled).toBe(null);
 });

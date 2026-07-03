@@ -1006,6 +1006,167 @@ dialog.confirm-dialog .confirm-dialog-body {
 	color: var(--mooncg-status-out-of-date);
 }
 
+.settings-page .totp-qr {
+	background: white;
+	display: block;
+	height: 196px;
+	margin-bottom: 8px;
+	padding: 4px;
+	width: 196px;
+}
+
+/* ---------- Users ---------- */
+
+.users-page {
+	display: flex;
+	flex-direction: column;
+	max-width: 800px;
+	width: 100%;
+}
+
+.users-page .card-content {
+	padding: 16px;
+}
+
+.users-page .card-actions {
+	display: flex;
+	gap: 8px;
+	justify-content: flex-end;
+	padding-top: 8px;
+}
+
+.users-table {
+	border-collapse: collapse;
+	margin-top: 8px;
+	width: 100%;
+}
+
+.users-table th {
+	border-bottom: 2px solid var(--mooncg-divider);
+	font-size: 14px;
+	font-weight: 500;
+	padding: 8px;
+	text-align: left;
+	text-transform: uppercase;
+}
+
+.users-table td {
+	border-bottom: 1px solid var(--mooncg-divider);
+	padding: 8px;
+}
+
+.users-table .user-name {
+	font-weight: 500;
+	overflow-wrap: anywhere;
+}
+
+.users-table .user-status.disabled {
+	color: var(--mooncg-danger-color);
+}
+
+.users-table .user-actions {
+	display: flex;
+	gap: 4px;
+	justify-content: flex-end;
+}
+
+.users-table .user-actions .ncg-button {
+	padding: 6px;
+}
+
+/* ---------- Forms (user editor, 2FA) ---------- */
+
+.form-field {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin: 12px 0;
+}
+
+.form-field > span {
+	font-size: 14px;
+}
+
+.form-field input[type="text"],
+.form-field input[type="password"] {
+	background: rgba(0, 0, 0, 0.2);
+	border: none;
+	border-bottom: 1px solid white;
+	color: white;
+	font: inherit;
+	padding: 6px 8px;
+}
+
+.form-field.checkbox-field,
+.role-option {
+	align-items: center;
+	cursor: pointer;
+	flex-direction: row;
+	gap: 8px;
+}
+
+.role-option {
+	display: flex;
+	padding: 2px 0;
+}
+
+fieldset.roles-fieldset {
+	border: 1px solid var(--mooncg-divider);
+	margin: 12px 0;
+	padding: 8px 12px;
+}
+
+fieldset.roles-fieldset legend {
+	font-size: 14px;
+	padding: 0 4px;
+}
+
+dialog.user-editor-dialog,
+dialog.sessions-dialog {
+	min-width: 360px;
+}
+
+/* ---------- Sessions ---------- */
+
+.session-list {
+	display: flex;
+	flex-direction: column;
+}
+
+.session-row {
+	align-items: center;
+	border-bottom: 1px solid var(--mooncg-divider);
+	display: flex;
+	gap: 12px;
+	justify-content: space-between;
+	padding: 8px 0;
+}
+
+.session-row:last-child {
+	border-bottom: none;
+}
+
+.session-details {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.session-device {
+	font-weight: 500;
+	overflow-wrap: anywhere;
+}
+
+.session-current-badge {
+	color: var(--mooncg-brand-blue);
+}
+
+.session-meta {
+	font-size: 13px;
+	opacity: 0.8;
+}
+
 /* ---------- Toasts ---------- */
 
 .toast-container {

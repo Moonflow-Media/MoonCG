@@ -26,5 +26,16 @@ declare module "express-session" {
 	}
 }
 
+declare module "http" {
+	interface IncomingMessage {
+		/**
+		 * Set by the (wrapped) express-session middleware.
+		 * Present on Socket.IO handshake requests when login security
+		 * is enabled and the client sent a session cookie.
+		 */
+		sessionID?: string;
+	}
+}
+
 // This export needs to be here to make this file be a module. It serves no other purpose. It can be anything.
 export {};

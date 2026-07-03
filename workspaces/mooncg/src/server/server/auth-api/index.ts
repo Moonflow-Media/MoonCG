@@ -250,7 +250,12 @@ export function createAuthApiRouter(
 	router.get(
 		"/me",
 		withUser((user, _req, res) => {
-			res.json(serializeUser(user));
+			res.json({
+				...serializeUser(user),
+				// Lets the dashboard decide whether to show the user management
+				// UI without having to replicate the permission model client-side.
+				canManageUsers: db.hasPermission(user, "users:*", Action.WRITE),
+			});
 		}),
 	);
 
@@ -330,7 +335,7 @@ export function createAuthApiRouter(
 	router.patch(
 		"/users/:id",
 		withUserManagement(async (_user, req, res) => {
-			const targetId = req.params["id"] ?? "";
+			const targetId = req.params.id ?? "";
 			const target = await db.findUser(targetId);
 			if (!target) {
 				sendError(res, 404, "not_found", "No such user.");
@@ -353,9 +358,11 @@ export function createAuthApiRouter(
 
 			const wouldDisable = enabled === false && target.enabled !== false;
 			const wouldDegrade =
-				roles !== undefined && !roles.some(
+				roles !== undefined &&
+				!roles.some(
 					(role) => role.name === "superuser" || role.name === "admin",
-				) && isAdminLike(target);
+				) &&
+				isAdminLike(target);
 			if ((wouldDisable || wouldDegrade) && (await isLastActiveAdmin(target))) {
 				sendError(
 					res,
@@ -391,7 +398,8 @@ export function createAuthApiRouter(
 
 			const updated = await db.updateLocalUser(target.id, {
 				name,
-				passwordHash: password === undefined ? undefined : hashPassword(password),
+				passwordHash:
+					password === undefined ? undefined : hashPassword(password),
 				roles,
 				enabled,
 			});
@@ -412,7 +420,7 @@ export function createAuthApiRouter(
 	router.delete(
 		"/users/:id",
 		withUserManagement(async (_user, req, res) => {
-			const targetId = req.params["id"] ?? "";
+			const targetId = req.params.id ?? "";
 			const target = await db.findUser(targetId);
 			if (!target) {
 				sendError(res, 404, "not_found", "No such user.");
@@ -439,7 +447,7 @@ export function createAuthApiRouter(
 	router.post(
 		"/users/:id/2fa/reset",
 		withUserManagement(async (_user, req, res) => {
-			const targetId = req.params["id"] ?? "";
+			const targetId = req.params.id ?? "";
 			const updated = await db.updateLocalUser(targetId, {
 				totp_secret: null,
 				totp_enabled: false,
@@ -457,7 +465,7 @@ export function createAuthApiRouter(
 	router.get(
 		"/users/:id/sessions",
 		withUserManagement(async (_user, req, res) => {
-			const targetId = req.params["id"] ?? "";
+			const targetId = req.params.id ?? "";
 			const target = await db.findUser(targetId);
 			if (!target) {
 				sendError(res, 404, "not_found", "No such user.");
@@ -477,10 +485,10 @@ export function createAuthApiRouter(
 	router.delete(
 		"/users/:id/sessions/:sessionId",
 		withUserManagement(async (_user, req, res) => {
-			const targetId = req.params["id"] ?? "";
-			const sessionId = req.params["sessionId"] ?? "";
+			const targetId = req.params.id ?? "";
+			const sessionId = req.params.sessionId ?? "";
 			const session = await db.getSession(sessionId);
-			if (!session || session.user_id !== targetId) {
+			if (session?.user_id !== targetId) {
 				sendError(res, 404, "not_found", "No such session.");
 				return;
 			}
@@ -508,9 +516,9 @@ export function createAuthApiRouter(
 	router.delete(
 		"/me/sessions/:sessionId",
 		withUser(async (user, req, res) => {
-			const sessionId = req.params["sessionId"] ?? "";
+			const sessionId = req.params.sessionId ?? "";
 			const session = await db.getSession(sessionId);
-			if (!session || session.user_id !== user.id) {
+			if (session?.user_id !== user.id) {
 				sendError(res, 404, "not_found", "No such session.");
 				return;
 			}

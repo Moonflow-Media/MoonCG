@@ -39,6 +39,7 @@ export interface GraphicRegRequest {
 
 export interface ServerToClientEvents {
 	protocol_error: (error: ProtocolError) => void;
+	"dashboard:bundleRefresh": (bundleName: string) => void;
 	"graphic:bundleRefresh": (bundleName: string) => void;
 	"graphic:refreshAll": (graphic: MoonCG.Bundle.Graphic) => void;
 	"graphic:refresh": (graphicInstance: MoonCG.GraphicsInstance) => void;

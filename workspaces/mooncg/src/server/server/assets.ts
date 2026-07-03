@@ -290,9 +290,9 @@ export const assetsRouter = Effect.fn("assetsRouter")(function* (
 	);
 
 	yield* Effect.forkScoped(
-		Stream.runForEach(errorStream, ({ error: e }) =>
+		Stream.runForEach(errorStream, ({ error }) =>
 			Effect.sync(() => {
-				logger.error((e as Error).stack);
+				logger.error(error instanceof Error ? error.stack : error);
 			}),
 		),
 	);

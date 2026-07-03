@@ -33,7 +33,7 @@ export const graphicsRouter = Effect.fn("graphicsRouter")(function* (
 	app.use(registrationApp);
 
 	app.get("/bundles/:bundleName/graphics*", authCheck, (req, res, next) => {
-		const { bundleName } = req.params as Record<string, string>;
+		const { bundleName } = req.params;
 		const bundle = Runtime.runSync(runtime, bundleService.find(bundleName!));
 		if (!bundle) {
 			next();

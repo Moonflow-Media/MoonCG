@@ -27,7 +27,13 @@ function computeDialogs(bundles: MoonCG.Bundle[]) {
 	return dialogs;
 }
 
-export function Dialogs({ bundles }: { bundles: MoonCG.Bundle[] }) {
+export function Dialogs({
+	bundles,
+	bundleRefreshCounts,
+}: {
+	bundles: MoonCG.Bundle[];
+	bundleRefreshCounts: Record<string, number>;
+}) {
 	const dialogs = computeDialogs(bundles);
 	return (
 		<div id="dialogs">
@@ -35,6 +41,7 @@ export function Dialogs({ bundles }: { bundles: MoonCG.Bundle[] }) {
 				<DialogHost
 					key={`${dialog.bundleName}_${dialog.name}`}
 					dialog={dialog}
+					refreshCount={bundleRefreshCounts[dialog.bundleName] ?? 0}
 				/>
 			))}
 		</div>
@@ -47,24 +54,34 @@ function calcDialogWidth(dialog: MoonCG.Bundle.Panel) {
 	return clamped * 128 + (clamped - 1) * 16;
 }
 
-function DialogHost({ dialog }: { dialog: MoonCG.Bundle.Panel }) {
+function DialogHost({
+	dialog,
+	refreshCount,
+}: {
+	dialog: MoonCG.Bundle.Panel;
+	refreshCount: number;
+}) {
 	const hostRef = useRef<HTMLDivElement>(null);
 	const dialogRef = useRef<HTMLDialogElement>(null);
 	const iframeRef = useRef<HTMLIFrameElement>(null);
 	const confirmedRef = useRef(false);
 
-	useEmbeddedIframe(iframeRef, { resize: true });
+	useEmbeddedIframe(iframeRef, { resize: true }, refreshCount);
 
 	useEffect(() => {
 		const host = hostRef.current;
 		const dialogEl = dialogRef.current;
-		const iframe = iframeRef.current;
-		if (!host || !dialogEl || !iframe) {
+		if (!host || !dialogEl) {
 			return;
 		}
 
+		// Read the iframe from the ref at dispatch time: a bundle hot-reload
+		// replaces the iframe element (its React key is bumped), and events
+		// must reach the current element, not the original one.
 		const dispatchToIframe = (eventName: string) => {
-			iframe.contentDocument?.dispatchEvent(new CustomEvent(eventName));
+			iframeRef.current?.contentDocument?.dispatchEvent(
+				new CustomEvent(eventName),
+			);
 		};
 
 		// Attach the imperative `open()`/`close()`/`opened` contract to the host
@@ -126,6 +143,7 @@ function DialogHost({ dialog }: { dialog: MoonCG.Bundle.Panel }) {
 						 * the dialog has ever been shown.
 						 */}
 						<iframe
+							key={refreshCount}
 							ref={iframeRef}
 							src={`/bundles/${dialog.bundleName}/dashboard/${dialog.file}`}
 							id={`${dialog.bundleName}_${dialog.name}_iframe`}

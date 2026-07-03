@@ -77,7 +77,13 @@ function loadSortOrder(storageKey: string, ids: string[]) {
 	return merged.filter((id) => ids.includes(id));
 }
 
-export function WorkspaceView({ workspace }: { workspace: MoonCG.Workspace }) {
+export function WorkspaceView({
+	workspace,
+	bundleRefreshCounts,
+}: {
+	workspace: MoonCG.Workspace;
+	bundleRefreshCounts: Record<string, number>;
+}) {
 	const panels = useMemo(() => computePanels(workspace), [workspace]);
 
 	if (workspace.fullbleed) {
@@ -92,22 +98,34 @@ export function WorkspaceView({ workspace }: { workspace: MoonCG.Workspace }) {
 						data-bundle={panel.bundleName}
 						data-panel={panel.name}
 					>
-						<Panel panel={panel} fullbleed />
+						<Panel
+							panel={panel}
+							fullbleed
+							refreshCount={bundleRefreshCounts[panel.bundleName] ?? 0}
+						/>
 					</div>
 				))}
 			</div>
 		);
 	}
 
-	return <PanelGrid workspace={workspace} panels={panels} />;
+	return (
+		<PanelGrid
+			workspace={workspace}
+			panels={panels}
+			bundleRefreshCounts={bundleRefreshCounts}
+		/>
+	);
 }
 
 function PanelGrid({
 	workspace,
 	panels,
+	bundleRefreshCounts,
 }: {
 	workspace: MoonCG.Workspace;
 	panels: MoonCG.Bundle.Panel[];
+	bundleRefreshCounts: Record<string, number>;
 }) {
 	const storageKey = `${workspacePanelName(workspace)}_workspace_panel_sort_order`;
 	const ids = useMemo(() => panels.map(fullName), [panels]);
@@ -156,6 +174,7 @@ function PanelGrid({
 								id={fullName(panel)}
 								orderIndex={order.indexOf(fullName(panel))}
 								panel={panel}
+								refreshCount={bundleRefreshCounts[panel.bundleName] ?? 0}
 							/>
 						))}
 					</div>
@@ -169,10 +188,12 @@ function SortablePanel({
 	id,
 	orderIndex,
 	panel,
+	refreshCount,
 }: {
 	id: string;
 	orderIndex: number;
 	panel: MoonCG.Bundle.Panel;
+	refreshCount: number;
 }) {
 	const {
 		attributes,
@@ -205,6 +226,7 @@ function SortablePanel({
 			<Panel
 				panel={panel}
 				fullbleed={false}
+				refreshCount={refreshCount}
 				dragHandleRef={setActivatorNodeRef}
 				dragHandleAttributes={attributes}
 				dragHandleListeners={listeners}

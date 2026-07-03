@@ -67,7 +67,11 @@ describe("verifyTotpToken", () => {
 	it("rejects tokens for a different secret", () => {
 		const token = generateTotpToken(FIXED_SECRET, FIXED_TIMESTAMP);
 		expect(
-			verifyTotpToken("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", token, FIXED_TIMESTAMP),
+			verifyTotpToken(
+				"GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+				token,
+				FIXED_TIMESTAMP,
+			),
 		).toBe(false);
 	});
 

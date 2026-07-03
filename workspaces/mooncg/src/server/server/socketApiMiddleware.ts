@@ -39,7 +39,10 @@ export function createSocketApiMiddleware(db: DatabaseAdapter) {
 
 				if (!canSocketWrite(db, socket, `messages:${data.bundleName}`)) {
 					if (typeof cb === "function") {
-						cb("Unauthorized: sending messages requires WRITE permission", undefined);
+						cb(
+							"Unauthorized: sending messages requires WRITE permission",
+							undefined,
+						);
 					}
 
 					return;

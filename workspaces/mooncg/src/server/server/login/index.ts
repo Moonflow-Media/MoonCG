@@ -391,7 +391,10 @@ export function createMiddleware(
 						if (ident?.provider_secret) {
 							const dbUser = await db.findUser(ident.user.id);
 							if (!dbUser || dbUser.enabled === false) {
-								log.info('(Local) Denying "%s" access (user disabled)', username);
+								log.info(
+									'(Local) Denying "%s" access (user disabled)',
+									username,
+								);
 								done(undefined, false, { message: "user_disabled" });
 								return;
 							}

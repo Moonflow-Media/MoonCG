@@ -1,4 +1,7 @@
 {
+	"bundles": {
+		"disabled": ["hot-reload-bundle"]
+	},
 	"login": {
 		"enabled": true,
 		"sessionSecret": "supersecret",

@@ -12,7 +12,7 @@ export const sharedSourceRouter = Effect.fn("sharedSourceRouter")(function* (
 	const app = express();
 
 	app.get("/bundles/:bundleName/shared/*", authCheck, (req, res, next) => {
-		const { bundleName } = req.params as Record<string, string>;
+		const { bundleName } = req.params;
 		const bundle = bundles.find((b) => b.name === bundleName);
 		if (!bundle) {
 			next();

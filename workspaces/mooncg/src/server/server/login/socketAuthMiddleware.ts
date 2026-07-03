@@ -70,8 +70,8 @@ export const createSocketAuthMiddleware = (db: DatabaseAdapter) => {
 			// Write operations are additionally guarded per-event.
 			const allowed = Boolean(
 				user.enabled !== false &&
-					providerAllowed &&
-					db.hasPermission(user, "dashboard", Action.READ),
+				providerAllowed &&
+				db.hasPermission(user, "dashboard", Action.READ),
 			);
 
 			if (allowed) {

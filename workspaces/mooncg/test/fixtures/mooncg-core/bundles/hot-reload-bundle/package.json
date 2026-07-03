@@ -1,0 +1,24 @@
+{
+  "name": "hot-reload-bundle",
+  "version": "0.0.1",
+  "description": "A test bundle for exercising the hot-reload feature",
+  "license": "MIT",
+  "mooncg": {
+    "compatibleRange": "*",
+    "dashboardPanels": [
+      {
+        "name": "hr-panel",
+        "title": "Hot Reload Panel",
+        "width": 2,
+        "file": "panel.html"
+      }
+    ],
+    "graphics": [
+      {
+        "file": "index.html",
+        "width": 1280,
+        "height": 720
+      }
+    ]
+  }
+}
