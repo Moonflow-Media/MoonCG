@@ -1,5 +1,6 @@
 import * as path from "node:path";
 
+import type { DatabaseAdapter } from "@mooncg/database-adapter-types";
 import * as Sentry from "@sentry/node";
 import { Effect } from "effect";
 import semver from "semver";
@@ -29,6 +30,7 @@ export const createExtensionManager = Effect.fn("createExtensionManager")(
 		bundleService: BundleService,
 		replicator: Replicator,
 		mount: MoonCG.Middleware,
+		db: DatabaseAdapter,
 	) {
 		const extensions: Record<string, unknown> = {};
 		const apiInstances = new Set<
@@ -38,7 +40,7 @@ export const createExtensionManager = Effect.fn("createExtensionManager")(
 		const satisfiedDepNames = new WeakMap<MoonCG.Bundle, string[]>();
 
 		log.trace("Starting extension mounting");
-		const ExtensionApi = serverApiFactory(io, replicator, extensions, mount);
+		const ExtensionApi = serverApiFactory(io, replicator, extensions, mount, db);
 
 		const loadExtension = Effect.fn("loadExtension")(function* (
 			bundle: MoonCG.Bundle,

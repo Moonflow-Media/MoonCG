@@ -6,6 +6,7 @@ import type {
 	Role,
 	User,
 } from "@mooncg/database-adapter-types";
+import { Action } from "@mooncg/database-adapter-types";
 import { rootPaths } from "@mooncg/internal-util";
 import cookieParser from "cookie-parser";
 import express from "express";
@@ -18,10 +19,14 @@ import { Strategy as TwitchStrategy } from "passport-twitch-helix";
 
 import { config } from "../../config";
 import { createLogger } from "../../logger";
+import { verifyPassword } from "../../util/password";
+import { verifyTotpToken } from "../../util/totp";
+import { DatabaseSessionStore } from "./session-store";
 
 type StrategyDoneCb = (
 	error: NodeJS.ErrnoException | undefined,
-	profile?: User,
+	profile?: User | false,
+	info?: { message: string },
 ) => void;
 
 /**
@@ -328,15 +333,85 @@ export function createMiddleware(
 		} = config.login;
 		const hashes = crypto.getHashes();
 
+		/**
+		 * Checks the TOTP requirement for a user that has already passed the
+		 * password check. Returns true if the login may proceed.
+		 */
+		const checkTotp = (
+			user: User,
+			req: express.Request,
+			username: string,
+			done: StrategyDoneCb,
+		): boolean => {
+			if (!user.totp_enabled || !user.totp_secret) {
+				return true;
+			}
+
+			const body: unknown = req.body;
+			const token =
+				typeof body === "object" &&
+				body !== null &&
+				"totp" in body &&
+				typeof body.totp === "string"
+					? body.totp
+					: "";
+
+			if (!token) {
+				log.info('(Local) Denying "%s" access (TOTP token required)', username);
+				done(undefined, false, { message: "totp_required" });
+				return false;
+			}
+
+			if (!verifyTotpToken(user.totp_secret, token)) {
+				log.info('(Local) Denying "%s" access (invalid TOTP token)', username);
+				done(undefined, false, { message: "totp_invalid" });
+				return false;
+			}
+
+			return true;
+		};
+
 		passport.use(
 			new LocalStrategy(
 				{
 					usernameField: "username",
 					passwordField: "password",
 					session: false,
+					passReqToCallback: true,
 				},
-				async (username: string, password: string, done: StrategyDoneCb) => {
+				async (
+					req: express.Request,
+					username: string,
+					password: string,
+					done: StrategyDoneCb,
+				) => {
 					try {
+						// 1. Database-backed local users (scrypt password hash on the identity).
+						const ident = await db.findLocalIdentByUsername(username);
+						if (ident?.provider_secret) {
+							const dbUser = await db.findUser(ident.user.id);
+							if (!dbUser || dbUser.enabled === false) {
+								log.info('(Local) Denying "%s" access (user disabled)', username);
+								done(undefined, false, { message: "user_disabled" });
+								return;
+							}
+
+							if (!verifyPassword(password, ident.provider_secret)) {
+								log.info('(Local) Denying "%s" access', username);
+								done(undefined, false, { message: "invalid_credentials" });
+								return;
+							}
+
+							if (!checkTotp(dbUser, req, username, done)) {
+								return;
+							}
+
+							log.info('(Local) Granting "%s" access', username);
+							done(undefined, dbUser);
+							return;
+						}
+
+						// 2. Fallback: static users from the config (bootstrap path).
 						const roles: Role[] = [];
 						const foundUser = allowedUsers?.find(
 							(u: { username: string; password: string }) =>
@@ -375,6 +450,11 @@ export function createMiddleware(
 							provider_hash: username,
 							roles,
 						});
+
+						if (allowed && !checkTotp(user, req, username, done)) {
+							return;
+						}
+
 						done(undefined, user);
 						return;
 					} catch (error: any) {
@@ -392,6 +472,16 @@ export function createMiddleware(
 	): void => {
 		const url = req.session?.returnTo ?? "/dashboard";
 		delete req.session.returnTo;
+
+		// Record client metadata for the "active sessions" management UI/API.
+		if (req.session) {
+			req.session.meta = {
+				createdAt: Date.now(),
+				ip: req.ip,
+				userAgent: req.headers["user-agent"],
+			};
+		}
+
 		res.redirect(url);
 		app.emit("login", req.user);
 		if (req.user) callbacks.onLogin(req.user);
@@ -405,14 +495,17 @@ export function createMiddleware(
 
 	app.use(cookieParser(config.login.sessionSecret));
 
+	const sessionTTLSeconds = config.login.sessionTTL;
 	const sessionMiddleware = expressSession({
 		resave: false,
 		saveUninitialized: false,
 		secret: config.login.sessionSecret,
+		store: new DatabaseSessionStore(db, sessionTTLSeconds),
 		cookie: {
 			path: "/",
 			httpOnly: true,
 			secure: config.ssl?.enabled,
+			maxAge: sessionTTLSeconds * 1000,
 		},
 	});
 
@@ -430,7 +523,11 @@ export function createMiddleware(
 
 	app.get("/login", (req, res) => {
 		// If the user is already logged in, don't show them the login page again.
-		if (req.user && db.isSuperUser(req.user)) {
+		if (
+			req.user &&
+			req.user.enabled !== false &&
+			db.hasPermission(req.user, "dashboard", Action.READ)
+		) {
 			res.redirect("/dashboard");
 		} else {
 			res.render(
@@ -486,11 +583,41 @@ export function createMiddleware(
 
 	app.get("/login/local", passport.authenticate("local"));
 
-	app.post(
-		"/login/local",
-		passport.authenticate("local", { failureRedirect: "/login" }),
-		redirectPostLogin,
-	);
+	app.post("/login/local", (req, res, next) => {
+		const handler = passport.authenticate(
+			"local",
+			(
+				err: unknown,
+				user: Express.User | false | null | undefined,
+				info: { message?: string } | undefined,
+			) => {
+				if (err) {
+					next(err);
+					return;
+				}
+
+				if (!user) {
+					// Forward the failure code (e.g. totp_required) to the login page
+					// so it can progressively reveal the TOTP input.
+					const code = info?.message;
+					res.redirect(
+						code ? `/login?error=${encodeURIComponent(code)}` : "/login",
+					);
+					return;
+				}
+
+				req.login(user, (loginError: unknown) => {
+					if (loginError) {
+						next(loginError);
+						return;
+					}
+
+					redirectPostLogin(req, res);
+				});
+			},
+		);
+		handler(req, res, next);
+	});
 
 	app.get("/logout", (req, res) => {
 		app.emit("logout", req.user);

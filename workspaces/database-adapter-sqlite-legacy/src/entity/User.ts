@@ -24,6 +24,25 @@ export class User implements UserModel {
 	@Column("text")
 	name!: string;
 
+	/**
+	 * Whether this user is allowed to log in.
+	 */
+	@Column("boolean", { default: true })
+	enabled!: boolean;
+
+	/**
+	 * Base32-encoded TOTP secret. Only set once a user has started
+	 * (or completed) TOTP enrollment.
+	 */
+	@Column("text", { nullable: true })
+	totp_secret: string | null = null;
+
+	/**
+	 * Whether TOTP two-factor authentication is enforced for this user.
+	 */
+	@Column("boolean", { default: false })
+	totp_enabled!: boolean;
+
 	@ManyToMany(() => Role)
 	@JoinTable()
 	roles!: Role[];

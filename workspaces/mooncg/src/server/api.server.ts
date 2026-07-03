@@ -1,3 +1,4 @@
+import type { DatabaseAdapter } from "@mooncg/database-adapter-types";
 import express from "express";
 import isError from "is-error";
 import { serializeError } from "serialize-error";
@@ -12,12 +13,14 @@ import type { Replicator } from "./replicant/replicator";
 import type { ServerReplicant } from "./replicant/server-replicant";
 import type { ExtensionEventMap } from "./server/extensions";
 import { authCheck } from "./util/authcheck";
+import { canSocketWrite } from "./util/socket-write-guard";
 
 export function serverApiFactory(
 	io: RootNS,
 	replicator: Replicator,
 	extensions: Record<string, unknown>,
 	mount: MoonCG.Middleware,
+	db: DatabaseAdapter,
 ) {
 	const apiContexts = new Set<
 		MoonCGAPIBase<"server", Record<string, any>, ExtensionEventMap>
@@ -162,6 +165,12 @@ export function serverApiFactory(
 			apiContexts.add(this);
 			io.on("connection", (socket) => {
 				socket.on("message", (data, ack) => {
+					if (!canSocketWrite(db, socket, `messages:${data.bundleName}`)) {
+						// The ack error is sent by the socket API middleware's
+						// "message" handler; just don't invoke any extension handlers.
+						return;
+					}
+
 					const wrappedAck = _wrapAcknowledgement(ack);
 					this._messageHandlers.forEach((handler) => {
 						if (

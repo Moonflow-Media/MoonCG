@@ -14,6 +14,7 @@ import type {
 	TypedServerSocket,
 } from "../../types/socket-protocol";
 import { createLogger } from "../logger";
+import { canSocketWrite } from "../util/socket-write-guard";
 import { throttleName } from "../util/throttle-name";
 import type { ServerReplicant } from "./server-replicant";
 import { ServerReplicant as Replicant } from "./server-replicant";
@@ -246,6 +247,26 @@ export class Replicator {
 				data.namespace,
 				data.opts,
 			);
+
+			if (
+				!canSocketWrite(
+					this.db,
+					socket,
+					`replicants:${data.namespace}:${data.name}`,
+				)
+			) {
+				log.replicants(
+					"Change request %s:%s was denied (no WRITE permission), invoking callback with fullupdate",
+					data.namespace,
+					data.name,
+				);
+				cb("Unauthorized: modifying replicants requires WRITE permission", {
+					value: serverReplicant.value,
+					revision: serverReplicant.revision,
+				});
+				return;
+			}
+
 			if (
 				serverReplicant.schema &&
 				(!("schemaSum" in data) || data.schemaSum !== serverReplicant.schemaSum)

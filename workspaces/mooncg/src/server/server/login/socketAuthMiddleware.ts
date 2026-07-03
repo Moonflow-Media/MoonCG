@@ -1,4 +1,5 @@
 import type { DatabaseAdapter } from "@mooncg/database-adapter-types";
+import { Action } from "@mooncg/database-adapter-types";
 import { serializeError } from "serialize-error";
 import type { ExtendedError } from "socket.io";
 
@@ -65,9 +66,20 @@ export const createSocketAuthMiddleware = (db: DatabaseAdapter) => {
 			const provider = user.identities[0]!.provider_type;
 			const providerAllowed =
 				config.login.enabled && config.login?.[provider]?.enabled;
-			const allowed = db.isSuperUser(user) && providerAllowed;
+			// Any role that grants READ on the dashboard may connect.
+			// Write operations are additionally guarded per-event.
+			const allowed = Boolean(
+				user.enabled !== false &&
+					providerAllowed &&
+					db.hasPermission(user, "dashboard", Action.READ),
+			);
 
 			if (allowed) {
+				// Attach the user (and the express-session id, if any) to the
+				// socket so that event handlers can perform permission checks
+				// and so that terminated sessions can disconnect their sockets.
+				socket.data.user = user;
+				socket.data.sessionId = socket.request.sessionID;
 				if (!socketsByKey.has(token)) {
 					socketsByKey.set(token, new Set<TypedServerSocket>());
 				}

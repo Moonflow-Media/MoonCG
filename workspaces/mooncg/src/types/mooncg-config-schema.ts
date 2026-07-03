@@ -139,6 +139,14 @@ export const mooncgConfigSchema = z
 					.string()
 					.optional()
 					.describe("The secret used to salt sessions."),
+				sessionTTL: z
+					.number()
+					.int()
+					.positive()
+					.default(604800)
+					.describe(
+						"How long (in seconds) a login session stays valid. Defaults to 7 days.",
+					),
 				forceHttpsReturn: z
 					.boolean()
 					.default(false)

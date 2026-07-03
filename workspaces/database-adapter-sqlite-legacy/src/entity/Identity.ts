@@ -24,6 +24,13 @@ export class Identity implements IdentityModel {
 	provider_hash!: string;
 
 	/**
+	 * scrypt password hash for provider_type "local" database users.
+	 * Identities created through the static config login flow leave this null.
+	 */
+	@Column("text", { nullable: true })
+	provider_secret: string | null = null;
+
+	/**
 	 * Only used by Twitch and Discord providers.
 	 */
 	@Column("text", { nullable: true })

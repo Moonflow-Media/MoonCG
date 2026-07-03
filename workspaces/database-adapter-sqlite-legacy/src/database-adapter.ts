@@ -1,21 +1,28 @@
 import "reflect-metadata";
 
-import type { DatabaseAdapter } from "@mooncg/database-adapter-types";
+import type {
+	DatabaseAdapter,
+	Session as SessionModel,
+} from "@mooncg/database-adapter-types";
+import { hasPermission } from "@mooncg/database-adapter-types";
 
 import { getConnection } from "./connection.ts";
 import { ApiKey } from "./entity/ApiKey.ts";
 import { Identity } from "./entity/Identity.ts";
 import { Replicant } from "./entity/Replicant.ts";
 import { Role } from "./entity/Role.ts";
+import { Session } from "./entity/Session.ts";
 import { User } from "./entity/User.ts";
 
-export { ApiKey, getConnection, Identity, Replicant, Role, User };
+export { ApiKey, getConnection, Identity, Replicant, Role, Session, User };
+
+const USER_RELATIONS = ["roles", "roles.permissions", "identities", "apiKeys"];
 
 async function findUser(id: User["id"]): Promise<User | null> {
 	const database = await getConnection();
 	return database.getRepository(User).findOne({
 		where: { id },
-		relations: ["roles", "identities", "apiKeys"],
+		relations: USER_RELATIONS,
 		cache: true,
 	});
 }
@@ -132,7 +139,202 @@ async function findUserById(userId: User["id"]): Promise<User | null> {
 		where: {
 			id: userId,
 		},
-		relations: ["roles", "identities", "apiKeys"],
+		relations: USER_RELATIONS,
+	});
+}
+
+async function listUsers(): Promise<User[]> {
+	const database = await getConnection();
+	return database.getRepository(User).find({
+		relations: USER_RELATIONS,
+	});
+}
+
+async function listRoles(): Promise<Role[]> {
+	const database = await getConnection();
+	return database.getRepository(Role).find({ relations: ["permissions"] });
+}
+
+async function findLocalIdentByUsername(
+	username: string,
+): Promise<Identity | null> {
+	const database = await getConnection();
+	return database.getRepository(Identity).findOne({
+		where: { provider_type: "local", provider_hash: username },
+		relations: ["user"],
+	});
+}
+
+async function createLocalUser({
+	name,
+	passwordHash,
+	roles,
+	enabled,
+}: {
+	name: User["name"];
+	passwordHash: string;
+	roles: User["roles"];
+	enabled?: User["enabled"];
+}): Promise<User> {
+	const database = await getConnection();
+	const { manager } = database;
+
+	const ident = manager.create(Identity, {
+		provider_type: "local",
+		provider_hash: name,
+		provider_secret: passwordHash,
+		provider_access_token: null,
+		provider_refresh_token: null,
+	});
+	await manager.save(ident);
+
+	const apiKey = await createApiKey();
+	const user = manager.create(User, {
+		name,
+		enabled: enabled ?? true,
+		identities: [ident],
+		apiKeys: [apiKey],
+	});
+	user.roles = roles;
+	return manager.save(user);
+}
+
+async function updateLocalUser(
+	userId: User["id"],
+	update: {
+		name?: User["name"];
+		passwordHash?: string;
+		roles?: User["roles"];
+		enabled?: User["enabled"];
+		totp_secret?: User["totp_secret"];
+		totp_enabled?: User["totp_enabled"];
+	},
+): Promise<User | null> {
+	const database = await getConnection();
+	const { manager } = database;
+
+	const user = await findUserById(userId);
+	if (!user) {
+		return null;
+	}
+
+	const localIdent = user.identities.find(
+		(ident) => ident.provider_type === "local",
+	);
+
+	if (update.name !== undefined && update.name !== user.name) {
+		// Keep the local identity in sync so that logins keep working
+		// with the new username.
+		if (localIdent) {
+			localIdent.provider_hash = update.name;
+			await manager.save(localIdent);
+		}
+
+		user.name = update.name;
+	}
+
+	if (update.passwordHash !== undefined) {
+		if (localIdent) {
+			localIdent.provider_secret = update.passwordHash;
+			await manager.save(localIdent);
+		} else {
+			const ident = manager.create(Identity, {
+				provider_type: "local",
+				provider_hash: user.name,
+				provider_secret: update.passwordHash,
+				provider_access_token: null,
+				provider_refresh_token: null,
+			});
+			await manager.save(ident);
+			user.identities.push(ident);
+		}
+	}
+
+	if (update.enabled !== undefined) {
+		user.enabled = update.enabled;
+	}
+
+	if (update.totp_secret !== undefined) {
+		user.totp_secret = update.totp_secret;
+	}
+
+	if (update.totp_enabled !== undefined) {
+		user.totp_enabled = update.totp_enabled;
+	}
+
+	if (update.roles !== undefined) {
+		user.roles = update.roles;
+	}
+
+	await manager.save(user);
+	return findUserById(userId);
+}
+
+async function deleteUser(userId: User["id"]): Promise<boolean> {
+	const database = await getConnection();
+	const { manager } = database;
+
+	const user = await findUserById(userId);
+	if (!user) {
+		return false;
+	}
+
+	await manager.delete(Session, { user_id: userId });
+
+	// Clear the role join rows before deleting the user itself.
+	user.roles = [];
+	await manager.save(user);
+
+	const identityIds = user.identities.map((ident) => ident.id);
+	if (identityIds.length > 0) {
+		await manager.delete(Identity, identityIds);
+	}
+
+	const apiKeyIds = user.apiKeys.map((apiKey) => apiKey.secret_key);
+	if (apiKeyIds.length > 0) {
+		await manager.delete(ApiKey, apiKeyIds);
+	}
+
+	await manager.delete(User, userId);
+	return true;
+}
+
+async function getSession(
+	id: SessionModel["id"],
+): Promise<SessionModel | null> {
+	const database = await getConnection();
+	return database.getRepository(Session).findOne({ where: { id } });
+}
+
+async function setSession(session: SessionModel): Promise<void> {
+	const database = await getConnection();
+	await database.getRepository(Session).save({
+		id: session.id,
+		expiredAt: session.expiredAt,
+		json: session.json,
+		user_id: session.user_id,
+	});
+}
+
+async function touchSession(
+	id: SessionModel["id"],
+	expiredAt: SessionModel["expiredAt"],
+): Promise<void> {
+	const database = await getConnection();
+	await database.getRepository(Session).update({ id }, { expiredAt });
+}
+
+async function destroySessionById(id: SessionModel["id"]): Promise<void> {
+	const database = await getConnection();
+	await database.getRepository(Session).delete({ id });
+}
+
+async function listSessionsByUser(
+	userId: User["id"],
+): Promise<SessionModel[]> {
+	const database = await getConnection();
+	return database.getRepository(Session).find({
+		where: { user_id: userId },
 	});
 }
 
@@ -222,6 +424,19 @@ export const databaseAdapter: DatabaseAdapter = {
 	getSuperUserRole,
 	upsertUser,
 	isSuperUser,
+	hasPermission,
+	findRole,
+	listRoles,
+	listUsers,
+	findLocalIdentByUsername,
+	createLocalUser,
+	updateLocalUser,
+	deleteUser,
+	getSession,
+	setSession,
+	touchSession,
+	destroySessionById,
+	listSessionsByUser,
 	createApiKey,
 	findApiKey,
 	saveUser,

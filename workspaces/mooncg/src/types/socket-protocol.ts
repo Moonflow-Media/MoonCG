@@ -1,4 +1,10 @@
-import type { Namespace, Server, Socket as ServerSocket } from "socket.io";
+import type { User } from "@mooncg/database-adapter-types";
+import type {
+	DefaultEventsMap,
+	Namespace,
+	Server,
+	Socket as ServerSocket,
+} from "socket.io";
 import type { Socket as ClientSocket } from "socket.io-client";
 
 import type { MoonCG } from "./mooncg";
@@ -141,16 +147,42 @@ export interface ClientToServerEvents {
 	joinRoom: (request: string, callback: NodeCallback) => void;
 }
 
+/**
+ * Per-socket server-side state, populated by the socket auth middleware.
+ */
+export interface SocketData {
+	/**
+	 * The authenticated user this socket belongs to.
+	 * Only set when login security is enabled.
+	 */
+	user?: User;
+
+	/**
+	 * The express-session id of the handshake request (if any).
+	 * Used to disconnect sockets when their session is terminated.
+	 */
+	sessionId?: string;
+}
+
 export type TypedClientSocket = ClientSocket<
 	ServerToClientEvents,
 	ClientToServerEvents
 >;
 export type TypedSocketServer = Server<
 	ClientToServerEvents,
-	ServerToClientEvents
+	ServerToClientEvents,
+	DefaultEventsMap,
+	SocketData
 >;
-export type RootNS = Namespace<ClientToServerEvents, ServerToClientEvents>;
+export type RootNS = Namespace<
+	ClientToServerEvents,
+	ServerToClientEvents,
+	DefaultEventsMap,
+	SocketData
+>;
 export type TypedServerSocket = ServerSocket<
 	ClientToServerEvents,
-	ServerToClientEvents
+	ServerToClientEvents,
+	DefaultEventsMap,
+	SocketData
 >;

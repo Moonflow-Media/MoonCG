@@ -1,3 +1,4 @@
+import { Action } from "@mooncg/database-adapter-types";
 import type express from "express";
 
 import { config } from "../config";
@@ -52,7 +53,12 @@ export const authCheck: express.RequestHandler = async (req, res, next) => {
 			return;
 		}
 
-		const allowed = res.locals.databaseAdapter.isSuperUser(user);
+		// Any role that grants READ on the dashboard may log in.
+		// Config-based logins are granted the superuser role, so their
+		// behavior is unchanged.
+		const allowed =
+			user.enabled !== false &&
+			res.locals.databaseAdapter.hasPermission(user, "dashboard", Action.READ);
 		keyOrSocketTokenAuthenticated = isUsingKeyOrSocketToken && allowed;
 		const provider = user.identities[0]!.provider_type;
 		const providerAllowed = config.login?.[provider]?.enabled;
@@ -82,6 +88,9 @@ export const authCheck: express.RequestHandler = async (req, res, next) => {
 				secure: req.secure,
 				sameSite: req.secure ? "none" : undefined,
 			});
+
+			// Make the resolved user available to downstream routes (e.g. the auth API).
+			res.locals.authenticatedUser = user;
 
 			next();
 			return;

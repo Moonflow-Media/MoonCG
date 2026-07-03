@@ -9,9 +9,11 @@ import { Identity } from "./entity/Identity.ts";
 import { Permission } from "./entity/Permission.ts";
 import { Replicant } from "./entity/Replicant.ts";
 import { Role } from "./entity/Role.ts";
+import { Session } from "./entity/Session.ts";
 import { User } from "./entity/User.ts";
 import { initialize1669424617013 } from "./migration/1669424617013-initialize.ts";
 import { defaultRoles1669424781583 } from "./migration/1669424781583-default-roles.ts";
+import { authUsers1783038858752 } from "./migration/1783038858752-auth-users.ts";
 
 const testing = process.env["MOONCG_TEST"]?.toLowerCase() === "true";
 
@@ -34,8 +36,12 @@ export const dataSource = new DataSource({
 		? ":memory:"
 		: path.join(rootPaths.getRuntimeRoot(), "db/mooncg.sqlite3"),
 	logging: false,
-	entities: [ApiKey, Identity, Permission, Replicant, Role, User],
-	migrations: [initialize1669424617013, defaultRoles1669424781583],
+	entities: [ApiKey, Identity, Permission, Replicant, Role, Session, User],
+	migrations: [
+		initialize1669424617013,
+		defaultRoles1669424781583,
+		authUsers1783038858752,
+	],
 	migrationsRun: true,
 	synchronize: false,
 });

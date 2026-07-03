@@ -1,58 +1,70 @@
+import type { DatabaseAdapter } from "@mooncg/database-adapter-types";
 import * as Sentry from "@sentry/node";
 import type { ExtendedError } from "socket.io";
 
 import type { TypedServerSocket } from "../../types/socket-protocol";
 import { sentryEnabled } from "../config";
 import { createLogger } from "../logger";
+import { canSocketWrite } from "../util/socket-write-guard";
 
 const log = createLogger("socket-api");
 
-export function socketApiMiddleware(
-	socket: TypedServerSocket,
-	next: (err?: ExtendedError) => void,
-) {
-	try {
-		log.trace(
-			"New socket connection: ID %s with IP %s",
-			socket.id,
-			socket.handshake.address,
-		);
-
-		socket.on("error", (err) => {
-			if (sentryEnabled) {
-				Sentry.captureException(err);
-			}
-
-			log.error(err);
-		});
-
-		socket.on("message", (data) => {
+export function createSocketApiMiddleware(db: DatabaseAdapter) {
+	return function socketApiMiddleware(
+		socket: TypedServerSocket,
+		next: (err?: ExtendedError) => void,
+	) {
+		try {
 			log.trace(
-				"Received message %s (sent to bundle %s) with data:",
-				data.messageName,
-				data.bundleName,
-				data.content,
+				"New socket connection: ID %s with IP %s",
+				socket.id,
+				socket.handshake.address,
 			);
 
-			socket.broadcast.emit("message", data);
-		});
+			socket.on("error", (err) => {
+				if (sentryEnabled) {
+					Sentry.captureException(err);
+				}
 
-		socket.on("joinRoom", async (room, cb) => {
-			if (typeof room !== "string") {
-				cb("Room must be a string", undefined);
-				return;
-			}
+				log.error(err);
+			});
 
-			if (!Object.keys(socket.rooms).includes(room)) {
-				log.trace("Socket %s joined room:", socket.id, room);
-				await socket.join(room);
-			}
+			socket.on("message", (data, cb) => {
+				log.trace(
+					"Received message %s (sent to bundle %s) with data:",
+					data.messageName,
+					data.bundleName,
+					data.content,
+				);
 
-			cb(undefined, undefined);
-		});
+				if (!canSocketWrite(db, socket, `messages:${data.bundleName}`)) {
+					if (typeof cb === "function") {
+						cb("Unauthorized: sending messages requires WRITE permission", undefined);
+					}
 
-		next();
-	} catch (error: unknown) {
-		next(error as any);
-	}
+					return;
+				}
+
+				socket.broadcast.emit("message", data);
+			});
+
+			socket.on("joinRoom", async (room, cb) => {
+				if (typeof room !== "string") {
+					cb("Room must be a string", undefined);
+					return;
+				}
+
+				if (!Object.keys(socket.rooms).includes(room)) {
+					log.trace("Socket %s joined room:", socket.id, room);
+					await socket.join(room);
+				}
+
+				cb(undefined, undefined);
+			});
+
+			next();
+		} catch (error: unknown) {
+			next(error as any);
+		}
+	};
 }

@@ -1,10 +1,20 @@
-import type { DatabaseAdapter } from "@mooncg/database-adapter-types";
+import type {
+	DatabaseAdapter,
+	User as DatabaseUser,
+} from "@mooncg/database-adapter-types";
 
 declare global {
 	// eslint-disable-next-line @typescript-eslint/no-namespace
 	namespace Express {
 		export interface Locals {
 			databaseAdapter: DatabaseAdapter;
+
+			/**
+			 * The user that `authCheck` resolved for this request
+			 * (from the Passport session or from an API key / socket token).
+			 * Only present after `authCheck` has passed.
+			 */
+			authenticatedUser?: DatabaseUser;
 		}
 
 		export interface Request {
