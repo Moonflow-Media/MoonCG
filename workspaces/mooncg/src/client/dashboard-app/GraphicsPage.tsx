@@ -1,4 +1,3 @@
-import type { DragEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import type { MoonCG } from "../../types/mooncg";
@@ -170,19 +169,35 @@ function Graphic({
 		});
 	};
 
-	const handleDragStart = (event: DragEvent<HTMLAnchorElement>) => {
-		if (!event.dataTransfer) {
+	// The drag handler is attached natively (not via React's delegated event
+	// system) so that it runs before any listeners consumers may attach
+	// directly to the element, mirroring the old element behavior.
+	const urlAnchorRef = useRef<HTMLAnchorElement>(null);
+	useEffect(() => {
+		const anchor = urlAnchorRef.current;
+		if (!anchor) {
 			return;
 		}
 
-		const separator =
-			window.ncgConfig.login?.enabled && window.token ? "&" : "?";
-		const obsUrl =
-			`${event.currentTarget.href}${separator}` +
-			`layer-name=${graphic.file.replace(".html", "")}` +
-			`&layer-height=${graphic.height}&layer-width=${graphic.width}`;
-		event.dataTransfer.setData("text/uri-list", obsUrl);
-	};
+		const handleDragStart = (event: DragEvent) => {
+			if (!event.dataTransfer) {
+				return;
+			}
+
+			const separator =
+				window.ncgConfig.login?.enabled && window.token ? "&" : "?";
+			const obsUrl =
+				`${anchor.href}${separator}` +
+				`layer-name=${graphic.file.replace(".html", "")}` +
+				`&layer-height=${graphic.height}&layer-width=${graphic.width}`;
+			event.dataTransfer.setData("text/uri-list", obsUrl);
+		};
+
+		anchor.addEventListener("dragstart", handleDragStart);
+		return () => {
+			anchor.removeEventListener("dragstart", handleDragStart);
+		};
+	}, [graphic]);
 
 	return (
 		<div
@@ -199,13 +214,13 @@ function Graphic({
 
 				<div className="graphic-url-and-resolution">
 					<a
+						ref={urlAnchorRef}
 						className="graphic-url"
 						data-testid="graphic-url"
 						href={fullUrl}
 						target="_blank"
 						rel="noreferrer"
 						title={calcShortUrl(graphic.url)}
-						onDragStart={handleDragStart}
 					>
 						{calcShortUrl(graphic.url)}
 					</a>

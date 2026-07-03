@@ -86,6 +86,15 @@ test("ncg-dialog - should open when an element with a valid mooncg-dialog attrib
 test("ncg-dialog - should emit dialog-confirmed when a confirm button is clicked", async ({
 	dashboard,
 }) => {
+	// Wait for the dialog's iframe to have loaded its actual document, so
+	// that the event listener is attached to the final document.
+	await dashboard.waitForFunction(() => {
+		const doc = window.dashboardApi.getDialogDocument("test-dialog");
+		return (
+			doc?.readyState === "complete" && doc.location.href !== "about:blank"
+		);
+	});
+
 	await dashboard.evaluate(
 		async () =>
 			new Promise<void>((resolve) => {
@@ -114,6 +123,15 @@ test("ncg-dialog - should emit dialog-confirmed when a confirm button is clicked
 test("ncg-dialog - should emit dialog-dismissed when a dismiss button is clicked", async ({
 	dashboard,
 }) => {
+	// Wait for the dialog's iframe to have loaded its actual document, so
+	// that the event listener is attached to the final document.
+	await dashboard.waitForFunction(() => {
+		const doc = window.dashboardApi.getDialogDocument("test-dialog");
+		return (
+			doc?.readyState === "complete" && doc.location.href !== "about:blank"
+		);
+	});
+
 	await dashboard.evaluate(
 		async () =>
 			new Promise<void>((resolve) => {

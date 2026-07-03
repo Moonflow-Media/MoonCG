@@ -43,7 +43,12 @@ test("#Logger - should exist and be the Logger constructor", async ({
 test("#getDialog", async ({ dashboard }) => {
 	const res = await dashboard.evaluate(() => {
 		const dialog = window.dashboardApi.getDialog("test-dialog");
-		return dialog?.tagName === "NCG-DIALOG";
+		return (
+			Boolean(dialog) &&
+			typeof dialog?.open === "function" &&
+			typeof dialog?.close === "function" &&
+			typeof dialog?.opened === "boolean"
+		);
 	});
 	expect(res).toBe(true);
 });

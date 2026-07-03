@@ -3,7 +3,7 @@
   "version": "2.7.2",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mooncg/mooncg.git",
+    "url": "git+https://github.com/Moonflow-Media/MoonCG.git",
     "directory": "workspaces/database-adapter-sqlite-legacy"
   },
   "type": "module",
@@ -42,5 +42,8 @@
     "registry": "https://registry.npmjs.org"
   },
   "main": "./dist/database-adapter.js",
-  "module": "./dist/database-adapter.js"
+  "module": "./dist/database-adapter.js",
+  "engines": {
+    "node": ">=24"
+  }
 }

@@ -120,13 +120,17 @@ function DialogHost({ dialog }: { dialog: MoonCG.Bundle.Panel }) {
 					{Boolean(dialog.title) && <h2>{dialog.title}</h2>}
 
 					<div className="dialog-content">
+						{/*
+						 * Deliberately not `loading="lazy"`: the dialog document must be
+						 * reachable via `dashboardApi.getDialogDocument()` even before
+						 * the dialog has ever been shown.
+						 */}
 						<iframe
 							ref={iframeRef}
 							src={`/bundles/${dialog.bundleName}/dashboard/${dialog.file}`}
 							id={`${dialog.bundleName}_${dialog.name}_iframe`}
 							title={dialog.title}
 							scrolling="no"
-							loading="lazy"
 						/>
 					</div>
 

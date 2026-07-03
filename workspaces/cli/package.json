@@ -3,7 +3,7 @@
   "version": "2.8.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mooncg/mooncg.git",
+    "url": "git+https://github.com/Moonflow-Media/MoonCG.git",
     "directory": "workspaces/cli"
   },
   "type": "module",
@@ -52,5 +52,8 @@
     "cli": "./dist/mooncg.js"
   },
   "main": "./dist/mooncg.js",
-  "module": "./dist/mooncg.js"
+  "module": "./dist/mooncg.js",
+  "engines": {
+    "node": ">=24"
+  }
 }
