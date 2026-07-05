@@ -1,6 +1,6 @@
 {
   "name": "@mooncg/database-adapter-types",
-  "version": "2.7.0",
+  "version": "2.7.1",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Moonflow-Media/MoonCG.git",

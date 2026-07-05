@@ -1,7 +1,7 @@
 {
-	"workspaces/internal-util": "2.7.2",
-	"workspaces/database-adapter-types": "2.7.0",
-	"workspaces/database-adapter-sqlite-legacy": "2.7.2",
-	"workspaces/cli": "2.8.0",
-	"workspaces/mooncg": "2.8.0"
+	"workspaces/internal-util": "2.7.3",
+	"workspaces/database-adapter-types": "2.7.1",
+	"workspaces/database-adapter-sqlite-legacy": "2.7.3",
+	"workspaces/cli": "2.8.1",
+	"workspaces/mooncg": "2.8.1"
 }
