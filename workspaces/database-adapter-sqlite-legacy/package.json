@@ -22,8 +22,8 @@
     "watch": "tsdown --watch"
   },
   "dependencies": {
-    "@mooncg/database-adapter-types": "2.7.0",
-    "@mooncg/internal-util": "2.7.2",
+    "@mooncg/database-adapter-types": "2.7.1",
+    "@mooncg/internal-util": "2.7.3",
     "@types/better-sqlite3": "^7.6.13",
     "better-sqlite3": "^12.11.1",
     "reflect-metadata": "^0.2.2",
