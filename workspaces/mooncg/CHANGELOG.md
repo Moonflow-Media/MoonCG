@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.9.0](https://github.com/Moonflow-Media/MoonCG/compare/mooncg-v2.8.1...mooncg-v2.9.0) (2026-07-05)
+
+
+### Miscellaneous Chores
+
+* **mooncg:** Synchronize mooncg versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @mooncg/cli bumped from 2.8.1 to 2.9.0
+
 ## [2.8.0](https://github.com/mooncg/mooncg/compare/mooncg-v2.6.4...mooncg-v2.8.0) (2026-06-28)
 
 
