@@ -8,7 +8,12 @@ export default defineConfig({
 		},
 		coverage: {
 			include: ["workspaces/*/src"],
-			exclude: ["workspaces/mooncg/src/client"],
+			// *.tmpl are HTML/EJS templates the coverage remapper cannot parse
+			exclude: [
+				"workspaces/mooncg/src/client",
+				"**/*.tmpl",
+				"**/*.tsbuildinfo",
+			],
 		},
 		maxWorkers: "50%",
 		projects: [

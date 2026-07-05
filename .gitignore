@@ -6,8 +6,10 @@ out/
 
 # Node / Bower
 bower_components/
+!**/test/**/bower_components/
 node_modules/
 !src/**/node_modules/
+!**/src/**/node_modules/
 !**/test/**/node_modules/
 npm-debug.log
 yarn-error.log

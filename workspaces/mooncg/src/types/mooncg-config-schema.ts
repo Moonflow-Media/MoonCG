@@ -384,7 +384,7 @@ export const mooncgConfigSchema = z
 			.object({
 				enabled: z
 					.boolean()
-					.default(true)
+					.default(false)
 					.describe("Whether to enable Sentry error reporting."),
 				dsn: z
 					.string()

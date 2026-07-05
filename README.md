@@ -19,6 +19,10 @@ MoonCG is a broadcast graphics framework and application. It enables you to writ
 
 Full docs and API reference are available at https://mooncg.dev
 
+## Dokumentation
+
+Die Entwickler-Dokumentation in diesem Repository (Bundle-Entwicklung, API-Referenz, Auth, Änderungen gegenüber NodeCG) findet sich unter [docs/README.md](docs/README.md).
+
 ## Development
 
 To contribute to MoonCG development:

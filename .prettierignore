@@ -19,6 +19,9 @@ generated-types/*
 package-lock.json
 CHANGELOG.md
 
+# Content is asserted verbatim via inline snapshot
+workspaces/mooncg/test/fixtures/mooncg-core/bundles/test-bundle/bower_components/
+
 # Intentionally broken as part of tests
 workspaces/mooncg/test/fixtures/bundle-parser/bad-json/bundleConfig.json
 workspaces/mooncg/test/fixtures/bundle-parser/bad-schema/configschema.json
