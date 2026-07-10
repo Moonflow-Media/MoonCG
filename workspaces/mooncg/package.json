@@ -1,6 +1,6 @@
 {
   "name": "mooncg",
-  "version": "2.9.0",
+  "version": "2.10.0",
   "description": "Dynamic broadcast graphics rendered in a browser",
   "keywords": [
     "graphics",
@@ -58,7 +58,7 @@
     "@effect/platform": "^0.96.2",
     "@effect/platform-node": "^0.107.0",
     "@effect/vitest": "^0.29.0",
-    "@mooncg/cli": "2.9.0",
+    "@mooncg/cli": "2.10.0",
     "@mooncg/database-adapter-sqlite-legacy": "2.7.3",
     "@mooncg/database-adapter-types": "2.7.1",
     "@mooncg/internal-util": "2.7.3",
