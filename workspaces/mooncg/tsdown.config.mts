@@ -64,6 +64,16 @@ const clientConfigs = clientEntries.map(
 );
 
 export default defineConfig([
+	// Built as its own config (not as a second entry of the bootstrap config)
+	// so that requiring "mooncg/config-schema" never shares chunks with — and
+	// therefore never executes — the server bootstrap.
+	{
+		...base,
+		entry: ["src/server/config-schema.ts"],
+		outDir: "dist/server",
+		platform: "node",
+		target: "node20",
+	},
 	{
 		...base,
 		entry: ["src/server/bootstrap.ts"],

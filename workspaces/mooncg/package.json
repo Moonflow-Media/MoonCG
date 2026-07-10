@@ -20,6 +20,10 @@
   "type": "commonjs",
   "exports": {
     ".": "./dist/server/bootstrap.js",
+    "./config-schema": {
+      "types": "./dist/server/config-schema.d.ts",
+      "default": "./dist/server/config-schema.js"
+    },
     "./types": {
       "types": "./types/index.d.ts"
     },
