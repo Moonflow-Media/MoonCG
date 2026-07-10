@@ -7,14 +7,14 @@ tokens are stored in the repo).
 
 ## Published packages
 
-| Package | Source |
-| --- | --- |
-| `mooncg` | `workspaces/mooncg` |
-| `@mooncg/types` | `workspaces/mooncg` (republished — see below) |
-| `@mooncg/cli` | `workspaces/cli` |
-| `@mooncg/internal-util` | `workspaces/internal-util` |
-| `@mooncg/database-adapter-types` | `workspaces/database-adapter-types` |
-| `@mooncg/database-adapter-sqlite-legacy` | `workspaces/database-adapter-sqlite-legacy` |
+| Package                                  | Source                                        |
+| ---------------------------------------- | --------------------------------------------- |
+| `mooncg`                                 | `workspaces/mooncg`                           |
+| `@mooncg/types`                          | `workspaces/mooncg` (republished — see below) |
+| `@mooncg/cli`                            | `workspaces/cli`                              |
+| `@mooncg/internal-util`                  | `workspaces/internal-util`                    |
+| `@mooncg/database-adapter-types`         | `workspaces/database-adapter-types`           |
+| `@mooncg/database-adapter-sqlite-legacy` | `workspaces/database-adapter-sqlite-legacy`   |
 
 `@mooncg/types` has no workspace of its own. It is the `mooncg` package published a
 second time: `workspaces/mooncg/scripts/prepare-publish-types.ts` rewrites the
@@ -113,8 +113,8 @@ Notes:
 
 ## Troubleshooting
 
-| Error | Cause | Fix |
-| --- | --- | --- |
-| `E404 Not Found - PUT …` during publish | No valid npm auth for that package: trusted publisher missing or misconfigured (wrong repo/workflow/environment), or the package does not exist yet. npm returns 404 instead of 403 to avoid leaking package existence. | Configure the trusted publisher (environment blank); for brand-new packages do the one-time manual first publish. |
-| `E403 You cannot publish over the previously published versions` | Re-run of a publish job for a commit whose versions are already on npm. | Nothing to do — that commit is fully published. The next push to `main` publishes cleanly. |
-| `npm notice publish Provenance statement published to transparency log` followed by an error | The provenance/sigstore upload happens **before** the registry PUT — this notice does not mean the publish succeeded. | Read the actual error below the notice. |
+| Error                                                                                        | Cause                                                                                                                                                                                                                   | Fix                                                                                                               |
+| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `E404 Not Found - PUT …` during publish                                                      | No valid npm auth for that package: trusted publisher missing or misconfigured (wrong repo/workflow/environment), or the package does not exist yet. npm returns 404 instead of 403 to avoid leaking package existence. | Configure the trusted publisher (environment blank); for brand-new packages do the one-time manual first publish. |
+| `E403 You cannot publish over the previously published versions`                             | Re-run of a publish job for a commit whose versions are already on npm.                                                                                                                                                 | Nothing to do — that commit is fully published. The next push to `main` publishes cleanly.                        |
+| `npm notice publish Provenance statement published to transparency log` followed by an error | The provenance/sigstore upload happens **before** the registry PUT — this notice does not mean the publish succeeded.                                                                                                   | Read the actual error below the notice.                                                                           |
