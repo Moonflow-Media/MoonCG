@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.10.0](https://github.com/Moonflow-Media/MoonCG/compare/mooncg-v2.9.0...mooncg-v2.10.0) (2026-07-10)
+
+
+### Features
+
+* mooncg default config command ([5131868](https://github.com/Moonflow-Media/MoonCG/commit/5131868f32b841f3379a00f832cc3013628b44c1))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @mooncg/cli bumped from 2.9.0 to 2.10.0
+
 ## [2.9.0](https://github.com/Moonflow-Media/MoonCG/compare/mooncg-v2.8.1...mooncg-v2.9.0) (2026-07-05)
 
 
