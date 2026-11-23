@@ -1,0 +1,43 @@
+{
+  "manifest": 1,
+  "kind": "bundle",
+  "name": "scoreboard",
+  "version": "0.1.0",
+  "title": "Scoreboard",
+  "extension": "extension/index.js",
+  "capabilities": ["http.routes"],
+  "permissions": { "view": "See the scoreboard", "operate": "Change the score" },
+  "defaultRoles": { "operator": ["view", "operate"], "viewer": ["view"] },
+  "panels": [
+    {
+      "id": "control",
+      "title": "Score",
+      "file": "dashboard/control.html",
+      "width": 3,
+      "workspace": "Show",
+      "requires": "operate"
+    }
+  ],
+  "graphics": [
+    {
+      "id": "overlay",
+      "file": "graphics/overlay.html",
+      "width": 1920,
+      "height": 1080,
+      "singleInstance": true,
+      "requires": "view"
+    }
+  ],
+  "replicants": {
+    "score": {
+      "schema": "schemas/score.json",
+      "default": { "home": 0, "away": 0 },
+      "persistent": true,
+      "read": "view",
+      "write": "operate"
+    }
+  },
+  "messages": {
+    "reset": { "send": "operate" }
+  }
+}

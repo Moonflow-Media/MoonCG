@@ -1,0 +1,11 @@
+{
+  "manifest": 1,
+  "kind": "bundle",
+  "name": "typed",
+  "version": "1.0.0",
+  "replicants": {
+    "score": { "schema": "schemas/score.json", "default": { "home": 0, "away": 0 } },
+    "teams": { "default": ["red", "blue"] },
+    "anything": {}
+  }
+}

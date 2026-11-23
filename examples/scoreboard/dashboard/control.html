@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Score</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        font-family: system-ui, sans-serif;
+        text-align: center;
+      }
+      output {
+        display: block;
+        margin-bottom: 16px;
+        font-size: 48px;
+        font-variant-numeric: tabular-nums;
+      }
+      button {
+        padding: 8px 12px;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <output id="score">-:-</output>
+    <button id="home" type="button">Home +1</button>
+    <button id="away" type="button">Away +1</button>
+    <button id="reset" type="button">Reset</button>
+
+    <script type="module">
+      import { createClient } from '/sdk/mooncg.js';
+
+      // The client learns its bundle from this page's URL: /b/scoreboard/...
+      const mc = createClient();
+      const score = mc.replicant('score');
+      const output = document.getElementById('score');
+      const report = (error) => {
+        output.textContent = `Error: ${error.code}`;
+      };
+
+      score.subscribe((value) => {
+        output.textContent = `${value.home}:${value.away}`;
+      });
+      score.ready.catch(report);
+
+      const increment = (side) => () =>
+        score
+          .update((draft) => {
+            draft[side]++;
+          })
+          .catch(report);
+      document.getElementById('home').addEventListener('click', increment('home'));
+      document.getElementById('away').addEventListener('click', increment('away'));
+      document
+        .getElementById('reset')
+        .addEventListener('click', () => mc.request('reset').catch(report));
+    </script>
+  </body>
+</html>

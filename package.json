@@ -1,0 +1,25 @@
+{
+  "name": "mooncg",
+  "version": "0.3.0",
+  "private": true,
+  "description": "A simpler, modular broadcast graphics framework.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.13.0",
+  "scripts": {
+    "build": "tsc -b && pnpm --filter @mooncg/sdk run build:browser",
+    "typecheck": "tsc -b && tsc -p tsconfig.tests.json && tsc -p packages/cli/test/fixtures/typed",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "start": "pnpm build && node packages/server/dist/main.js --bundles-dir examples"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.8",
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}

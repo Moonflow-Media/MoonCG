@@ -1,0 +1,15 @@
+node_modules/
+dist/
+data/
+coverage/
+*.log
+*.tsbuildinfo
+.DS_Store
+
+# Local tooling
+.idea/
+.atl/
+.claude/
+
+# Written by tests
+packages/server/test/fixtures/unused-data/

@@ -1,0 +1,17 @@
+{
+  "extends": "../../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "noEmit": true,
+    "lib": ["ES2023", "DOM"],
+    "paths": {
+      "@mooncg/core": ["../../../../core/src/index.ts"],
+      "@mooncg/sdk/client": ["../../../../sdk/src/client/index.ts"],
+      "@mooncg/sdk/extension": ["../../../../sdk/src/extension/index.ts"]
+    }
+  },
+  "include": ["*.ts"]
+}

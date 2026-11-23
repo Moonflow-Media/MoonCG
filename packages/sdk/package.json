@@ -1,0 +1,60 @@
+{
+  "name": "@mooncg/sdk",
+  "version": "0.3.0",
+  "private": true,
+  "description": "The MoonCG SDK for bundle authors.",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "default": "./dist/client/index.js"
+    },
+    "./extension": {
+      "types": "./dist/extension/index.d.ts",
+      "default": "./dist/extension/index.js"
+    },
+    "./vue": {
+      "types": "./dist/vue/index.d.ts",
+      "default": "./dist/vue/index.js"
+    },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "default": "./dist/react/index.js"
+    },
+    "./browser": "./dist/browser/mooncg.js"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "vue": ">=3.3"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "vue": {
+      "optional": true
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build:browser": "rolldown src/client/index.ts --file dist/browser/mooncg.js --format esm --platform browser --transform.target es2022"
+  },
+  "dependencies": {
+    "@mooncg/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "happy-dom": "^21.0.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "rolldown": "^1.3.3",
+    "vue": "^3.5.46"
+  }
+}

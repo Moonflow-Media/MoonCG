@@ -1,0 +1,7 @@
+{
+  "manifest": 1,
+  "kind": "bundle",
+  "name": "broken",
+  "version": "not-a-version",
+  "graphics": [{ "id": "overlay", "file": "../outside.html", "width": 0, "height": 1080 }]
+}

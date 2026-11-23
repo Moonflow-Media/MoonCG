@@ -1,0 +1,8 @@
+{
+  "manifest": 1,
+  "kind": "bundle",
+  "name": "crashy",
+  "version": "1.0.0",
+  "extension": "extension/index.js",
+  "replicants": { "state": { "default": "declared" } }
+}

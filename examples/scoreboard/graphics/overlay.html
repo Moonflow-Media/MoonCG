@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Scoreboard overlay</title>
+    <style>
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+      }
+      #board {
+        position: absolute;
+        top: 60px;
+        left: 60px;
+        display: flex;
+        gap: 24px;
+        padding: 16px 32px;
+        border-radius: 12px;
+        background: rgba(16, 18, 24, 0.85);
+        color: #fff;
+        font: 700 64px system-ui, sans-serif;
+        font-variant-numeric: tabular-nums;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="board">
+      <span>HOME</span>
+      <span id="home">0</span>
+      <span>:</span>
+      <span id="away">0</span>
+      <span>AWAY</span>
+    </div>
+
+    <script type="module">
+      import { createClient } from '/sdk/mooncg.js';
+
+      const score = createClient().replicant('score');
+      score.subscribe((value) => {
+        document.getElementById('home').textContent = value.home;
+        document.getElementById('away').textContent = value.away;
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "files": {
+    "includes": ["**", "!**/dist", "!**/coverage", "!.atl", "!.claude", "!**/mooncg-env.d.ts"]
+  },
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single"
+    }
+  },
+  "linter": {
+    "rules": {
+      "preset": "recommended"
+    }
+  }
+}

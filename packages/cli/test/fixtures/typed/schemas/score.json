@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "home": { "type": "integer", "minimum": 0 },
+    "away": { "type": "integer", "minimum": 0 },
+    "period": { "enum": ["first", "second"] }
+  },
+  "required": ["home", "away"],
+  "additionalProperties": false
+}

@@ -1,0 +1,35 @@
+{
+  "name": "@mooncg/server",
+  "version": "0.3.0",
+  "private": true,
+  "description": "The MoonCG server: kernel, HTTP, WebSocket transport, extension host.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "public"
+  ],
+  "scripts": {
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@mooncg/core": "workspace:*",
+    "@mooncg/sdk": "workspace:*",
+    "ajv": "^8.20.0",
+    "fastify": "^5.12.8",
+    "semver": "^7.8.6",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/semver": "^7.8.0",
+    "@types/ws": "^8.18.2"
+  }
+}

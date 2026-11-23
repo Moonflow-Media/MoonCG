@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "noEmit": true,
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+    "paths": {
+      "@mooncg/core": ["./packages/core/src/index.ts"],
+      "@mooncg/sdk/client": ["./packages/sdk/src/client/index.ts"],
+      "@mooncg/sdk/extension": ["./packages/sdk/src/extension/index.ts"]
+    }
+  },
+  "include": ["packages/*/test/**/*.ts", "vitest.config.ts"],
+  "exclude": ["packages/*/test/fixtures/typed"]
+}

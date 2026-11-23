@@ -1,0 +1,19 @@
+{
+  "name": "mooncg",
+  "version": "0.3.0",
+  "private": true,
+  "description": "The MoonCG command line.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "mooncg": "./dist/main.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@mooncg/core": "workspace:*"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "manifest": 1,
+  "kind": "bundle",
+  "name": "good",
+  "version": "1.0.0",
+  "title": "Good",
+  "extension": "extension/index.js",
+  "permissions": { "view": "See the graphic", "operate": "Use the panel" },
+  "panels": [
+    {
+      "id": "control",
+      "title": "Control",
+      "file": "dashboard/control.html",
+      "width": 2,
+      "requires": "operate"
+    }
+  ],
+  "graphics": [
+    {
+      "id": "overlay",
+      "file": "graphics/overlay.html",
+      "width": 1920,
+      "height": 1080,
+      "requires": "view"
+    }
+  ],
+  "replicants": {
+    "score": { "default": { "home": 0, "away": 0 }, "read": "view", "write": "operate" },
+    "greeting": {}
+  }
+}
