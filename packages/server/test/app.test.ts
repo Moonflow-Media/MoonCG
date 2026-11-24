@@ -4,17 +4,20 @@ import { loadBundles } from '../src/bundles/bundles.js';
 import { InlineHost } from '../src/extension-host/inline-host.js';
 import { type AppOptions, createApp, resolveLocalAdmin } from '../src/http/app.js';
 import { fixture, memoryLogger } from './helpers.js';
+import { manifest, temporaryBundles } from './temp-bundles.js';
 
 const apps: { close(): Promise<unknown> }[] = [];
+const temporary = temporaryBundles();
 afterEach(async () => {
   for (const app of apps.splice(0)) await app.close();
+  await temporary.cleanup();
 });
 
-async function setup(overrides: Partial<AppOptions> = {}) {
+async function setup(overrides: Partial<AppOptions> = {}, bundlesDir = fixture('bundles')) {
   const registry = new ReplicantRegistry();
   const { logger } = memoryLogger();
   const bundles = await loadBundles({
-    bundlesDir: fixture('bundles'),
+    bundlesDir,
     registry,
     host: new InlineHost({ registry, logger }),
     logger,
@@ -76,6 +79,7 @@ describe('GET /api/v1/bundles', () => {
       title: 'Good',
       version: '1.0.0',
       errors: [],
+      dependencies: [],
       panels: [
         { id: 'control', title: 'Control', width: 2, url: '/b/good/dashboard/control.html' },
       ],
@@ -108,6 +112,79 @@ describe('GET /api/v1/bundles', () => {
     expect(bundles[0].panels).toEqual([]);
     expect(bundles[0].graphics).toHaveLength(1);
     expect(canManage).toBe(false);
+  });
+
+  describe('the bundles a bundle needs', () => {
+    const permissions = { permissions: { view: 'See it' } };
+    const needy = async (overrides: Partial<AppOptions> = {}) => {
+      const dir = await temporary.create({
+        'base/mooncg.json': manifest('base', permissions),
+        'extra/mooncg.json': manifest('extra', permissions),
+        'consumer/mooncg.json': manifest('consumer', {
+          ...permissions,
+          dependencies: { base: '^1.0.0', extra: '^1.0.0' },
+        }),
+        // Needs a bundle that is not there, so it cannot start.
+        'stuck/mooncg.json': manifest('stuck', {
+          ...permissions,
+          dependencies: { absent: '^1.0.0' },
+        }),
+      });
+      const app = await setup(overrides, dir);
+      const { bundles } = (await app.inject({ url: '/api/v1/bundles' })).json();
+      return Object.fromEntries(
+        bundles.map((bundle: { name: string; dependencies: string[] }) => [
+          bundle.name,
+          bundle.dependencies,
+        ]),
+      );
+    };
+
+    it('names them by the manifest, also for a bundle that did not start', async () => {
+      expect(await needy()).toEqual({
+        base: [],
+        extra: [],
+        consumer: ['base', 'extra'],
+        stuck: ['absent'],
+      });
+    });
+
+    it('names only those the principal is shown as bundles itself', async () => {
+      const policy: Policy = {
+        roles: {
+          viewer: [
+            'system:dashboard.view',
+            'bundle:consumer:view',
+            'bundle:base:view',
+            'bundle:stuck:view',
+          ],
+        },
+      };
+      // `extra` and `absent` are no bundles this principal is told about, so no list names them.
+      expect(await needy({ policy, resolvePrincipal: () => viewer })).toEqual({
+        base: [],
+        consumer: ['base'],
+        stuck: [],
+      });
+    });
+
+    it('names a bundle that is not installed only to whoever may manage bundles', async () => {
+      // A grant with a wildcard covers every name, also one no bundle has. That a manifest
+      // asks for such a bundle is told to those who can do something about it.
+      const wide: Policy = { roles: { viewer: ['system:dashboard.view', 'bundle:*:view'] } };
+      expect(await needy({ policy: wide, resolvePrincipal: () => viewer })).toEqual({
+        base: [],
+        extra: [],
+        consumer: ['base', 'extra'],
+        stuck: [],
+      });
+      const manager: Policy = {
+        roles: { viewer: ['system:dashboard.view', 'system:bundles.manage'] },
+      };
+      expect(await needy({ policy: manager, resolvePrincipal: () => viewer })).toMatchObject({
+        stuck: ['absent'],
+      });
+    });
   });
 });
 

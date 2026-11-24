@@ -107,10 +107,25 @@ export interface Messaging {
   request(name: string, data?: Json, options?: RequestOptions): Promise<Json>;
 }
 
+/**
+ * Where the connection to the server stands: `live` once the handshake is done,
+ * `reconnecting` while there is no connection but the client keeps trying (also before the
+ * first one, and for a graphic that waits for its place), `offline` once the client is down
+ * for good: closed, refused by the server, or ended as the instance of its graphic.
+ */
+export type ConnectionStatus = 'live' | 'reconnecting' | 'offline';
+
 export interface MoonCGClient extends Messaging {
   readonly bundle: string;
   /** Resolves after the first successful handshake. Rejects on a protocol mismatch. */
   readonly ready: Promise<void>;
+  /** Where the connection stands right now. */
+  readonly status: ConnectionStatus;
+  /**
+   * Calls `listener` whenever `status` changes, with the new one. It is not called for the
+   * status at the time of asking; read `status` for that. Returns the function that stops it.
+   */
+  onStatusChange(listener: (status: ConnectionStatus) => void): () => void;
   /**
    * Dialogs of this page's bundle, shown over the dashboard. They need no connection to the
    * server, only the dashboard around the page.
@@ -258,8 +273,23 @@ interface TopicState {
 
 /** Connects a page to the server. */
 export function createClient(options: ClientOptions = {}): MoonCGClient {
-  const { bundle, ready, dialogs, replicant, send, on, request, close } = createConnection(options);
-  return { bundle, ready, dialogs, replicant, send, on, request, close };
+  const connection = createConnection(options);
+  const { bundle, ready, dialogs, replicant, send, on, request, onStatusChange, close } =
+    connection;
+  return {
+    bundle,
+    ready,
+    dialogs,
+    replicant,
+    send,
+    on,
+    request,
+    get status() {
+      return connection.status;
+    },
+    onStatusChange,
+    close,
+  };
 }
 
 export function createConnection(options: ConnectionOptions = {}): Connection {
@@ -305,6 +335,21 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
   /** The server refused this page as a second instance of its graphic; it keeps asking. */
   let duplicate = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let status: ConnectionStatus = 'reconnecting';
+  const statusListeners = new Set<(status: ConnectionStatus) => void>();
+
+  /** Tells the listeners, when the status is another one than before. */
+  const setStatus = (next: ConnectionStatus) => {
+    if (status === next) return;
+    status = next;
+    for (const listener of [...statusListeners]) {
+      try {
+        listener(next);
+      } catch (failure) {
+        report('a status listener failed', failure);
+      }
+    }
+  };
 
   const send = (msg: ClientMessage) => socket?.send(encodeMessage(msg));
 
@@ -320,6 +365,7 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
     pending.clear();
     pendingSubs.clear();
     socket?.close();
+    setStatus('offline');
   };
 
   /** Sends a request and settles with the server's answer to it. */
@@ -431,6 +477,7 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
           onDuplicate(false);
         }
         ready.resolve();
+        setStatus('live');
         for (const [name, state] of replicants) subscribe(name, state);
         for (const [name, topic] of topics) {
           topic.subscribed = ask((id) => ({ t: 'msg.sub', id, name })).catch((error) => {
@@ -584,6 +631,7 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
       for (const waiting of pending.values()) waiting.reject(dropped);
       pending.clear();
       if (stopError) return;
+      setStatus('reconnecting');
       reconnectTimer = setTimeout(connect, duplicate ? duplicateRetryMs : reconnectDelayMs);
     });
   };
@@ -647,6 +695,15 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
   return {
     bundle,
     ready: ready.promise,
+    get status() {
+      return status;
+    },
+    onStatusChange(listener) {
+      statusListeners.add(listener);
+      return () => {
+        statusListeners.delete(listener);
+      };
+    },
     dialogs: createDialogs(),
     replicant(name: string) {
       const qualified = qualifyReplicantName(name, bundle);

@@ -95,7 +95,10 @@ there can read and write the database anyway.
 
 **What you are shown.** `GET /api/v1/bundles` lists only the bundles you hold a permission of
 (all of them if you may manage bundles), and of each only the panels, dialogs and graphics you
-may open and the asset categories you may read, each with whether you may change it.
+may open and the asset categories you may read, each with whether you may change it. The
+bundles a bundle needs (`dependencies`) are named under the same rule: one you would not be
+listed is not named there either. A bundle that is needed but not installed is named only to
+holders of `system:bundles.manage`, whatever a grant with a wildcard would cover.
 The replicant `system:bundles`, which has the state of every bundle, needs
 `system:bundles.manage`. Everyone with the dashboard can follow `system:revision`, a counter
 that moves when a bundle changes, and ask for the list again.
@@ -360,10 +363,12 @@ Every answer carries `X-Content-Type-Options: nosniff` and `Referrer-Policy: sam
 The server's own pages (`/`, `/login`, `/setup`) are sent with `X-Frame-Options: DENY` and
 
 ```
-Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline';
+Content-Security-Policy: default-src 'self'; style-src 'self';
   img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self';
   frame-ancestors 'none'
 ```
+
+None of these pages has a style written into it: their styles are files of this server.
 
 They load only what this server serves, cannot be framed, and post forms only back here.
 Styles written into the page are allowed because these pages carry their styles inline.

@@ -249,6 +249,47 @@ describe('the dialog host on the page', () => {
     view.unmount();
   });
 
+  it('closes the dialog on Escape, also while the keys go to the dialog page', async () => {
+    const bundles = useBundles();
+    bundles.list = [
+      { name: 'board', state: 'running', errors: [], panels: [], graphics: [], dialogs: [CONFIRM] },
+    ];
+    const frame = panelFrame('board');
+    const view = mount(DialogHost, { attachTo: document.body });
+    const open = async () => {
+      post(frame.contentWindow, { t: 'open', id: 1, dialog: 'confirm-reset', data: null });
+      await flushPromises();
+      return view.find('[role="dialog"]');
+    };
+
+    // On the dashboard's own page, such as with the focus on the × of the dialog.
+    await (await open()).trigger('keydown', { key: 'Enter' });
+    expect(view.find('[role="dialog"]').exists()).toBe(true);
+    // Not an Escape that ends the composing of a character, nor one something else took.
+    await view.find('[role="dialog"]').trigger('keydown', { key: 'Escape', isComposing: true });
+    expect(view.find('[role="dialog"]').exists()).toBe(true);
+    await view.find('[role="dialog"]').trigger('keydown', { key: 'Escape' });
+    expect(view.find('[role="dialog"]').exists()).toBe(false);
+
+    // In the dialog page, which has the focus once it is open: its window gets the keys.
+    const page = new EventTarget();
+    const dialogFrame = (await open()).find('iframe');
+    Object.defineProperty(dialogFrame.element, 'contentWindow', { value: page });
+    await dialogFrame.trigger('load');
+    page.dispatchEvent(Object.assign(new Event('keydown'), { key: 'a' }));
+    page.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape', isComposing: true }));
+    // The dialog page used the key itself, such as to close a list it had open.
+    const taken = Object.assign(new Event('keydown', { cancelable: true }), { key: 'Escape' });
+    taken.preventDefault();
+    page.dispatchEvent(taken);
+    await flushPromises();
+    expect(view.find('[role="dialog"]').exists()).toBe(true);
+    page.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape' }));
+    await flushPromises();
+    expect(view.find('[role="dialog"]').exists()).toBe(false);
+    view.unmount();
+  });
+
   it('opens nothing for a frame that is no panel', async () => {
     const frame = panelFrame();
     const view = mount(DialogHost, { attachTo: document.body });

@@ -177,16 +177,43 @@ function watcher() {
 }
 
 test('setup, sign in, operate the panel, see the graphic, keep the layout', async ({ browser }) => {
-  const { problems, watch } = watcher();
+  const { problems, expected, watch } = watcher();
+  /** The page is drawn as the dashboard is: a card on the dark page, with the mark. */
+  const drawn = async (page: Page) => {
+    await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(20, 22, 26)');
+    await expect(page.locator('.card')).toHaveCSS('background-color', 'rgb(27, 30, 36)');
+    await expect(page.locator('button[type="submit"]')).toHaveCSS(
+      'background-color',
+      'rgb(138, 180, 248)',
+    );
+    const mark = page.locator('.brand img');
+    await expect
+      .poll(() => mark.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth))
+      .toBeGreaterThan(0);
+  };
 
   // --- Setup: the URL the server printed creates the first administrator.
   const admin = watch(await freshPage(browser));
   await admin.goto(setupUrl);
   await expect(admin.locator('input[name="code"]')).not.toHaveValue('');
+  await expect(admin.locator('h1')).toHaveText('MoonCG setup');
+  await drawn(admin);
   await admin.fill('input[name="username"]', 'ada');
   await admin.fill('input[name="password"]', PASSWORD);
   await admin.click('button[type="submit"]');
   await admin.waitForURL(`${base}/login`);
+
+  // --- The sign-in page says why it refused, and stays.
+  await drawn(admin);
+  const notice = admin.locator('p#notice.errors[role="alert"]');
+  await expect(notice).toHaveText('');
+  await admin.fill('input[name="username"]', 'ada');
+  await admin.fill('input[name="password"]', 'not the password');
+  await admin.click('button[type="submit"]');
+  await expect(notice).not.toHaveText('');
+  await expect(notice).toHaveCSS('color', 'rgb(255, 157, 157)');
+  expected('401 /api/v1/auth/login');
+  expect(new URL(admin.url()).pathname).toBe('/login');
 
   // --- Sign in: the dashboard shows who is signed in and the workspace of the example.
   await signIn(admin, 'ada');
@@ -302,7 +329,12 @@ test('a dialog: opened by the panel, answered, and gone with the panel', async (
   const { problems, watch } = watcher();
   const admin = watch(await asAdmin(browser));
   const score = control(admin).locator('#score');
+  // The score of the tests before is kept, so that it is not nil does not say that the
+  // click has arrived: the score it had is waited to change.
+  await expect(score).toHaveText(/^\d+:\d+$/);
+  const untouched = (await score.textContent()) ?? '';
   await control(admin).locator('#home').click();
+  await expect(score).not.toHaveText(untouched);
   await expect(score).toHaveText(/^[1-9]\d*:\d+$/);
   const before = (await score.textContent()) ?? '';
 
@@ -487,6 +519,173 @@ test('assets: uploaded, shown by the graphic, refused when wrong, never run as a
   await logos.locator('[data-asset="home.png"]').getByRole('button', { name: 'Delete' }).click();
   await expect(logos.locator('[data-asset="home.png"]')).toHaveCount(0);
   await expect(graphic.locator('#home-logo')).toBeHidden();
+
+  expect(problems).toEqual([]);
+});
+
+test('the shell: grouped navigation, counts, connection, and every page without a complaint', async ({
+  browser,
+}) => {
+  const { problems, watch } = watcher();
+  const admin = watch(await asAdmin(browser));
+
+  // --- The navigation in its groups, each under its label.
+  const labels = (page: Page) => page.locator('nav[aria-label="Main"] .nav-label');
+  await expect(labels(admin)).toHaveText(['Workspaces', 'Show', 'Admin', 'System']);
+  const group = (name: string) => admin.locator(`[data-nav-group="${name}"] a.nav-item`);
+  await expect(group('Show')).toHaveText([/^Bundles/, /^Graphics/, /^Assets$/]);
+  await expect(group('Admin')).toHaveText(['Users', 'Roles', 'Tokens']);
+  await expect(group('System')).toHaveText([/^Settings$/, /^Logs/]);
+  await expect(admin.locator('a[href="/w/Show"] .count')).toHaveText('1');
+  await expect(admin.locator('a[href="/bundles"] .count')).toHaveCount(0);
+
+  // --- The mark is a file of the dashboard, served to whoever is signed in and nobody else.
+  const mark = admin.locator('.sidebar-brand img');
+  await expect
+    .poll(() => mark.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth))
+    .toBeGreaterThan(0);
+  const markPath = (await mark.getAttribute('src')) ?? '';
+  expect(markPath).toMatch(/^\/ui\/logo-mark-.+\.svg$/);
+  const anonymous = await freshPage(browser);
+  expect((await anonymous.request.get(`${base}${markPath}`)).status()).toBe(401);
+
+  // --- The connection is live, and a graphic that goes on air is counted.
+  await expect(admin.locator('.conn')).toHaveAttribute('data-status', 'live');
+  await expect(admin.locator('.conn')).toContainText('Live');
+  await expect(admin.locator('a[href="/graphics"] .count')).toHaveCount(0);
+  const graphic = watch(await admin.context().newPage());
+  await graphic.goto(`${base}${OVERLAY}`);
+  await expect(admin.locator('a[href="/graphics"] .count')).toHaveText('1');
+  // The graphics page, entered while the graphic is already open, says whose it is.
+  await nav(admin, 'Graphics').click();
+  const open = admin.locator('[data-graphic="scoreboard:overlay"] [data-instance]');
+  await expect(open).toHaveCount(1);
+  await expect(open).toContainText('Open by ada (user)');
+  await graphic.close();
+  await expect(admin.locator('a[href="/graphics"] .count')).toHaveCount(0);
+
+  // --- Every page, each under its heading. Nothing on any of them is refused by the
+  // server or by the page's Content-Security-Policy, which would be an error on the console.
+  const pages = [
+    ['Show', 'Show'],
+    ['Bundles', 'Bundles'],
+    ['Graphics', 'Graphics'],
+    ['Assets', 'Assets'],
+    ['Users', 'Users'],
+    ['Roles', 'Roles'],
+    ['Tokens', 'API tokens'],
+    ['Settings', 'Settings'],
+    ['Logs', 'Logs'],
+  ] as const;
+  for (const [link, heading] of pages) {
+    await nav(admin, link).click();
+    await expect(admin.locator('.page-head h1')).toContainText(heading);
+    await expect(nav(admin, link)).toHaveClass(/router-link-active/);
+  }
+
+  // --- A viewer has the groups of what a viewer may open, and no label of another. The
+  // page asks for nothing it would be refused, the log among it.
+  const viewer = watch(await asViewer(browser));
+  await expect(viewer.locator('[data-user-name]')).toHaveText('vera');
+  await expect(labels(viewer)).toHaveText(['Show']);
+  await expect(viewer.locator('nav[aria-label="Main"]')).not.toContainText(
+    /Admin|System|Workspaces/,
+  );
+  await expect(viewer.locator('[data-nav-group]')).toHaveCount(1);
+  await nav(viewer, 'Bundles').click();
+  await expect(viewer.locator('[data-bundle="scoreboard"]')).toBeVisible();
+  // Longer than the log is asked for anew by those who may read it.
+  await viewer.waitForTimeout(2500);
+
+  // --- Narrow, the navigation lies above the page instead of beside it.
+  await admin.setViewportSize({ width: 800, height: 900 });
+  const sidebar = await admin.locator('.sidebar').boundingBox();
+  const content = await admin.locator('.content').boundingBox();
+  expect(sidebar?.width).toBe(800);
+  expect(content?.y).toBeGreaterThanOrEqual((sidebar?.y ?? 0) + (sidebar?.height ?? 0));
+  expect(await admin.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(800);
+
+  expect(problems).toEqual([]);
+});
+
+test('the bundle filter, the copied URL, the keyboard and reduced motion', async ({ browser }) => {
+  const { problems, watch } = watcher();
+  const admin = watch(await asAdmin(browser));
+  await admin.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+
+  // --- The filter narrows the list, by the mouse and by the arrow keys.
+  await nav(admin, 'Bundles').click();
+  const filter = admin.getByRole('radiogroup', { name: 'Filter' });
+  const choice = (name: RegExp) => filter.getByRole('radio', { name });
+  const row = admin.locator('[data-bundle="scoreboard"]');
+  await expect(choice(/^All/)).toHaveAttribute('aria-checked', 'true');
+  await expect(row).toContainText('1 panel · 1 graphic');
+  await choice(/^disabled/).click();
+  await expect(row).toHaveCount(0);
+  await expect(admin.locator('.empty')).toHaveText('No bundle is disabled.');
+  await expect(choice(/^disabled/)).toBeFocused();
+  await admin.keyboard.press('Home');
+  await expect(choice(/^All/)).toHaveAttribute('aria-checked', 'true');
+  await expect(choice(/^All/)).toBeFocused();
+  await admin.keyboard.press('ArrowRight');
+  await expect(choice(/^running/)).toHaveAttribute('aria-checked', 'true');
+  await expect(choice(/^running/)).toBeFocused();
+  await expect(row).toBeVisible();
+  await admin.keyboard.press('ArrowRight');
+  await expect(choice(/^failed/)).toHaveAttribute('aria-checked', 'true');
+  await expect(row).toHaveCount(0);
+
+  // --- A key figure is a button that holds the filter, and lets go of it.
+  const running = admin.locator('.stat[data-stat="running"]');
+  await running.click();
+  await expect(running).toHaveAttribute('aria-pressed', 'true');
+  await expect(choice(/^running/)).toHaveAttribute('aria-checked', 'true');
+  await expect(row).toBeVisible();
+  await running.click();
+  await expect(running).toHaveAttribute('aria-pressed', 'false');
+  await expect(choice(/^All/)).toHaveAttribute('aria-checked', 'true');
+
+  // --- Copy puts the URL of the graphic on the clipboard and says so.
+  await nav(admin, 'Graphics').click();
+  const card = admin.locator('[data-graphic="scoreboard:overlay"]');
+  await expect(card.locator('iframe, img')).toHaveCount(0);
+  await card.getByRole('button', { name: 'Copy' }).click();
+  await expect(card.locator('.copy-field button')).toHaveText('Copied');
+  expect(await admin.evaluate(() => navigator.clipboard.readText())).toBe(`${base}${OVERLAY}`);
+  await expect(card.locator('.copy-field button')).toHaveText('Copy');
+
+  // --- Tab reaches the navigation, and what has the focus shows a ring.
+  await admin.locator('.sidebar-brand').click();
+  await admin.keyboard.press('Tab');
+  const first = admin.locator('nav[aria-label="Main"] a.nav-item').first();
+  await expect(first).toBeFocused();
+  expect(await first.evaluate((link) => getComputedStyle(link).boxShadow)).not.toBe('none');
+
+  // --- Escape closes a dialog while the keys go to the dialog page, and from the dashboard.
+  await nav(admin, 'Show').click();
+  const dialog = admin.locator('[role="dialog"]');
+  await control(admin).locator('#reset').click();
+  await expect(dialog).toHaveCount(1);
+  await expect(admin.frameLocator('[role="dialog"] iframe').locator('#cancel')).toBeVisible();
+  await admin.frameLocator('[role="dialog"] iframe').locator('body').press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await control(admin).locator('#reset').click();
+  await dialog.getByRole('button', { name: 'Close' }).focus();
+  await admin.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+
+  // --- The tools of a panel are dimmed until the panel is pointed at or has the focus.
+  const tools = admin.locator('[data-panel="scoreboard:control"] .tools');
+  await admin.locator('.page-head h1').hover();
+  await expect(tools).toHaveCSS('opacity', '0.35');
+  await tools.locator('[data-action="left"]').focus();
+  await expect(tools).toHaveCSS('opacity', '1');
+
+  // --- Whoever asked for less motion gets none.
+  const logout = admin.locator('#logout');
+  await expect(logout).toHaveCSS('transition-duration', /0\.12s/);
+  await admin.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(logout).toHaveCSS('transition-duration', /^0s(, 0s)*$/);
 
   expect(problems).toEqual([]);
 });

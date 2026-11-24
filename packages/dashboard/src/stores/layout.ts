@@ -33,15 +33,26 @@ export function layoutKey(workspace: string): string {
   return `${KEY_PREFIX}${encoded.slice(0, room - 9)}.${fingerprint(workspace)}`;
 }
 
+/** The panel ids in whatever was saved as a layout. It comes back from a server, so it is checked. */
+function idsOf(saved: unknown): string[] {
+  return (Array.isArray(saved) ? saved : [])
+    .map((entry) => (entry as { id?: unknown } | null)?.id)
+    .filter((id) => typeof id === 'string');
+}
+
 /**
  * How each workspace is laid out for the signed-in user. Layouts are kept on the server
  * (`/api/v1/me/prefs/layout.<workspace>`), so they follow the user to another browser.
  */
 export const useLayout = defineStore('layout', () => {
   const byWorkspace = ref<Record<string, Placement[]>>({});
+  /** The panels a workspace's layout holds, or held, that are not there to show. */
+  const absent = ref<Record<string, string[]>>({});
   /** Why the last change could not be saved; empty when it could. */
   const problem = ref('');
   const of = (workspace: string): Placement[] => byWorkspace.value[workspace] ?? [];
+  /** The ids of the panels the layout of a workspace knows but that are not on the page. */
+  const absentOf = (workspace: string): string[] => absent.value[workspace] ?? [];
 
   async function load(
     workspace: string,
@@ -55,6 +66,19 @@ export const useLayout = defineStore('layout', () => {
       // Nothing saved yet, or not a user who can save: the default layout it is.
       if (!(error instanceof ApiError)) throw error;
     }
+    // What was saved, what was on the page until now and what was missing before: a panel
+    // of these that is not there now is remembered, so that the page can say why. Saving
+    // a layout drops it from what is stored, so this lasts as long as the page.
+    const known = new Set(panels.map((panel) => panel.id));
+    const before = [
+      ...idsOf(saved),
+      ...of(workspace).map((item) => item.id),
+      ...absentOf(workspace),
+    ];
+    absent.value = {
+      ...absent.value,
+      [workspace]: [...new Set(before)].filter((id) => !known.has(id)),
+    };
     byWorkspace.value = { ...byWorkspace.value, [workspace]: arrange(panels, saved) };
   }
 
@@ -74,5 +98,5 @@ export const useLayout = defineStore('layout', () => {
   const resize = (workspace: string, id: string, dw: number, dh: number) =>
     store(workspace, resized(of(workspace), id, dw, dh));
 
-  return { byWorkspace, problem, of, load, move, resize };
+  return { byWorkspace, problem, of, absentOf, load, move, resize };
 });

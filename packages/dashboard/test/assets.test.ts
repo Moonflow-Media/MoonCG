@@ -77,7 +77,7 @@ describe('the assets page', () => {
     const view = mount(AssetsView);
     await flushPromises();
     expect([...followed.keys()]).toEqual(['board:$assets.logos', 'board:$assets.sounds']);
-    expect(view.find('[data-category="board:logos"] h3').text()).toBe('Logos');
+    expect(view.find('[data-category="board:logos"] h2').text()).toBe('Logos');
     // Nothing is claimed about a list before the server has told it.
     expect(view.find('[data-category="board:logos"]').text()).not.toContain('No files yet');
     followed.get('board:$assets.logos')?.([]);
@@ -138,6 +138,25 @@ describe('the assets page', () => {
     const text = view.find('[data-category="board:logos"]').text();
     expect(text).toContain('big.png: A file may have at most 1000 bytes');
     expect(text).toContain('CON.png was stored as _CON.png');
+  });
+
+  it('shows each note of an upload, also two that say the same', async () => {
+    setup();
+    api.upload = vi.fn(async () => {
+      throw new ApiError(413, 'bad_request', 'Too big');
+    }) as typeof api.upload;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const view = mount(AssetsView);
+    await flushPromises();
+    const input = view.find('[data-category="board:logos"] input[type="file"]');
+    await choose(input, [new File(['a'], 'big.png'), new File(['b'], 'big.png')]);
+    const notes = view.findAll('[data-category="board:logos"] [role="alert"]');
+    expect(notes.map((note) => note.text())).toEqual(['big.png: Too big', 'big.png: Too big']);
+    // Vue warns about two children with one key; none is to be given.
+    expect(warn.mock.calls.filter((call) => String(call[0]).includes('Duplicate keys'))).toEqual(
+      [],
+    );
+    warn.mockRestore();
   });
 
   it('deletes a file after asking', async () => {

@@ -10,6 +10,7 @@ export { grantsCover, MoonCGError, PROTOCOL_VERSION } from '@mooncg/core';
 export {
   bundleFromPath,
   type ClientOptions,
+  type ConnectionStatus,
   createClient,
   graphicFromPath,
   type MessageListener,

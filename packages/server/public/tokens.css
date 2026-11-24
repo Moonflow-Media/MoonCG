@@ -1,0 +1,183 @@
+/*
+ * MoonCG design tokens — single-file build for packages/dashboard.
+ * Source of truth: tokens/*.css in the MoonCG design system.
+ * Values marked "extrapolated" are design proposals, not taken from MoonCG 0.5.0.
+ */
+:root {
+  color-scheme: dark;
+
+  /* ---------------------------------------------------------------- Fonts */
+  --font-sans: system-ui, sans-serif;
+  --font-mono: ui-monospace, monospace;
+
+  /* --------------------------------------------------------- Core palette */
+  --mc-night: #14161a;
+  --mc-dialog: #1b1e24;
+  --mc-slate: #2a2e36;
+  --mc-steel: #4a4f5a;
+  --mc-muted: #9aa1ad;
+  --mc-fog: #e6e8eb;
+  --mc-white: #ffffff;
+  --mc-sky: #8ab4f8;
+  --mc-running: #1f5132;
+  --mc-failed: #7a2222;
+  --mc-rose: #ff9d9d;
+  --mc-warn: #f0c674;
+  --mc-done: #9dd89d;
+  --mc-secret: #5a7d3a;
+  --mc-plate: #101218;
+
+  /* ------------------------------------------- Ramps (extrapolated steps) */
+  --neutral-100: #e6e8eb;
+  --neutral-200: #c3c7ce;
+  --neutral-300: #9aa1ad;
+  --neutral-400: #6f7582;
+  --neutral-500: #4a4f5a;
+  --neutral-600: #383c46;
+  --neutral-700: #2a2e36;
+  --neutral-800: #1b1e24;
+  --neutral-900: #14161a;
+
+  --blue-100: #e3eefe;
+  --blue-200: #c4dafc;
+  --blue-300: #a8c8fa;
+  --blue-400: #8ab4f8;
+  --blue-500: #5f93ee;
+  --blue-600: #3f74d6;
+  --blue-700: #2d57a8;
+  --blue-800: #213f78;
+  --blue-900: #172a4d;
+
+  --green-100: #d6f2e0;
+  --green-200: #9dd89d;
+  --green-300: #76cc98;
+  --green-400: #46b071;
+  --green-500: #5a7d3a;
+  --green-600: #267443;
+  --green-700: #1f5132;
+  --green-800: #173b25;
+  --green-900: #102718;
+
+  --red-100: #ffe1e1;
+  --red-200: #ffc0c0;
+  --red-300: #ff9d9d;
+  --red-400: #f07070;
+  --red-500: #d44a4a;
+  --red-600: #a83232;
+  --red-700: #7a2222;
+  --red-800: #561919;
+  --red-900: #381111;
+
+  --amber-300: #f0c674;
+  --amber-700: #6b4e12;
+
+  /* ------------------------------------------------------------ Surfaces */
+  --surface-page: var(--neutral-900);
+  --surface-raised: var(--neutral-800);
+  --surface-dialog: var(--neutral-800);
+  --surface-header: var(--neutral-700);
+  --surface-control: var(--neutral-700); /* extrapolated */
+  --surface-control-hover: var(--neutral-600); /* extrapolated */
+  --surface-panel-light: var(--mc-white);
+  --surface-backdrop: rgba(0, 0, 0, 0.6);
+  --surface-onair: rgba(16, 18, 24, 0.85);
+
+  /* ---------------------------------------------------------------- Text */
+  --text-primary: var(--neutral-100);
+  --text-strong: var(--mc-white);
+  --text-muted: var(--neutral-300);
+  --text-link: var(--blue-400);
+  --text-error: var(--red-300);
+  --text-warning: var(--amber-300);
+  --text-success: var(--green-200);
+  --text-on-accent: var(--neutral-900); /* extrapolated */
+
+  /* ------------------------------------------------------------- Borders */
+  --border-default: var(--neutral-700);
+  --border-strong: var(--neutral-500); /* extrapolated */
+  --border-focus: var(--blue-400); /* extrapolated */
+  --border-secret: var(--green-500);
+
+  /* ------------------------------------------------ Accent (extrapolated) */
+  --accent-primary: var(--blue-400);
+  --accent-primary-hover: var(--blue-300);
+  --accent-primary-pressed: var(--blue-500);
+  --accent-subtle: var(--blue-900);
+
+  /* ------------------------------------------------------- Bundle states */
+  --state-running: var(--green-700);
+  --state-failed: var(--red-700);
+  --state-disabled: var(--neutral-500);
+  --state-pending: var(--amber-700); /* extrapolated: 0.5.0 paints enabling/disabling green */
+  --state-text: var(--neutral-100);
+
+  /* ------------------------------------ Dots and badges (extrapolated) */
+  --dot-running: var(--green-400);
+  --dot-failed: var(--red-400);
+  --dot-disabled: var(--neutral-400);
+  --dot-pending: var(--amber-300);
+  --badge-failed-bg: var(--red-800);
+  --badge-failed-text: var(--red-200);
+  --badge-warn-bg: var(--amber-700);
+  --badge-warn-text: var(--amber-300);
+  --badge-live-bg: var(--green-800);
+  --badge-live-text: var(--green-200);
+  --badge-neutral-bg: var(--neutral-700);
+  --badge-neutral-text: var(--neutral-200);
+
+  /* ---------------------------------------------------------- Typography */
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-md: 14px;
+  --font-size-base: 16px;
+  --font-size-lg: 20px;
+  --font-size-page: 24px; /* extrapolated: page titles in the redesign */
+  --font-size-stat: 28px; /* extrapolated */
+  --font-size-readout: 48px;
+  --font-weight-regular: 400;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --line-height-tight: 1.15; /* extrapolated */
+  --line-height-base: 1.45; /* extrapolated */
+  --letter-spacing-label: 0.06em; /* extrapolated */
+
+  /* ------------------------------------------------------------- Spacing */
+  --space-2xs: 2px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-row: 10px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+
+  --sidebar-width: 232px; /* extrapolated */
+  --content-max: 1200px; /* extrapolated */
+  --grid-columns: 12;
+  --grid-gap: 16px;
+  --panel-row: 140px;
+  --dialog-column: 100px;
+  --dialog-height: 420px;
+  --stack-width: 360px;
+  --config-width: 640px;
+
+  /* ------------------------------------------------------------- Effects */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-pill: 10px;
+  --radius-lg: 12px;
+  --border-panel: 1px solid var(--border-default);
+  --focus-ring: 0 0 0 2px var(--surface-page), 0 0 0 4px var(--border-focus); /* extrapolated */
+
+  /* -------------------------------------------------- Motion (extrapolated) */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+  }
+}

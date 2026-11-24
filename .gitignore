@@ -10,6 +10,12 @@ coverage/
 test-results/
 playwright-report/
 
+# Pictures of the dashboard, from `pnpm screenshots`
+screenshots/
+
+# Design handoffs: worked from, not part of the repository
+handoff/
+
 # Local tooling
 .idea/
 .atl/

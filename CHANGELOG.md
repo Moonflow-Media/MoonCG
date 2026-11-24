@@ -14,6 +14,48 @@ initial commit of the repository.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-24
+
+### Added
+
+- `status` and `onStatusChange(listener)` on the client of `@mooncg/sdk/client` (and so on a
+  `Connection`): where the connection stands, as `live`, `reconnecting` or `offline`.
+- `GET /api/v1/bundles` names the bundles each bundle needs (`dependencies`, the names from
+  its manifest). A bundle the caller is not listed is not named there either, and one that
+  is not installed only to holders of `system:bundles.manage`.
+- Dashboard: counts in the navigation (panels of a workspace, failed bundles, graphics that
+  are open, warnings and errors logged since the last visit of the log page, the last only
+  for holders of `system:logs.view`), the state of the connection, a filter by state and key
+  figures on the bundle page, "On air" on a graphic that is open, "Copied" after copying a
+  URL, thumbnails of uploaded pictures, and a line for each panel that is hidden because its
+  bundle does not run.
+- `pnpm screenshots` takes a picture of every dashboard page.
+
+### Changed
+
+- Dashboard layout: a sidebar with the navigation in the groups Workspaces, Show, Admin and
+  System replaces the top bar; every page starts with a heading and what it is for; lists are
+  cards. The styles are built on design tokens (`tokens.css`) with filled buttons. Every
+  page, permission and workflow is as before.
+- The sign-in and setup pages are drawn in the same design: a centred card with the mark.
+  Their styles are files now (`/tokens.css`, `/auth.css`) instead of a `<style>` in each
+  page, and with `/logo-mark.svg` these are served to anyone, as `/auth.js` already was.
+  Texts, fields and behaviour are unchanged.
+- The Content-Security-Policy of the server's own pages (`/`, `/login`, `/setup`) allows
+  styles from files of this server only: `style-src 'self'`, no longer `'unsafe-inline'`.
+- Bundles on their way between states (`enabling`, `disabling`, `installed`) are drawn amber,
+  not green.
+- The level filter of the log page is a group of radio buttons, each with the number of
+  lines it shows, instead of a select.
+- The graphics page shows no preview of a graphic by design: a page that loads one would
+  count as an instance of it.
+
+### Fixed
+
+- Escape closes a dialog also while the dialog page has the focus, which is where the
+  dashboard puts it when a dialog opens. Before, Escape only worked from the dashboard's own
+  page, such as from the × of the dialog.
+
 ## [0.5.0] - 2026-11-24
 
 The dashboard, with dialogs, bundle settings and assets. Wire protocol version 5.

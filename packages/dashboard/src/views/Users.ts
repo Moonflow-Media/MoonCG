@@ -1,6 +1,7 @@
 import { defineComponent, h, onMounted, ref } from 'vue';
 import { api } from '../api.js';
 import { field, part, sure, useActions } from './admin.js';
+import { pageHead } from './parts.js';
 
 interface User {
   readonly id: string;
@@ -63,85 +64,104 @@ export const UsersView = defineComponent({
 
     return () =>
       h('div', [
-        h('h1', 'Users'),
+        pageHead('Users'),
         alert(),
-        h(
-          'ul',
-          { class: 'rows' },
-          users.value.map((user) =>
-            h('li', { key: user.id, 'data-user': user.name }, [
-              h('strong', user.name),
-              user.disabled ? h('span', { class: 'state disabled' }, 'disabled') : null,
-              h(
-                'span',
-                { class: 'checks' },
-                roleBoxes(
-                  (role) => user.roles.includes(role),
-                  (role, on) => setRole(user, role, on),
-                ),
-              ),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  'data-action': 'toggle',
-                  onClick: () =>
-                    send('PATCH', `/api/v1/users/${part(user.id)}`, { disabled: !user.disabled }),
-                },
-                user.disabled ? 'Enable' : 'Disable',
-              ),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  'data-action': 'delete',
-                  onClick: () =>
-                    sure(`Delete the user "${user.name}"? Their sessions and tokens go too.`) &&
-                    send('DELETE', `/api/v1/users/${part(user.id)}`),
-                },
-                'Delete',
-              ),
-              h('form', { class: 'inline', onSubmit: (event: Event) => reset(event, user) }, [
-                h('input', {
-                  name: 'new-password',
-                  type: 'password',
-                  autocomplete: 'new-password',
-                  minlength: 8,
-                  required: true,
-                  placeholder: 'New password',
-                  'aria-label': `New password for ${user.name}`,
-                }),
-                h('button', { type: 'submit' }, 'Set password'),
-              ]),
-            ]),
-          ),
-        ),
-        h('h2', 'New user'),
-        h('form', { class: 'stack', 'data-form': 'create', onSubmit: create }, [
-          h('label', ['Name ', h('input', { name: 'name', required: true, autocomplete: 'off' })]),
-          h('label', [
-            'Password (at least 8 characters) ',
-            h('input', {
-              name: 'password',
-              type: 'password',
-              autocomplete: 'new-password',
-              minlength: 8,
-              required: true,
-            }),
-          ]),
+        h('div', { class: 'split' }, [
           h(
-            'span',
-            { class: 'checks' },
-            roleBoxes(
-              (role) => chosen.value.includes(role),
-              (role, on) => {
-                chosen.value = on
-                  ? [...chosen.value, role]
-                  : chosen.value.filter((name) => name !== role);
-              },
+            'section',
+            { class: 'card' },
+            h(
+              'ul',
+              { class: 'rows' },
+              users.value.map((user) =>
+                h('li', { key: user.id, 'data-user': user.name }, [
+                  h('strong', user.name),
+                  user.disabled ? h('span', { class: 'state disabled' }, 'disabled') : null,
+                  h(
+                    'span',
+                    { class: 'checks' },
+                    roleBoxes(
+                      (role) => user.roles.includes(role),
+                      (role, on) => setRole(user, role, on),
+                    ),
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      class: 'small',
+                      'data-action': 'toggle',
+                      onClick: () =>
+                        send('PATCH', `/api/v1/users/${part(user.id)}`, {
+                          disabled: !user.disabled,
+                        }),
+                    },
+                    user.disabled ? 'Enable' : 'Disable',
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      class: 'small danger',
+                      'data-action': 'delete',
+                      onClick: () =>
+                        sure(`Delete the user "${user.name}"? Their sessions and tokens go too.`) &&
+                        send('DELETE', `/api/v1/users/${part(user.id)}`),
+                    },
+                    'Delete',
+                  ),
+                  h('form', { class: 'inline', onSubmit: (event: Event) => reset(event, user) }, [
+                    h('input', {
+                      name: 'new-password',
+                      type: 'password',
+                      autocomplete: 'new-password',
+                      minlength: 8,
+                      required: true,
+                      placeholder: 'New password',
+                      'aria-label': `New password for ${user.name}`,
+                    }),
+                    h('button', { type: 'submit', class: 'small' }, 'Set password'),
+                  ]),
+                ]),
+              ),
             ),
           ),
-          h('button', { type: 'submit' }, 'Create user'),
+          h('section', { class: 'card' }, [
+            h('div', { class: 'card-head' }, h('h2', 'New user')),
+            h(
+              'div',
+              { class: 'card-body' },
+              h('form', { class: 'stack', 'data-form': 'create', onSubmit: create }, [
+                h('label', [
+                  'Name ',
+                  h('input', { name: 'name', required: true, autocomplete: 'off' }),
+                ]),
+                h('label', [
+                  'Password (at least 8 characters) ',
+                  h('input', {
+                    name: 'password',
+                    type: 'password',
+                    autocomplete: 'new-password',
+                    minlength: 8,
+                    required: true,
+                  }),
+                ]),
+                h(
+                  'span',
+                  { class: 'checks' },
+                  roleBoxes(
+                    (role) => chosen.value.includes(role),
+                    (role, on) => {
+                      chosen.value = on
+                        ? [...chosen.value, role]
+                        : chosen.value.filter((name) => name !== role);
+                    },
+                  ),
+                ),
+                h('button', { type: 'submit', class: 'primary' }, 'Create user'),
+              ]),
+            ),
+          ]),
         ]),
       ]);
   },

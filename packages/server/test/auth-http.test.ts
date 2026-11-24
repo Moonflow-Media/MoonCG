@@ -1,3 +1,4 @@
+import { request as rawRequest } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bindingWarning } from '../src/server.js';
 import { cookiePair, PASSWORD, startAuthServer, startWithRoles, WAIT_MS } from './auth-helpers.js';
@@ -636,6 +637,91 @@ describe('first-time setup over HTTP', () => {
     const script = await http('GET', '/auth.js');
     expect(script.status).toBe(200);
     expect(script.headers.get('content-type')).toContain('javascript');
+  });
+
+  it('serves the styles and the mark of the sign-in pages to anyone, and nothing more', async () => {
+    const { http, base } = await fresh();
+    const types = {
+      '/tokens.css': 'text/css',
+      '/auth.css': 'text/css',
+      '/logo-mark.svg': 'image/svg+xml',
+    };
+    for (const [path, type] of Object.entries(types)) {
+      const file = await http('GET', path);
+      expect([path, file.status]).toEqual([path, 200]);
+      expect(file.headers.get('content-type')).toContain(type);
+      expect(file.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(file.headers.get('set-cookie')).toBeNull();
+    }
+    // The tokens are the one file the dashboard is built from as well.
+    expect((await http('GET', '/tokens.css')).text).toContain('--surface-page:');
+    expect((await http('GET', '/auth.css')).text).not.toContain('--surface-page:');
+
+    // Both pages load exactly these, and carry no styles of their own.
+    for (const path of ['/login', '/setup']) {
+      const answer = await http('GET', path);
+      // So the policy lets no style in that is written into a page.
+      const policy = answer.headers.get('content-security-policy') ?? '';
+      expect(policy.split('; ')).toContain("style-src 'self'");
+      expect(policy).not.toContain('unsafe-inline');
+      const page = answer.text;
+      const loaded = [...page.matchAll(/(?:href|src)="([^"]+)"/g)].map((match) => match[1]);
+      expect(loaded).toEqual(['/tokens.css', '/auth.css', '/logo-mark.svg', '/auth.js']);
+      expect(page).not.toMatch(/<style|style="/);
+    }
+
+    // No other file became reachable without signing in: not the dashboard's, not the
+    // pages under their file names, not a neighbour of the files above.
+    const closed = {
+      '/ui/index.css': 401,
+      '/ui/logo-mark.svg': 401,
+      '/style.css': 404,
+      '/login.html': 404,
+      '/setup.html': 404,
+      '/auth.css.map': 404,
+      '/tokens.css/': 404,
+      '/public/tokens.css': 404,
+      '/logo-mark.png': 404,
+    };
+    for (const [path, status] of Object.entries(closed)) {
+      expect([path, (await http('GET', path)).status]).toEqual([path, status]);
+    }
+
+    // Paths that climb, sent as they are written here: `fetch` would tidy them up first.
+    const raw = (path: string) =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const { hostname, port } = new URL(base);
+        const sent = rawRequest({ hostname, port, path, method: 'GET' }, (answer) => {
+          let body = '';
+          answer.setEncoding('utf8');
+          answer.on('data', (chunk: string) => {
+            body += chunk;
+          });
+          answer.on('end', () => resolve({ status: answer.statusCode ?? 0, body }));
+        });
+        sent.on('error', reject);
+        sent.end();
+      });
+    // The helper does send what it is given: the file itself answers.
+    expect((await raw('/tokens.css')).status).toBe(200);
+    for (const path of [
+      '/../public/tokens.css',
+      '/%2e%2e/public/tokens.css',
+      '/..%2fpublic%2ftokens.css',
+      '/%2e%2e%2fpublic%2ftokens.css',
+      '/..%2ftokens.css',
+      '/%2e%2e%2ftokens.css',
+      '/tokens.css/../auth.js/../../package.json',
+      '/..%2f..%2fpackage.json',
+      '/%2e%2e%2f%2e%2e%2fpackage.json',
+      '/..%5c..%5cpackage.json',
+    ]) {
+      const answer = await raw(path);
+      // Refused, or answered with one of the files that are open anyway; never anything else.
+      expect([path, [400, 404].includes(answer.status)]).toEqual([path, true]);
+      expect(answer.body).not.toContain('"name"');
+      expect(answer.body).not.toContain('--surface-page');
+    }
   });
 });
 

@@ -207,7 +207,10 @@ describe('the bundles view', () => {
 
   it('offers no button the server would refuse', async () => {
     const { view } = await show(false);
-    expect(view.findAll('button')).toHaveLength(0);
+    // The filter and the key figures are buttons too; none of them changes a bundle.
+    expect(view.findAll('[data-bundle]')).toHaveLength(2);
+    expect(view.findAll('[data-bundle] button')).toHaveLength(0);
+    expect(view.findAll('.bundle-actions button')).toHaveLength(0);
   });
 
   it('lets whoever may manage bundles reload, disable and enable them', async () => {

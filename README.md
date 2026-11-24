@@ -278,6 +278,21 @@ Pages import the SDK from the server:
   `handle.onErrorChange(listener)` tells you when it changes.
 - `mc.close()` ends the client for good. Everything still waiting, including `ready`, rejects
   with `disconnected`. The same happens with the server's error if it refuses the handshake.
+- `mc.status` says where the connection stands, and `mc.onStatusChange(listener)` calls back
+  with the new status whenever it changes and returns the function that stops it. The
+  listener is not called for the status at the time of asking; read `mc.status` for that.
+
+  | `status`       | Means                                                                       |
+  | -------------- | --------------------------------------------------------------------------- |
+  | `live`         | The handshake is done; replicants and messages work                         |
+  | `reconnecting` | No connection right now, and the client keeps trying. Also before the first |
+  |                | connection, and for a graphic that waits for its place                      |
+  | `offline`      | The client is down for good: closed, refused by the server, or ended as the |
+  |                | instance of its graphic. Create a new client, or reload the page            |
+
+  ```js
+  mc.onStatusChange((status) => document.body.classList.toggle('stale', status !== 'live'));
+  ```
 - A subscriber that throws is reported with `console.error`; the other subscribers still run.
 
 Two limits of `ready` to know about:

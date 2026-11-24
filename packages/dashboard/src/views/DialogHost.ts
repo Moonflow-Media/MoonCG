@@ -36,6 +36,12 @@ export const DialogHost = defineComponent({
       },
     });
 
+    const onDialogKey = (event: Event) => {
+      const { key, isComposing } = event as KeyboardEvent;
+      // Not the Escape that ends the composing of a character, and not one the dialog
+      // page used for something of its own.
+      if (key === 'Escape' && !isComposing && !event.defaultPrevented) host.dismiss();
+    };
     const onMessage = (event: MessageEvent) => host.receive(event);
     // A panel that leaves the page takes its dialog with it.
     const observer =
@@ -63,9 +69,7 @@ export const DialogHost = defineComponent({
         'div',
         {
           class: 'dialog-backdrop',
-          onKeydown: (event: KeyboardEvent) => {
-            if (event.key === 'Escape') host.dismiss();
-          },
+          onKeydown: onDialogKey,
         },
         h(
           'section',
@@ -85,7 +89,22 @@ export const DialogHost = defineComponent({
                 '×',
               ),
             ]),
-            h('iframe', { ref: frame, src: shown.dialog.url, title: shown.title }),
+            h('iframe', {
+              ref: frame,
+              src: shown.dialog.url,
+              title: shown.title,
+              // The dialog page has the focus, so its window gets the keys, not this one.
+              onLoad: (event: Event) => {
+                try {
+                  (event.target as HTMLIFrameElement).contentWindow?.addEventListener(
+                    'keydown',
+                    onDialogKey,
+                  );
+                } catch {
+                  // A page of another origin: Escape then works from the dashboard only.
+                }
+              },
+            }),
           ],
         ),
       );

@@ -53,13 +53,13 @@ export const CSRF_HEADER = 'x-mooncg-csrf';
 
 /**
  * What the server's own pages (the shell, login, setup) may load and where they may appear:
- * only what this server serves, styles written into the page, no plugins, no `<base>`, forms
- * that post back here, and never inside a frame. Bundle content gets no such policy: what a
+ * only what this server serves, styles from its files and none written into a page, no
+ * plugins, no `<base>`, forms that post back here, and never inside a frame. Bundle content gets no such policy: what a
  * bundle's pages load is the bundle author's business.
  */
 export const BUILT_IN_CSP = [
   "default-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
+  "style-src 'self'",
   "img-src 'self' data:",
   "object-src 'none'",
   "base-uri 'none'",
@@ -435,16 +435,25 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     const usable = (item: { requires?: string | undefined }, bundle: string) =>
       can(request, bundlePermission(bundle, item.requires));
     const canManage = can(request, BUNDLES_MANAGE);
+    // A bundle shows only to those who may manage bundles or hold a permission of it.
+    const shown = (name: string) => canManage || can(request, bundlePermission(name, undefined));
+    const installed = new Set(bundles().map(({ name }) => name));
     return {
       canManage,
       bundles: bundles()
-        // A bundle shows only to those who may manage bundles or hold a permission of it.
-        .filter(({ name }) => canManage || can(request, bundlePermission(name, undefined)))
+        .filter(({ name }) => shown(name))
         .map((record) => {
           const { name, manifest } = record;
           const served = record.state === 'running' ? manifest : undefined;
           return {
             ...describeBundle(record),
+            // The bundles this one needs, by the manifest, so also while it does not run. A
+            // bundle the caller is not shown is not named here either, and one that is not
+            // installed only to those who may manage bundles: a grant with a wildcard
+            // covers every name, also one no bundle has.
+            dependencies: Object.keys(manifest?.dependencies ?? {}).filter(
+              (needed) => canManage || (installed.has(needed) && shown(needed)),
+            ),
             panels: (served?.panels ?? [])
               .filter((panel) => usable(panel, name))
               .map(({ id, title, width, workspace, file }) => ({

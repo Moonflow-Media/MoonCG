@@ -3,6 +3,7 @@ import type { Placement } from '../layout.js';
 import { useBundles, type WorkspacePanel } from '../stores/bundles.js';
 import { useLayout } from '../stores/layout.js';
 import { PANEL_BUNDLE_ATTRIBUTE } from './DialogHost.js';
+import { counted, pageHead } from './parts.js';
 
 const BUTTONS = [
   ['left', 'Move towards the start', '←'],
@@ -71,19 +72,50 @@ export const WorkspaceView = defineComponent({
         }),
       ]);
 
+    /**
+     * One line for each panel the layout knows that is missing because its bundle does not
+     * run. A panel is named by its id: the list has no title for what it does not serve. A
+     * panel of a bundle that runs, or of one the user is not shown, is gone, not hidden.
+     */
+    const hidden = () =>
+      layout.absentOf(props.workspace).flatMap((id) => {
+        const [name = '', panel = ''] = id.split(':');
+        const bundle = bundles.list.find((item) => item.name === name);
+        if (!bundle || bundle.state === 'running') return [];
+        return [
+          h(
+            'p',
+            { key: id, class: 'muted hidden-panel', 'data-hidden-panel': id },
+            `"${panel}" is hidden: the bundle ${bundle.name} is ${bundle.state}.`,
+          ),
+        ];
+      });
+
     return () => {
       const panels = new Map(bundles.panelsOf(props.workspace).map((panel) => [panel.id, panel]));
       const placed = layout.of(props.workspace).filter((item) => panels.has(item.id));
+      const head = pageHead(props.workspace, {
+        badge:
+          placed.length > 0 ? h('span', { class: 'badge' }, counted(placed.length, 'panel')) : null,
+        description:
+          'Arrange panels with ← → and resize them with −w +w −h +h. The layout is saved for you on the server.',
+      });
       if (placed.length === 0) {
-        return h('p', { class: 'empty' }, 'This workspace has no panel you may use.');
+        return h('div', [
+          head,
+          h('p', { class: 'empty' }, 'This workspace has no panel you may use.'),
+          ...hidden(),
+        ]);
       }
       return h('div', [
+        head,
         layout.problem ? h('p', { class: 'problem', role: 'alert' }, layout.problem) : null,
         h(
           'div',
           { class: 'grid' },
           placed.map((item) => frame(item, panels.get(item.id))),
         ),
+        ...hidden(),
       ]);
     };
   },

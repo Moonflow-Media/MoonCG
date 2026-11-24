@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { arrange, MAX_HEIGHT, MAX_WIDTH, move, resize } from '../src/layout.js';
-import { navigation } from '../src/nav.js';
+import { grouped, navigation } from '../src/nav.js';
 import { holds } from '../src/permissions.js';
 
 describe('holds', () => {
@@ -53,7 +53,77 @@ describe('navigation', () => {
     expect(navigation(['*'], ['Main show'])[0]).toEqual({
       to: '/w/Main%20show',
       label: 'Main show',
+      group: 'Workspaces',
     });
+  });
+});
+
+describe('the groups of the navigation', () => {
+  const sections = (permissions: string[], workspaces: string[] = ['Show']) =>
+    grouped(navigation(permissions, workspaces)).map(
+      (section) => [section.group, section.items.map((item) => item.label)] as const,
+    );
+
+  it('puts every entry into its group, in the order of the navigation', () => {
+    expect(sections(['*'], ['Show', 'Replay'])).toEqual([
+      ['Workspaces', ['Show', 'Replay']],
+      ['Show', ['Bundles', 'Graphics', 'Assets']],
+      ['Admin', ['Users', 'Roles', 'Tokens']],
+      ['System', ['Settings', 'Logs']],
+    ]);
+  });
+
+  it('leaves out a group none of whose entries is shown', () => {
+    expect(sections(['system:dashboard.view'], [])).toEqual([
+      ['Show', ['Bundles', 'Graphics', 'Assets']],
+    ]);
+    expect(sections(['system:dashboard.view', 'system:tokens.manage'])).toEqual([
+      ['Workspaces', ['Show']],
+      ['Show', ['Bundles', 'Graphics', 'Assets']],
+      ['Admin', ['Tokens']],
+    ]);
+    expect(sections(['system:dashboard.view', 'system:logs.view'], [])).toEqual([
+      ['Show', ['Bundles', 'Graphics', 'Assets']],
+      ['System', ['Logs']],
+    ]);
+    expect(sections([], [])).toEqual([]);
+  });
+});
+
+describe('the counts of the navigation', () => {
+  const entry = (label: string, counts: Parameters<typeof navigation>[2]) =>
+    navigation(['*'], ['Show', 'Replay'], counts).find((item) => item.label === label);
+
+  it('says how many panels a workspace has', () => {
+    const counts = { panels: { Show: 3, Replay: 1 } };
+    expect(entry('Show', counts)).toMatchObject({ count: 3, hint: '3 panels' });
+    expect(entry('Replay', counts)).toMatchObject({ count: 1, hint: '1 panel' });
+    expect(entry('Show', counts)).not.toHaveProperty('tone');
+  });
+
+  it('counts failed bundles, graphics on air and new warnings, each in its tone', () => {
+    const counts = { failedBundles: 2, openGraphics: 1, unseenLogs: 4 };
+    expect(entry('Bundles', counts)).toMatchObject({ count: 2, tone: 'failed', hint: '2 failed' });
+    expect(entry('Graphics', counts)).toMatchObject({ count: 1, tone: 'live', hint: '1 open' });
+    expect(entry('Logs', counts)).toMatchObject({
+      count: 4,
+      tone: 'warn',
+      hint: '4 warnings or errors since your last visit',
+    });
+    expect(entry('Assets', counts)).not.toHaveProperty('count');
+  });
+
+  it('shows no count where there is nothing to count', () => {
+    const counts = { failedBundles: 0, openGraphics: 0, unseenLogs: 0 };
+    for (const label of ['Bundles', 'Graphics', 'Logs']) {
+      expect(entry(label, counts)).not.toHaveProperty('count');
+      expect(entry(label, {})).not.toHaveProperty('count');
+    }
+  });
+
+  it('counts nothing on an entry that is not shown', () => {
+    const items = navigation(['system:dashboard.view'], [], { unseenLogs: 4 });
+    expect(items.some((item) => item.count !== undefined)).toBe(false);
   });
 });
 

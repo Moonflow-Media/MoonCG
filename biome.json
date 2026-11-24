@@ -7,6 +7,7 @@
       "!**/test-results",
       "!.atl",
       "!.claude",
+      "!handoff",
       "!**/mooncg-env.d.ts"
     ]
   },

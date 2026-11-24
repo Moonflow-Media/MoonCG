@@ -186,10 +186,19 @@ describe('the logs page', () => {
     expect(lines().at(-1)).toContain('broke');
     expect(calls.map((call) => call.path)).toContain('/api/v1/logs?after=2');
 
-    await view.find('select').setValue('warn');
+    // The filter is a group of radio buttons; each says how many lines it shows.
+    const filter = view.find('[role="radiogroup"]');
+    expect(filter.attributes('aria-label')).toBe('Show from level');
+    expect(filter.findAll('[role="radio"]').map((choice) => choice.text())).toEqual([
+      'info 3',
+      'warn 2',
+      'error 1',
+    ]);
+    await filter.find('[data-choice="warn"]').trigger('click');
+    expect(filter.find('[data-choice="warn"]').attributes('aria-checked')).toBe('true');
     expect(lines().map((line) => line.includes('started'))).toEqual([false, false]);
     expect(lines()).toHaveLength(2);
-    await view.find('select').setValue('error');
+    await filter.find('[data-choice="error"]').trigger('click');
     expect(lines()).toHaveLength(1);
 
     view.unmount();

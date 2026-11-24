@@ -38,6 +38,9 @@ export interface BundleInfo {
   readonly version?: string | undefined;
   readonly errors: readonly string[];
   readonly lastError?: string | undefined;
+  /** The bundles this one needs, as far as the user is shown them. */
+  readonly dependencies?: readonly string[] | undefined;
+  /** The panels the user may use. A bundle that does not run lists none. */
   readonly panels: readonly PanelInfo[];
   /** The dialogs the bundle's panels may open. */
   readonly dialogs?: readonly DialogInfo[] | undefined;

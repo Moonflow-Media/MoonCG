@@ -1,0 +1,134 @@
+/*
+ * The sign-in and setup pages, after the design in handoff/login-eigenständig.html: a card in
+ * the middle of the page with the mark, the name and the form.
+ *
+ * The pages are served to visitors who are not signed in, so they cannot load the dashboard's
+ * stylesheet. Requires tokens.css, the same file the dashboard is built from, loaded first.
+ */
+
+html,
+body {
+  height: 100%;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  margin: 0;
+  /* Not in the design, which is drawn for a wide window: room around the card on a small one. */
+  padding: var(--space-lg);
+  background:
+    radial-gradient(1200px 600px at 50% -10%, var(--blue-900), transparent 60%), var(--surface-page);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+}
+
+.card {
+  box-sizing: border-box;
+  width: 380px;
+  /* As above: the card gives way where the window is narrower than it. */
+  max-width: 100%;
+  padding: var(--space-2xl);
+  border: var(--border-panel);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: var(--space-xl);
+}
+.brand img {
+  border-radius: 6px;
+}
+
+h1 {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 22px;
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-tight);
+  color: var(--text-strong);
+}
+
+.intro {
+  margin: 0 0 var(--space-lg);
+  color: var(--text-muted);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-base);
+}
+
+form {
+  display: grid;
+  gap: var(--space-md);
+}
+
+label {
+  display: grid;
+  gap: var(--space-xs);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+}
+
+input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  font: inherit;
+  font-weight: var(--font-weight-regular);
+  font-size: var(--font-size-md);
+  color: var(--text-primary);
+  background: var(--surface-page);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+input:focus {
+  border-color: var(--border-focus);
+}
+/* The setup code is read off a terminal and typed or pasted: each character tells apart. */
+input[name="code"] {
+  font-family: var(--font-mono);
+}
+
+button {
+  margin-top: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  font: inherit;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-on-accent);
+  background: var(--accent-primary);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+button:hover {
+  background: var(--accent-primary-hover);
+}
+
+/* Not in the design, which shows the focus of a field by its border only: the ring of the
+   dashboard, so that the button shows the focus of the keyboard too. */
+button:focus-visible,
+input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* The line keeps its room while it is empty, so the card does not jump when it speaks. */
+.errors {
+  min-height: 1.2em;
+  margin: 0;
+  color: var(--text-error);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}

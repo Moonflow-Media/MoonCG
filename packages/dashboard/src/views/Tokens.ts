@@ -1,6 +1,7 @@
 import { defineComponent, h, onMounted, ref } from 'vue';
 import { api } from '../api.js';
 import { field, part, sure, useActions } from './admin.js';
+import { pageHead } from './parts.js';
 
 interface Token {
   readonly id: string;
@@ -47,12 +48,10 @@ export const TokensView = defineComponent({
 
     return () =>
       h('div', [
-        h('h1', 'API tokens'),
-        h(
-          'p',
-          { class: 'muted' },
-          'A token can hold nothing you do not hold, and only while you hold it. For a graphic in OBS, grant the view permission of its bundle and nothing else.',
-        ),
+        pageHead('API tokens', {
+          description:
+            'A token can hold nothing you do not hold, and only while you hold it. For a graphic in OBS, grant the view permission of its bundle and nothing else.',
+        }),
         alert(),
         secret.value
           ? h('p', { class: 'secret', 'data-secret': '' }, [
@@ -60,41 +59,57 @@ export const TokensView = defineComponent({
               h('code', secret.value),
             ])
           : null,
-        h(
-          'ul',
-          { class: 'rows' },
-          tokens.value.map((token) =>
-            h('li', { key: token.id, 'data-token': token.id }, [
-              h('strong', token.name),
-              h('code', ` ${token.grants.join(', ')} `),
-              h(
-                'span',
-                { class: 'muted' },
-                `expires ${when(token.expires)}, last used ${when(token.lastUsed)} `,
+        h('div', { class: 'split' }, [
+          h(
+            'section',
+            { class: 'card' },
+            h(
+              'ul',
+              { class: 'rows' },
+              tokens.value.map((token) =>
+                h('li', { key: token.id, 'data-token': token.id }, [
+                  h('strong', token.name),
+                  h('code', token.grants.join(', ')),
+                  h(
+                    'span',
+                    { class: 'muted' },
+                    `expires ${when(token.expires)}, last used ${when(token.lastUsed)} `,
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      class: 'small danger',
+                      'data-action': 'revoke',
+                      onClick: () =>
+                        sure(`Revoke the token "${token.name}"? What uses it stops working.`) &&
+                        send('DELETE', `/api/v1/tokens/${part(token.id)}`),
+                    },
+                    'Revoke',
+                  ),
+                ]),
               ),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  'data-action': 'revoke',
-                  onClick: () =>
-                    sure(`Revoke the token "${token.name}"? What uses it stops working.`) &&
-                    send('DELETE', `/api/v1/tokens/${part(token.id)}`),
-                },
-                'Revoke',
-              ),
-            ]),
+            ),
           ),
-        ),
-        h('h2', 'New token'),
-        h('form', { class: 'stack', 'data-form': 'create', onSubmit: create }, [
-          h('label', ['Name ', h('input', { name: 'name', required: true, autocomplete: 'off' })]),
-          h('label', [
-            'Grants, one per line ',
-            h('textarea', { name: 'grants', required: true, rows: 3 }),
+          h('section', { class: 'card' }, [
+            h('div', { class: 'card-head' }, h('h2', 'New token')),
+            h(
+              'div',
+              { class: 'card-body' },
+              h('form', { class: 'stack', 'data-form': 'create', onSubmit: create }, [
+                h('label', [
+                  'Name ',
+                  h('input', { name: 'name', required: true, autocomplete: 'off' }),
+                ]),
+                h('label', [
+                  'Grants, one per line ',
+                  h('textarea', { name: 'grants', required: true, rows: 3 }),
+                ]),
+                h('label', ['Expires (optional) ', h('input', { name: 'expires', type: 'date' })]),
+                h('button', { type: 'submit', class: 'primary' }, 'Create token'),
+              ]),
+            ),
           ]),
-          h('label', ['Expires (optional) ', h('input', { name: 'expires', type: 'date' })]),
-          h('button', { type: 'submit' }, 'Create token'),
         ]),
       ]);
   },

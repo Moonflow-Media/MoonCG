@@ -113,9 +113,9 @@ export function attachWebSocket(server: Server, options: WebSocketOptions): WebS
 
   server.on('upgrade', (request, socket, head) => {
     // Without a listener, a connection reset during the upgrade would be an uncaught exception.
-    socket.on('error', (error) =>
-      logger.warn(`Socket error during upgrade: ${errorMessage(error)}`),
-    );
+    const duringUpgrade = (error: Error) =>
+      logger.warn(`Socket error during upgrade: ${errorMessage(error)}`);
+    socket.on('error', duringUpgrade);
     const refuse = (status: string) =>
       socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
 
@@ -131,6 +131,10 @@ export function attachWebSocket(server: Server, options: WebSocketOptions): WebS
       return;
     }
     sockets.handleUpgrade(request, socket, head, (ws) => {
+      // The upgrade is over and `ws` listens for socket errors itself from here on. A page
+      // that is closed or reloaded often resets its connection instead of closing it; that
+      // is an ordinary close, not something to warn about under the name of the upgrade.
+      socket.off('error', duringUpgrade);
       const session = createSession({
         principal: identity.principal,
         policy: identity.policy,

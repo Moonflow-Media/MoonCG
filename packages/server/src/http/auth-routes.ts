@@ -125,6 +125,12 @@ export function registerAuthRoutes(app: FastifyInstance, context: HttpContext): 
 
   route('GET', '/login', (_request, reply) => context.sendPage(reply, 'login.html'));
   route('GET', '/auth.js', (_request, reply) => context.sendPage(reply, 'auth.js'));
+  // What the two pages are drawn with. They are for visitors who are not signed in, so these
+  // files are too, each by its name: nothing else of the server's files is served this way.
+  // `tokens.css` and the mark are the files the dashboard is built from as well.
+  for (const name of ['tokens.css', 'auth.css', 'logo-mark.svg']) {
+    route('GET', `/${name}`, (_request, reply) => context.sendPage(reply, name));
+  }
   route('GET', '/setup', (_request, reply) => {
     // Once a user exists, nothing tells that there ever was a setup.
     if (auth.setupCode() === undefined) return fail(reply, 404, 'not_found', 'Not found');

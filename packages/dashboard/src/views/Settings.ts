@@ -2,6 +2,7 @@ import { defineComponent, h, onMounted, reactive, ref, type VNode } from 'vue';
 import { api, messageOf } from '../api.js';
 import { collect, type Field, type FormState, fieldsOf, initialState } from '../schema-form.js';
 import { part } from './admin.js';
+import { pageHead } from './parts.js';
 
 interface BundleState {
   readonly name: string;
@@ -26,7 +27,12 @@ interface Described {
 /** The form for one bundle's configuration, drawn from the bundle's schema. */
 const ConfigForm = defineComponent({
   name: 'ConfigForm',
-  props: { bundle: { type: String, required: true }, title: { type: String, required: true } },
+  props: {
+    bundle: { type: String, required: true },
+    title: { type: String, required: true },
+    /** The state of the bundle as the list of settings told it. */
+    state: { type: String, default: '' },
+  },
   setup(props) {
     const described = ref<Described>();
     const fields = ref<readonly Field[]>([]);
@@ -163,30 +169,49 @@ const ConfigForm = defineComponent({
 
     return () => {
       const current = described.value;
-      return h('section', { class: 'config', 'data-config': props.bundle }, [
-        h('h2', props.title),
-        current && current.bundle.state !== 'running'
-          ? h('p', { class: 'muted' }, `The bundle is ${current.bundle.state}.`)
-          : null,
-        current && current.problems.length > 0
-          ? h(
-              'ul',
-              { class: 'problem' },
-              current.problems.map((line) => h('li', { key: line }, line)),
-            )
-          : null,
-        problem.value ? h('p', { class: 'problem', role: 'alert' }, problem.value) : null,
-        saved.value ? h('p', { class: 'done', role: 'status' }, saved.value) : null,
-        current
-          ? h('form', { onSubmit: save, novalidate: true }, [
-              ...fields.value.map(draw),
-              h('button', { type: 'submit' }, 'Save and restart'),
-            ])
-          : null,
+      // What the list said, until the bundle's own answer is there, which is newer.
+      const state = current?.bundle.state ?? props.state;
+      return h('section', { class: 'card config', 'data-config': props.bundle }, [
+        h('div', { class: 'card-head' }, [
+          h('h2', props.title),
+          state ? h('span', { class: ['state', state] }, state) : null,
+        ]),
+        h('div', { class: 'card-body' }, [
+          current && current.bundle.state !== 'running'
+            ? h('p', { class: 'muted' }, `The bundle is ${current.bundle.state}.`)
+            : null,
+          current && current.problems.length > 0
+            ? h(
+                'ul',
+                { class: 'problem' },
+                current.problems.map((line) => h('li', { key: line }, line)),
+              )
+            : null,
+          problem.value ? h('p', { class: 'problem', role: 'alert' }, problem.value) : null,
+          saved.value ? h('p', { class: 'done', role: 'status' }, saved.value) : null,
+          current
+            ? h('form', { onSubmit: save, novalidate: true }, [
+                ...fields.value.map(draw),
+                h(
+                  'div',
+                  { class: 'form-actions' },
+                  h('button', { type: 'submit', class: 'primary' }, 'Save and restart'),
+                ),
+              ])
+            : null,
+        ]),
       ]);
     };
   },
 });
+
+/** What happens on "Save and restart", for whoever is about to press it. */
+const SAVING = [
+  'The values are checked against the schema of the bundle. Values that do not fit are refused with the reason, and nothing changes.',
+  'Values that fit are stored, and the extension of the bundle is started again with them. Graphics on air keep running.',
+  'For a bundle that is disabled, the settings apply once it is enabled.',
+  'A secret is stored but never shown. Leave its field empty to keep the stored value.',
+] as const;
 
 /** The settings of every bundle that has a config schema. */
 export const SettingsView = defineComponent({
@@ -204,21 +229,38 @@ export const SettingsView = defineComponent({
     });
     return () =>
       h('div', [
-        h('h1', 'Settings'),
-        h(
-          'p',
-          { class: 'muted' },
-          'Saving restarts the extension of the bundle. Secrets are stored but never shown.',
-        ),
+        pageHead('Settings', {
+          description:
+            'Saving restarts the extension of the bundle. Secrets are stored but never shown.',
+        }),
         problem.value ? h('p', { class: 'problem', role: 'alert' }, problem.value) : null,
         bundles.value?.length === 0 ? h('p', { class: 'empty' }, 'No bundle has settings.') : null,
-        ...(bundles.value ?? []).map((bundle) =>
-          h(ConfigForm, {
-            key: bundle.name,
-            bundle: bundle.name,
-            title: bundle.title ?? bundle.name,
-          }),
-        ),
+        h('div', { class: 'split' }, [
+          h(
+            'div',
+            { class: 'column' },
+            (bundles.value ?? []).map((bundle) =>
+              h(ConfigForm, {
+                key: bundle.name,
+                bundle: bundle.name,
+                title: bundle.title ?? bundle.name,
+                state: bundle.state,
+              }),
+            ),
+          ),
+          h('section', { class: 'card', 'data-help': 'saving' }, [
+            h('div', { class: 'card-head' }, h('h2', 'What saving does')),
+            h(
+              'div',
+              { class: 'card-body' },
+              h(
+                'ul',
+                { class: 'help' },
+                SAVING.map((line) => h('li', { key: line }, line)),
+              ),
+            ),
+          ]),
+        ]),
       ]);
   },
 });

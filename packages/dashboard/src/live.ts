@@ -1,4 +1,4 @@
-import { createClient, type MoonCGClient } from '@mooncg/sdk/client';
+import { type ConnectionStatus, createClient, type MoonCGClient } from '@mooncg/sdk/client';
 
 let shared: MoonCGClient | undefined;
 
@@ -9,8 +9,8 @@ function client(): MoonCGClient {
 }
 
 /**
- * What the dashboard follows live. `follow` is a property so that tests can put their own in
- * its place.
+ * What the dashboard follows live. `follow` and `status` are properties so that tests can put
+ * their own in their place.
  */
 export const live = {
   /**
@@ -24,6 +24,21 @@ export const live = {
         .replicant<T>(name)
         .subscribe((value) => onValue(value as T));
     } catch {
+      return () => {};
+    }
+  },
+
+  /**
+   * Calls `onStatus` with how the connection stands, now and whenever that changes. Returns
+   * the function that stops it. Where no connection can be made at all, it is `offline`.
+   */
+  status(onStatus: (status: ConnectionStatus) => void): () => void {
+    try {
+      const connection = client();
+      onStatus(connection.status);
+      return connection.onStatusChange(onStatus);
+    } catch {
+      onStatus('offline');
       return () => {};
     }
   },

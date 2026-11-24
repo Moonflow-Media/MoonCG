@@ -4,48 +4,25 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Sign in - MoonCG</title>
-    <style>
-      :root {
-        color-scheme: dark;
-        font-family: system-ui, sans-serif;
-      }
-      body {
-        margin: 0;
-        padding: 24px;
-        background: #14161a;
-        color: #e6e8eb;
-      }
-      form {
-        display: grid;
-        gap: 12px;
-        max-width: 320px;
-      }
-      label {
-        display: grid;
-        gap: 4px;
-        font-size: 14px;
-      }
-      input,
-      button {
-        padding: 8px;
-        font: inherit;
-      }
-      .errors {
-        color: #ff9d9d;
-      }
-    </style>
+    <link rel="stylesheet" href="/tokens.css" />
+    <link rel="stylesheet" href="/auth.css" />
   </head>
   <body>
-    <h1>MoonCG</h1>
-    <form id="form" data-action="/api/v1/auth/login" data-then="/">
-      <label>User name <input name="username" autocomplete="username" required /></label>
-      <label>
-        Password
-        <input name="password" type="password" autocomplete="current-password" required />
-      </label>
-      <button type="submit">Sign in</button>
-      <p id="notice" class="errors" role="alert"></p>
-    </form>
+    <section class="card">
+      <div class="brand">
+        <img src="/logo-mark.svg" alt="" width="32" height="32" />
+        <h1>MoonCG</h1>
+      </div>
+      <form id="form" data-action="/api/v1/auth/login" data-then="/">
+        <label>User name <input name="username" autocomplete="username" required /></label>
+        <label>
+          Password
+          <input name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <button type="submit">Sign in</button>
+        <p id="notice" class="errors" role="alert"></p>
+      </form>
+    </section>
     <script type="module" src="/auth.js"></script>
   </body>
 </html>

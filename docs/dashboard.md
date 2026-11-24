@@ -19,10 +19,11 @@ scripts can use as well, the REST API under `/api/v1` and the SDK client.
 
 | Feature                                                   | State                                |
 | --------------------------------------------------------- | ------------------------------------ |
-| Navigation that shows only what you may use               | Done                                 |
+| Navigation that shows only what you may use, in groups    | Done                                 |
+| Counts in the navigation, state of the connection         | Done                                 |
 | Workspaces with panels, layout stored per user            | Done; arranged with buttons, no drag |
-| Bundle page: state, errors, enable, disable, reload, live | Done                                 |
-| Graphics page: URL, connected instances, reload of one    | Done                                 |
+| Bundle page: state, errors, enable, disable, reload, live | Done; filter by state, key figures   |
+| Graphics page: URL, connected instances, reload of one    | Done; no preview of a graphic        |
 | Graphics that take a single instance                      | Done; enforced by the server         |
 | Dialogs opened by panels                                  | Done; one dialog at a time           |
 | Bundle settings: a form from the bundle's config schema   | Done                                 |
@@ -52,6 +53,50 @@ permission of does not appear anywhere.
 The bundle list is loaded again whenever the replicant `system:revision` moves, so a bundle
 that fails or is reloaded shows without reloading the page.
 
+### The frame around the pages
+
+A sidebar holds the navigation, and below it how the connection stands and who is signed in.
+Under 900 pixels of width it lies above the page instead of beside it.
+
+| Group      | Entries              | Count beside an entry                                     |
+| ---------- | -------------------- | --------------------------------------------------------- |
+| Workspaces | Each workspace       | Its panels                                                |
+| Show       | Bundles              | Bundles that failed                                       |
+|            | Graphics             | Graphics that are open somewhere right now                |
+|            | Assets               | none                                                      |
+| Admin      | Users, Roles, Tokens | none                                                      |
+| System     | Settings             | none                                                      |
+|            | Logs                 | Warnings and errors logged since you last opened the page |
+
+A group none of whose entries you may open is left out with its label. A count that is zero
+is not shown.
+
+- **Graphics** counts from the replicants `<bundle>:$instances.<graphic>`, the same the
+  graphics page follows.
+- **Logs** is counted only for holders of `system:logs.view`: the dashboard then asks
+  `GET /api/v1/logs` every two seconds, as the log page does, and nobody else asks at all.
+  Up to when you have seen the log is kept in the browser (`localStorage`, under your user
+  id), as the time of the newest line that was on the log page while you had it open. It is
+  per browser: another browser counts from what the server still has.
+- **The connection** is the status of the dashboard's SDK client (`live`, `reconnecting`,
+  `offline`; see the [README](../README.md#using-replicants-in-a-page)), shown as "Live",
+  "Reconnecting…" and "Offline" with the host the page was loaded from.
+
+The mark beside the name is a placeholder (`packages/server/public/logo-mark.svg`); MoonCG has
+no logo yet. It is built into `/ui/` like the scripts and styles.
+
+### Bundles
+
+The bundle page starts with four key figures (running, failed, disabled, and the graphics
+running bundles serve) and a filter by state. The first three figures are buttons that set
+the filter and, pressed again, let go of it. A bundle on its way between states (`enabling`,
+`disabling`, `installed`) is drawn amber and shows under "All" only.
+
+A row tells what `GET /api/v1/bundles` tells: for a running bundle how many panels and
+graphics it has for you, and for every bundle the bundles it needs (`dependencies`, the names
+from its manifest, without those you are not shown). What a bundle that does not run would
+bring is not in the list, so the page does not claim it.
+
 ## Workspaces and layout
 
 A panel names its workspace in the manifest (`"workspace": "Show"`); panels that name none are
@@ -67,13 +112,24 @@ The layout is stored on the server per user and workspace, under the preference
 `layout.<workspace>`, and is the same in every browser you sign in from. Panels that were added
 since are appended; panels that are gone are dropped.
 
+A panel of your layout that is missing because its bundle does not run is named in a line
+below the grid: `"playlist" is hidden: the bundle sponsor-loop is disabled.` The panel is
+named by its id, since the server lists no panels, and so no titles, of a bundle that does
+not run. The line comes from the stored layout and from what was on the page: once a layout
+is saved without the panel, the line is there until the page is loaded again.
+
 The grid is deliberately small and written for this dashboard: order plus width and height,
 changed with buttons that work with a keyboard. Dragging is not there yet.
 
 ## Graphics and their instances
 
-The graphics page lists every graphic you may open, with its URL, and below each the pages
-that show it right now.
+The graphics page lists every graphic you may open, with its URL and a button that copies it
+(and says "Copied" once the browser has taken it), and below each the pages that show it
+right now. A graphic that is open somewhere is marked "On air".
+
+The page draws no preview. A page that loads a graphic through the SDK is an instance of it,
+so a preview would be listed as one and, for a graphic that takes a single instance, would
+take the place from what is on air. Nothing in the dashboard connects as a graphic.
 
 **How the server knows.** A page under `/b/<bundle>/graphics/` that uses the SDK says in its
 `hello` which graphic it is. The server keeps the connected pages of each graphic in the
@@ -377,9 +433,34 @@ page and serves the files below `/ui/`:
 If the dashboard has not been built, the pages answer 404 and say to run `pnpm build`.
 
 The page is sent with the same strict headers as the login page: scripts and styles only from
-this server, no framing. The build emits no inline script and no inline style, so the
-Content-Security-Policy did not have to change for the dashboard, nor for dialogs, settings
-and assets.
+this server, no framing. The build emits no inline script and no inline style, and no
+component binds a `style`, so the Content-Security-Policy allows styles from files of this
+server only (`style-src 'self'`): a style written into a page is refused.
+
+The styles are two files: `packages/server/public/tokens.css` with the design tokens as custom
+properties (colours, type, spacing, the width of the sidebar), loaded first, and
+`packages/dashboard/src/style.css` with the rules. Both use the fonts of the system and load
+nothing from another host. Transitions take their time from two tokens that are zero for
+whoever asked the system for reduced motion.
+
+### The sign-in and setup pages
+
+`/login` and `/setup` are plain pages of the server (`packages/server/public`), drawn like the
+dashboard: a card in the middle of the page with the mark, the name and the form. They are
+for visitors who are not signed in, so they cannot load anything below `/ui/`. The server
+serves them exactly three more files, to anyone:
+
+| Request          | Is                                                            |
+| ---------------- | ------------------------------------------------------------- |
+| `/tokens.css`    | The design tokens. The dashboard is built from this very file |
+| `/auth.css`      | The rules of the two pages                                    |
+| `/logo-mark.svg` | The mark. The dashboard is built from this very file as well  |
+
+There is one copy of the tokens and of the mark, in `packages/server/public`, because the
+server ships them as they are; the dashboard imports them from there when it is built. The
+pages carry no inline style and no inline script, and are sent with the same
+Content-Security-Policy as the dashboard. What they do is unchanged: `auth.js` posts the form and
+shows the message the server answers with.
 
 The components are written in TypeScript with render functions, not as `.vue` files, so the
 whole package is checked by the same `tsc` as everything else.
@@ -408,8 +489,9 @@ The browser tests (`e2e/dashboard.spec.ts`) start the built server once, on a fr
 a temporary data directory and the `examples` bundles. Each test brings about what it needs
 itself, so one that fails does not hide the others:
 
-1. Setup, sign-in, the scoreboard panel, the graphic, a layout seen from a second browser,
-   the bundle page and the log page.
+1. Setup, a refused and an accepted sign-in (both pages drawn from their stylesheets, with
+   the mark), the scoreboard panel, the graphic, a layout seen from a second browser, the
+   bundle page and the log page.
 2. The single-instance graphic: another user is refused, the same account replaces its own
    page, the waiting page takes over, and the graphics page reloads and disconnects it.
 3. The reset dialog: cancelled, confirmed, and closed when its panel reloads.
@@ -417,6 +499,19 @@ itself, so one that fails does not hide the others:
    answer and no socket frame the dashboard, the graphic or a viewer's browser received.
 5. A logo uploaded, shown by the graphic, deleted; a file of the wrong kind refused; an SVG
    with a script that does not run; a part of a file by `Range`.
-6. A viewer who gets none of the above.
+6. The frame: the groups of the navigation for an administrator and for a viewer, the
+   counts, the connection, the mark, every page opened without a refused request or a
+   complaint on the console, and the navigation above the page on a narrow screen.
+7. The filter and key figures of the bundle page, "Copied", the keyboard (arrow keys in a
+   filter, a visible focus, Escape in a dialog), the dimmed tools of a panel, reduced motion.
+8. A viewer who gets none of the above.
 
 It needs Chromium once: `pnpm exec playwright install chromium`.
+
+`pnpm screenshots` builds and then writes a picture of every page (1440 pixels wide, some at
+800, setup and sign-in with and without an error at both, the dialog, and the focus ring in
+three places) to `screenshots/` at the root of the repository (ignored by git), or to the
+directory given to `node e2e/screenshots.mjs <directory>`. It is for looking at a change of
+layout or styles and is not part of `pnpm test:e2e`. It takes the pictures twice: with the
+`examples` as they are, and (`-states` in the name) with a bundle that failed and one that is
+disabled beside them.

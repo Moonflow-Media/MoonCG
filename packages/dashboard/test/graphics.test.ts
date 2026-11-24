@@ -4,6 +4,8 @@ import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, api } from '../src/api.js';
 import { live } from '../src/live.js';
+import { useBundles } from '../src/stores/bundles.js';
+import { useInstances } from '../src/stores/instances.js';
 import { GraphicsView } from '../src/views/Graphics.js';
 
 const graphic = (id: string, singleInstance = false) => ({
@@ -119,6 +121,37 @@ describe('the graphics view', () => {
     expect(view.find('[data-instance="i-1"]').text()).toContain('Open by OBS (token)');
     // Without a name, the principal says who.
     expect(view.find('[data-instance="i-2"]').text()).toContain('Open by user:u7');
+  });
+
+  it('tells who has a graphic open that was open before the page was entered', async () => {
+    const { push } = fakeLive();
+    const calls = serve(true);
+    // As the shell does: it follows the lists for its count, whatever page is shown.
+    await useBundles().refresh();
+    const stop = useInstances().follow();
+    await flushPromises();
+    push('board:$instances.overlay', [instance('i-1')]);
+    push('board:$instances.studio', []);
+    await flushPromises();
+    expect(calls.map((call) => call.path)).not.toContain('/api/v1/bundles/board/instances');
+
+    const view = mount(GraphicsView);
+    await flushPromises();
+    expect(view.find('[data-instance="i-1"]').text()).toContain('Open by OBS (token)');
+    // Asked once for the bundle, not once for each of its lists.
+    expect(calls.filter((call) => call.path === '/api/v1/bundles/board/instances')).toHaveLength(1);
+    view.unmount();
+    stop();
+  });
+
+  it('names what Copy copies', async () => {
+    fakeLive();
+    serve(false);
+    const view = mount(GraphicsView);
+    await flushPromises();
+    expect(
+      view.findAll('.copy-field button').map((button) => button.attributes('aria-label')),
+    ).toEqual(['Copy URL of overlay', 'Copy URL of studio']);
   });
 
   it('disconnects one instance for whoever may manage bundles', async () => {

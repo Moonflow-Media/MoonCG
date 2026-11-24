@@ -1,8 +1,9 @@
 import { defineComponent, h, onMounted, onUnmounted, reactive, watch } from 'vue';
 import { api, messageOf } from '../api.js';
 import { live } from '../live.js';
-import { type AssetCategoryInfo, useBundles } from '../stores/bundles.js';
+import { type AssetCategoryInfo, type BundleInfo, useBundles } from '../stores/bundles.js';
 import { part, sure } from './admin.js';
+import { pageHead } from './parts.js';
 
 /** One stored file, as the server lists it. */
 interface AssetFile {
@@ -13,6 +14,8 @@ interface AssetFile {
 }
 
 const UNITS = ['bytes', 'KiB', 'MiB', 'GiB'] as const;
+/** The files a browser draws as a picture, by the end of their name. */
+const PICTURE = /\.(png|jpe?g|gif|webp|avif|svg)$/i;
 
 /** A size as people read it: `512 bytes`, `2.0 KiB`. */
 export function readableSize(bytes: number): string {
@@ -110,72 +113,116 @@ export const AssetsView = defineComponent({
       }
     };
 
-    const category = (bundle: string, info: AssetCategoryInfo) => {
-      const key = `${bundle}:${info.id}`;
-      const list = files.get(key);
-      return h('section', { key, class: 'assets', 'data-category': key }, [
-        h('h3', info.title ?? info.id),
-        info.accept ? h('p', { class: 'muted' }, `Takes ${info.accept.join(', ')}`) : null,
-        ...(notes.get(key) ?? []).map((note) =>
-          h(
-            'p',
-            { key: note.text, class: note.bad ? 'problem' : 'muted', role: 'alert' },
-            note.text,
-          ),
-        ),
-        list !== undefined && list.length === 0
-          ? h('p', { class: 'muted' }, 'No files yet.')
-          : null,
+    const tile = (bundle: string, info: AssetCategoryInfo, file: AssetFile) =>
+      h('figure', { key: file.name, class: 'asset-tile', 'data-asset': file.name }, [
         h(
-          'ul',
-          { class: 'rows' },
-          (list ?? []).map((file) =>
-            h('li', { key: file.name, 'data-asset': file.name }, [
-              h('a', { href: file.url, target: '_blank', rel: 'noopener' }, file.name),
-              h('span', { class: 'muted' }, ` ${readableSize(file.size)} `),
-              // No button the server would refuse.
-              info.canWrite
-                ? h(
-                    'button',
-                    { type: 'button', onClick: () => remove(bundle, info.id, file.name) },
-                    'Delete',
-                  )
-                : null,
-            ]),
-          ),
+          'div',
+          { class: 'asset-thumb' },
+          // An uploaded file is only ever drawn as a picture, which runs nothing.
+          PICTURE.test(file.name)
+            ? h('img', { src: file.url, alt: '', loading: 'lazy' })
+            : h('span', { class: 'muted' }, file.name.split('.').pop()),
         ),
-        info.canWrite
-          ? h('label', { class: 'upload' }, [
-              busy.has(key) ? 'Uploading… ' : 'Upload ',
-              h('input', {
-                type: 'file',
-                multiple: true,
-                disabled: busy.has(key),
-                ...(info.accept ? { accept: info.accept.join(',') } : {}),
-                onChange: (event: Event) => upload(bundle, info.id, event),
-              }),
-            ])
-          : null,
+        h('figcaption', [
+          h('div', [
+            h(
+              'a',
+              { class: 'asset-name', href: file.url, target: '_blank', rel: 'noopener' },
+              file.name,
+            ),
+            h('span', { class: 'muted' }, readableSize(file.size)),
+          ]),
+          // No button the server would refuse.
+          info.canWrite
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  class: 'small ghost',
+                  title: 'Delete',
+                  'aria-label': `Delete ${file.name}`,
+                  onClick: () => remove(bundle, info.id, file.name),
+                },
+                '×',
+              )
+            : null,
+        ]),
+      ]);
+
+    const category = (bundle: BundleInfo, info: AssetCategoryInfo) => {
+      const key = `${bundle.name}:${info.id}`;
+      const list = files.get(key);
+      const said = notes.get(key) ?? [];
+      return h('section', { key, class: 'card assets', 'data-category': key }, [
+        h('div', { class: 'card-head' }, [
+          h('h2', info.title ?? info.id),
+          h(
+            'span',
+            { class: 'muted' },
+            [bundle.title ?? bundle.name, info.accept ? `Takes ${info.accept.join(', ')}` : '']
+              .filter((text) => text !== '')
+              .join(' · '),
+          ),
+          info.canWrite
+            ? h(
+                'div',
+                { class: 'card-actions' },
+                h('label', { class: 'upload primary' }, [
+                  busy.has(key) ? 'Uploading… ' : 'Upload ',
+                  h('input', {
+                    type: 'file',
+                    multiple: true,
+                    disabled: busy.has(key),
+                    ...(info.accept ? { accept: info.accept.join(',') } : {}),
+                    onChange: (event: Event) => upload(bundle.name, info.id, event),
+                  }),
+                ]),
+              )
+            : null,
+        ]),
+        h('div', { class: 'card-body' }, [
+          // Two files of one upload can be refused in the same words.
+          ...said.map((note, index) =>
+            h(
+              'p',
+              {
+                key: `${index}:${note.text}`,
+                class: note.bad ? 'problem' : 'muted',
+                role: 'alert',
+              },
+              note.text,
+            ),
+          ),
+          list !== undefined && list.length === 0
+            ? h('p', { class: 'muted' }, 'No files yet.')
+            : null,
+          list !== undefined && list.length > 0
+            ? h(
+                'div',
+                { class: 'asset-grid' },
+                list.map((file) => tile(bundle.name, info, file)),
+              )
+            : null,
+        ]),
       ]);
     };
 
     return () => {
       const withAssets = bundles.list.filter((bundle) => (bundle.assets ?? []).length > 0);
       return h('div', [
-        h('h1', 'Assets'),
-        h(
-          'p',
-          { class: 'muted' },
-          'Files a bundle works with, such as logos. Graphics follow what is uploaded here.',
-        ),
+        pageHead('Assets', {
+          description:
+            'Files a bundle works with, such as logos. Graphics follow what is uploaded here.',
+        }),
         bundles.loaded && withAssets.length === 0
           ? h('p', { class: 'empty' }, 'No bundle takes assets you may see.')
           : null,
-        ...withAssets.map((bundle) =>
-          h('section', { key: bundle.name }, [
-            h('h2', bundle.title ?? bundle.name),
-            ...(bundle.assets ?? []).map((info) => category(bundle.name, info)),
-          ]),
+        h(
+          'div',
+          { class: 'column' },
+          withAssets.flatMap((bundle) =>
+            (bundle.assets ?? []).map((info) => category(bundle, info)),
+          ),
         ),
       ]);
     };
