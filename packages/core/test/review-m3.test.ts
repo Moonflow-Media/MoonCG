@@ -42,7 +42,7 @@ const route = (pattern: string, overrides: Partial<Route> = {}): Route => ({
   bundle: 'demo',
   method: 'GET',
   pattern,
-  permission: 'bundle:demo:access',
+  permission: 'bundle:demo:?',
   invoke: respond,
   ...overrides,
 });
@@ -70,7 +70,7 @@ function extensionSession() {
   const receive = (msg: ClientMessage) => session.receive(encodeMessage(msg));
   receive({ t: 'hello', v: PROTOCOL_VERSION, bundle: 'demo' });
   sent.length = 0;
-  const sender = { principal: 'tester', bundle: 'demo' };
+  const sender = { principal: 'tester', kind: 'user', bundle: 'demo' } as const;
   return { session, sent, receive, registry, bus, routes, sender, ...clock };
 }
 
@@ -204,6 +204,7 @@ describe('calls to an extension', () => {
     params: {},
     query: {},
     headers: {},
+    sender: { principal: 'tester', kind: 'user', bundle: 'demo' },
     body: null,
   } as const;
 
@@ -244,7 +245,12 @@ describe('calls to an extension', () => {
       return new Promise(() => {});
     });
 
-    const asking = bus.request('demo:reset', 1, { principal: 'p', bundle: 'demo' }, 10);
+    const asking = bus.request(
+      'demo:reset',
+      1,
+      { principal: 'p', kind: 'user', bundle: 'demo' },
+      10,
+    );
     await flush();
     expect(abandoned).not.toHaveBeenCalled();
     clock.advance(10);
@@ -262,7 +268,7 @@ describe('calls to an extension', () => {
       return 1;
     });
 
-    await bus.request('demo:reset', 1, { principal: 'p', bundle: 'demo' });
+    await bus.request('demo:reset', 1, { principal: 'p', kind: 'user', bundle: 'demo' });
 
     expect(abandoned).not.toHaveBeenCalled();
   });

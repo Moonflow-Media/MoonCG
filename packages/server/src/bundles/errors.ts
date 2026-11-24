@@ -1,5 +1,6 @@
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { redactSecrets } from '../auth/secrets.js';
 
 /** What ends a path inside an error message. */
 const PATH_REST = String.raw`[^\s'"<>|*?]*`;
@@ -44,7 +45,8 @@ export function publicError(
   bundleDir: string,
   roots: readonly string[] = privateRoots(),
 ): string {
-  let text = message.replace(/file:\/\/\/?([^\s'"<>]+)/g, (url, rest: string) => {
+  // An API token never gets into what is published, whatever message carried it.
+  let text = redactSecrets(message).replace(/file:\/\/\/?([^\s'"<>]+)/g, (url, rest: string) => {
     let path: string;
     try {
       path = decodeURIComponent(rest);

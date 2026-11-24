@@ -1,4 +1,7 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { ServerConfig } from '../src/kernel/config.js';
 import { createLogger } from '../src/kernel/logger.js';
 
 /** Absolute path of a file under `test/fixtures`. */
@@ -10,4 +13,26 @@ export function fixture(path: string): string {
 export function memoryLogger() {
   const lines: string[] = [];
   return { lines, logger: createLogger((line) => lines.push(line)) };
+}
+
+/**
+ * A server configuration for tests: any free port on loopback. The data directory is in the
+ * system's temporary folder, so a test that forgets to pass its own storage still writes
+ * nothing into the repository.
+ */
+export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
+  return {
+    port: 0,
+    host: '127.0.0.1',
+    bundlesDir: fixture('bundles'),
+    allowedOrigins: [],
+    dataDir: join(tmpdir(), 'mooncg-test-data'),
+    extensionMemoryMb: 128,
+    extensionStartTimeoutMs: 10_000,
+    extensionHeartbeatTimeoutMs: 10_000,
+    maxBodyBytes: 1024 * 1024,
+    secureCookies: false,
+    trustProxy: false,
+    ...overrides,
+  };
 }

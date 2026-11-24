@@ -6,8 +6,9 @@ import { createClient } from '@mooncg/sdk/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { InlineHost } from '../src/extension-host/inline-host.js';
+import { resolveLocalAdmin } from '../src/http/identity.js';
 import { type RunningServer, startServer } from '../src/server.js';
-import { fixture, memoryLogger } from './helpers.js';
+import { fixture, memoryLogger, testConfig } from './helpers.js';
 import { manifest, temporaryBundles } from './temp-bundles.js';
 
 const temporary = temporaryBundles();
@@ -40,20 +41,12 @@ async function gameBundles(): Promise<string> {
 /** Starts a server that stores its data in a real SQLite file under `dataDir`. */
 async function start(bundlesDir: string, dataDir: string) {
   const { logger, lines } = memoryLogger();
-  const server = await startServer(
-    {
-      port: 0,
-      host: '127.0.0.1',
-      bundlesDir,
-      allowedOrigins: [],
-      dataDir,
-      extensionMemoryMb: 128,
-      extensionStartTimeoutMs: 10_000,
-      extensionHeartbeatTimeoutMs: 10_000,
-      maxBodyBytes: 1024 * 1024,
-    },
-    { logger, sdkFile: undefined, createHost: (services) => new InlineHost(services) },
-  );
+  const server = await startServer(testConfig({ bundlesDir, dataDir }), {
+    logger,
+    sdkFile: undefined,
+    resolvePrincipal: resolveLocalAdmin,
+    createHost: (services) => new InlineHost(services),
+  });
   let closed = false;
   const close = async () => {
     if (!closed) await server.close();

@@ -11,5 +11,3 @@ coverage/
 .atl/
 .claude/
 
-# Written by tests
-packages/server/test/fixtures/unused-data/

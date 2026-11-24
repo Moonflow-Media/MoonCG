@@ -27,7 +27,7 @@ describe('resource counts', () => {
     const stopListening = bus.subscribe('b:x', () => {});
     bus.subscribe('b:y', () => {});
     const stopHandling = bus.handle('b:x', () => new Promise(() => {}));
-    const open = bus.request('b:x', 1, { principal: 'p', bundle: 'b' });
+    const open = bus.request('b:x', 1, { principal: 'p', kind: 'user', bundle: 'b' });
     open.catch(() => {});
     expect(bus.stats()).toEqual({ topics: 2, listeners: 2, handlers: 1, requests: 1 });
 

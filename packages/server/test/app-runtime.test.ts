@@ -8,7 +8,7 @@ import {
 import { afterEach, describe, expect, it } from 'vitest';
 import { BundleManager } from '../src/bundles/manager.js';
 import { InlineHost } from '../src/extension-host/inline-host.js';
-import { type AppOptions, createApp } from '../src/http/app.js';
+import { type AppOptions, createApp, resolveLocalAdmin } from '../src/http/app.js';
 import { memoryLogger } from './helpers.js';
 import { manifest, temporaryBundles } from './temp-bundles.js';
 
@@ -59,6 +59,7 @@ async function setup(overrides: Partial<AppOptions> = {}) {
   await manager.start();
   cleanup.push(() => manager.close());
   const app = await createApp({
+    resolvePrincipal: resolveLocalAdmin,
     bundles: () => manager.list(),
     routes,
     lifecycle: manager,
@@ -167,7 +168,8 @@ describe('bundle HTTP routes', () => {
 
     expect((await app.inject({ url: '/b/demo/api/hello/x' })).statusCode).toBe(200);
     expect((await app.inject({ url: '/b/demo/api/secret' })).statusCode).toBe(403);
-    expect((await nobody.app.inject({ url: '/b/demo/api/hello/x' })).statusCode).toBe(403);
+    // Whoever holds nothing of the bundle is told that there is nothing.
+    expect((await nobody.app.inject({ url: '/b/demo/api/hello/x' })).statusCode).toBe(404);
   });
 
   it('stops answering when the bundle is disabled', async () => {

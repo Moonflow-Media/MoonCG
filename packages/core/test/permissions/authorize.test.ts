@@ -63,7 +63,7 @@ describe('bundlePermission', () => {
     expect(bundlePermission('scoreboard', 'operate')).toBe('bundle:scoreboard:operate');
   });
 
-  it('falls back to the implicit access permission', () => {
-    expect(bundlePermission('scoreboard', undefined)).toBe('bundle:scoreboard:access');
+  it('falls back to requiring any permission of the bundle', () => {
+    expect(bundlePermission('scoreboard', undefined)).toBe('bundle:scoreboard:?');
   });
 });

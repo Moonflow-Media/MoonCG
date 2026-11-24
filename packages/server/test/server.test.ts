@@ -1,12 +1,18 @@
 import { createServer } from 'node:net';
-import { encodeMessage, PROTOCOL_VERSION, type ServerMessage } from '@mooncg/core';
+import {
+  ANONYMOUS_PRINCIPAL,
+  encodeMessage,
+  PROTOCOL_VERSION,
+  type ServerMessage,
+} from '@mooncg/core';
 import { createClient } from '@mooncg/sdk/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { InlineHost } from '../src/extension-host/inline-host.js';
+import { resolveLocalAdmin } from '../src/http/identity.js';
 import { type RunningServer, type ServerOptions, startServer } from '../src/server.js';
 import { memoryStorage } from '../src/storage/replicant-store.js';
-import { fixture, memoryLogger } from './helpers.js';
+import { fixture, memoryLogger, testConfig } from './helpers.js';
 
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
@@ -14,26 +20,14 @@ afterEach(async () => {
 });
 
 async function start(options: Partial<ServerOptions> = {}): Promise<RunningServer> {
-  const server = await startServer(
-    {
-      port: 0,
-      host: '127.0.0.1',
-      bundlesDir: fixture('bundles'),
-      allowedOrigins: [],
-      dataDir: fixture('unused-data'),
-      extensionMemoryMb: 128,
-      extensionStartTimeoutMs: 10_000,
-      extensionHeartbeatTimeoutMs: 10_000,
-      maxBodyBytes: 1024 * 1024,
-    },
-    {
-      logger: memoryLogger().logger,
-      sdkFile: fixture('sdk/mooncg.js'),
-      storage: memoryStorage(),
-      createHost: (services) => new InlineHost(services),
-      ...options,
-    },
-  );
+  const server = await startServer(testConfig({ bundlesDir: fixture('bundles') }), {
+    logger: memoryLogger().logger,
+    sdkFile: fixture('sdk/mooncg.js'),
+    resolvePrincipal: resolveLocalAdmin,
+    storage: memoryStorage(),
+    createHost: (services) => new InlineHost(services),
+    ...options,
+  });
   cleanup.push(() => server.close());
   await server.started;
   return server;
@@ -140,8 +134,8 @@ describe('startServer', () => {
     ]);
   });
 
-  it('refuses the socket upgrade without the dashboard permission', async () => {
-    const server = await start({ policy: { roles: {} } });
+  it('refuses the socket upgrade of someone who is not signed in', async () => {
+    const server = await start({ resolvePrincipal: () => ANONYMOUS_PRINCIPAL });
     const socket = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
     cleanup.push(() => socket.terminate());
 
@@ -151,7 +145,7 @@ describe('startServer', () => {
       socket.once('error', reject);
     });
 
-    expect(status).toBe(403);
+    expect(status).toBe(401);
   });
 
   it('shuts down although a client has not read the file it asked for', async () => {

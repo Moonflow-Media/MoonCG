@@ -129,6 +129,8 @@ describe('mooncg command line', () => {
   it.each([[[]], [['frobnicate']], [['types', '--nope']]])('prints usage for %j', async (argv) => {
     const { io: streams, err } = io(process.cwd());
     expect(await run(argv, streams)).toBe(1);
-    expect(err.join('\n')).toMatch(/Usage: mooncg types \[bundleDir\] \[--out <file>\]/);
+    expect(err.join('\n')).toMatch(
+      /Usage: mooncg <command>[\s\S]*types \[bundleDir\] \[--out <file>\]/,
+    );
   });
 });

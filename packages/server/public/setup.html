@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Setup - MoonCG</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #14161a;
+        color: #e6e8eb;
+      }
+      form {
+        display: grid;
+        gap: 12px;
+        max-width: 320px;
+      }
+      label {
+        display: grid;
+        gap: 4px;
+        font-size: 14px;
+      }
+      input,
+      button {
+        padding: 8px;
+        font: inherit;
+      }
+      .errors {
+        color: #ff9d9d;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>MoonCG setup</h1>
+    <p>Create the first administrator. The setup code is in the server's start-up output.</p>
+    <form id="form" data-action="/api/v1/setup" data-then="/login">
+      <label>Setup code <input name="code" autocomplete="off" required /></label>
+      <label>User name <input name="username" autocomplete="username" required /></label>
+      <label>
+        Password (at least 8 characters)
+        <input name="password" type="password" autocomplete="new-password" minlength="8" required />
+      </label>
+      <button type="submit">Create administrator</button>
+      <p id="notice" class="errors" role="alert"></p>
+    </form>
+    <script type="module" src="/auth.js"></script>
+  </body>
+</html>

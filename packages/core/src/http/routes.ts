@@ -1,4 +1,5 @@
 import { MoonCGError } from '../errors.js';
+import type { Sender } from '../messages/bus.js';
 
 export const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
 export type HttpMethod = (typeof HTTP_METHODS)[number];
@@ -13,6 +14,8 @@ export interface HttpRequestData {
   readonly headers: Readonly<Record<string, string>>;
   /** The whole body, base64-encoded, or `null` without one. */
   readonly body: string | null;
+  /** Who is calling, in the same form as the sender of a message. */
+  readonly sender: Sender;
 }
 
 /** What a route handler answers. Plain data. */

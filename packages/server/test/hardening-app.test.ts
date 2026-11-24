@@ -4,7 +4,7 @@ import { type Policy, type Principal, ReplicantRegistry } from '@mooncg/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadBundles } from '../src/bundles/bundles.js';
 import { InlineHost } from '../src/extension-host/inline-host.js';
-import { type AppOptions, createApp } from '../src/http/app.js';
+import { type AppOptions, createApp, resolveLocalAdmin } from '../src/http/app.js';
 import { fixture, memoryLogger } from './helpers.js';
 import { manifest, temporaryBundles } from './temp-bundles.js';
 
@@ -24,7 +24,12 @@ async function appFor(bundlesDir: string, overrides: Partial<AppOptions> = {}) {
     host: new InlineHost({ registry, logger }),
     logger,
   });
-  const app = await createApp({ bundles, sdkFile: undefined, ...overrides });
+  const app = await createApp({
+    resolvePrincipal: resolveLocalAdmin,
+    bundles,
+    sdkFile: undefined,
+    ...overrides,
+  });
   apps.push(app);
   return app;
 }

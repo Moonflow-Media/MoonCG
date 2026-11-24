@@ -118,7 +118,7 @@ describe('messages over a session', () => {
         t: 'msg',
         name: 'scoreboard:reset',
         data: { hard: true },
-        sender: { principal: 'op', bundle: 'scoreboard' },
+        sender: { principal: 'op', kind: 'user', bundle: 'scoreboard' },
       },
     ]);
     expect(other.sent).toEqual([]);
@@ -150,7 +150,8 @@ describe('messages over a session', () => {
       { t: 'ok', id: 1 },
       { t: 'err', id: 2, code: 'forbidden' },
       { t: 'err', id: 3, code: 'forbidden' },
-      { t: 'err', id: 4, code: 'forbidden' },
+      // A topic without a mapped permission is open to whoever holds any permission of the bundle.
+      { t: 'ok', id: 4 },
     ]);
   });
 
@@ -199,7 +200,7 @@ describe('requests over a session', () => {
       t: 'msg.call',
       name: 'scoreboard:reset',
       data: { to: 0 },
-      sender: { principal: 'op', bundle: 'scoreboard' },
+      sender: { principal: 'op', kind: 'user', bundle: 'scoreboard' },
     });
     handler.receive({ t: 'call.ok', call: call.call, data: 'done' });
     await flush();
@@ -384,6 +385,7 @@ describe('HTTP routes over a session', () => {
     params: { id: '7' },
     query: {},
     headers: {},
+    sender: { principal: 'tester', kind: 'user', bundle: 'demo' },
     body: null,
   } as const;
 
@@ -416,9 +418,7 @@ describe('HTTP routes over a session', () => {
       method: 'POST',
       pattern: '/',
     });
-    expect(routes.match('scoreboard', 'POST', '/')?.route.permission).toBe(
-      'bundle:scoreboard:access',
-    );
+    expect(routes.match('scoreboard', 'POST', '/')?.route.permission).toBe('bundle:scoreboard:?');
   });
 
   it.each([
@@ -482,6 +482,7 @@ describe('the session as a resource ledger', () => {
       params: {},
       query: {},
       headers: {},
+      sender: { principal: 'tester', kind: 'user', bundle: 'demo' },
       body: null,
     });
     const rejected = vi.fn();

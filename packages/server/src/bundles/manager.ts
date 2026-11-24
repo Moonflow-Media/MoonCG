@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import {
   BUNDLE_NAME_PATTERN,
+  BUNDLES_MANAGE,
   type BundleEvent,
   type BundleState,
   DASHBOARD_VIEW,
@@ -34,8 +35,17 @@ export const RESTART_DELAY_MS = 1000;
 /** A bundle that has run this long without crashing gets a fresh count of attempts. */
 export const RESTART_STABLE_MS = 60_000;
 
-/** The name of the read-only replicant that lists the bundles and their states. */
+/**
+ * The name of the read-only replicant that lists every bundle with its state. A replicant is
+ * the same for all who read it, so it is for those who may manage bundles; everyone else gets
+ * the list of what they may use from `GET /api/v1/bundles`.
+ */
 export const BUNDLES_REPLICANT = 'bundles';
+/**
+ * The name of the read-only replicant `{ bundles: <number> }` that counts changes to the
+ * bundles. It tells nothing about them; a page that follows it knows when to ask again.
+ */
+export const REVISION_REPLICANT = 'revision';
 
 export interface BundleManagerOptions {
   readonly bundlesDir: string;
@@ -80,6 +90,7 @@ export class BundleManager {
   /** The last change queued for each bundle. A new change waits for the ones it touches. */
   readonly #tails = new Map<string, Promise<unknown>>();
   readonly #summary: Replicant;
+  readonly #revision: Replicant;
   #bootOrder: readonly string[] = [];
   #closed = false;
 
@@ -89,6 +100,11 @@ export class BundleManager {
     this.#roots = [options.bundlesDir, ...privateRoots()];
     this.#summary = options.registry.declare(SYSTEM_BUNDLE, BUNDLES_REPLICANT, {
       initial: [],
+      readPermission: BUNDLES_MANAGE,
+      readOnly: true,
+    }).replicant;
+    this.#revision = options.registry.declare(SYSTEM_BUNDLE, REVISION_REPLICANT, {
+      initial: { bundles: 0 },
       readPermission: DASHBOARD_VIEW,
       readOnly: true,
     }).replicant;
@@ -512,6 +528,8 @@ export class BundleManager {
     }));
     if (JSON.stringify(value) === JSON.stringify(this.#summary.value)) return;
     this.#summary.applyOp({ patches: [{ op: 'replace', path: '', value }] });
+    const { bundles } = this.#revision.value as { bundles: number };
+    this.#revision.applyOp({ patches: [{ op: 'replace', path: '/bundles', value: bundles + 1 }] });
   }
 }
 

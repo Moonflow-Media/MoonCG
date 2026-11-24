@@ -8,13 +8,14 @@ import {
 import { isPlainObject, type Json, jsonProblem } from '../json.js';
 import type { Sender } from '../messages/bus.js';
 import { BUNDLE_NAME_PATTERN } from '../names.js';
+import { PRINCIPAL_KINDS } from '../permissions/authorize.js';
 import type { PatchOp } from '../replicant/patch.js';
 
 /** The largest frame either side accepts, 1 MiB. Whoever sends a larger one is cut off. */
 export const MAX_FRAME_BYTES = 1024 * 1024;
 
 /** Sent in `hello` and `welcome`. Bump on any incompatible change to the messages below. */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /**
  * `name` is a replicant or message name, either bare (the session's own bundle) or
@@ -68,6 +69,16 @@ export type ExtensionMessage =
       /** A permission name from the bundle manifest. */
       readonly permission?: string;
     }
+  /**
+   * Ask whether a principal holds a permission of the own bundle, by the permission's name in
+   * the manifest. Answered with `perm.res`.
+   */
+  | {
+      readonly t: 'perm.check';
+      readonly id: number;
+      readonly principal: string;
+      readonly permission: string;
+    }
   /** The answer to a `msg.call` (any JSON) or an `http.call` (an `HttpResponseData`). */
   | { readonly t: 'call.ok'; readonly call: number; readonly data: Json }
   | {
@@ -110,6 +121,8 @@ export type ServerMessage =
   | { readonly t: 'msg'; readonly name: string; readonly data: Json; readonly sender: Sender }
   /** The handler's answer to a `msg.req`. */
   | { readonly t: 'msg.res'; readonly id: number; readonly data: Json }
+  /** Answers a `perm.check`. */
+  | { readonly t: 'perm.res'; readonly id: number; readonly allowed: boolean }
   /** To an extension: answer this request with `call.ok` or `call.err`. */
   | {
       readonly t: 'msg.call';
@@ -191,6 +204,10 @@ export function decodeClientMessage(text: string): Decoded<ClientMessage> {
         if (m.permission === undefined) return route;
         return isName(m.permission) ? { ...route, permission: m.permission } : null;
       }
+      case 'perm.check':
+        return isId(m.id) && isName(m.principal) && isName(m.permission)
+          ? { t: 'perm.check', id: m.id, principal: m.principal, permission: m.permission }
+          : null;
       case 'call.ok':
         return isId(m.call) && isJson(m.data) ? { t: 'call.ok', call: m.call, data: m.data } : null;
       case 'call.err':
@@ -232,6 +249,10 @@ export function decodeServerMessage(text: string): Decoded<ServerMessage> {
           : null;
       case 'msg.res':
         return isId(m.id) && isJson(m.data) ? { t: 'msg.res', id: m.id, data: m.data } : null;
+      case 'perm.res':
+        return isId(m.id) && typeof m.allowed === 'boolean'
+          ? { t: 'perm.res', id: m.id, allowed: m.allowed }
+          : null;
       case 'msg.call':
         return isId(m.call) && isName(m.name) && isJson(m.data) && isSender(m.sender)
           ? { t: 'msg.call', call: m.call, name: m.name, data: m.data, sender: senderOf(m.sender) }
@@ -294,10 +315,15 @@ function isKnownState(value: unknown): value is KnownState {
 }
 
 function isSender(value: unknown): value is Sender {
-  return isPlainObject(value) && isName(value.principal) && isName(value.bundle);
+  return (
+    isPlainObject(value) &&
+    isName(value.principal) &&
+    isName(value.bundle) &&
+    (PRINCIPAL_KINDS as readonly unknown[]).includes(value.kind)
+  );
 }
 
-const senderOf = ({ principal, bundle }: Sender): Sender => ({ principal, bundle });
+const senderOf = ({ principal, kind, bundle }: Sender): Sender => ({ principal, kind, bundle });
 
 function isErrorCode(value: unknown): value is ErrorCode {
   return (ERROR_CODES as readonly unknown[]).includes(value);
@@ -319,7 +345,8 @@ function isHttpRequest(value: unknown): value is HttpRequestData {
     isStringRecord(value.params) &&
     isStringRecord(value.query) &&
     isStringRecord(value.headers) &&
-    (value.body === null || typeof value.body === 'string')
+    (value.body === null || typeof value.body === 'string') &&
+    isSender(value.sender)
   );
 }
 

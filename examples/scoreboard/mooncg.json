@@ -7,7 +7,7 @@
   "extension": "extension/index.js",
   "capabilities": ["http.routes"],
   "permissions": { "view": "See the scoreboard", "operate": "Change the score" },
-  "defaultRoles": { "operator": ["view", "operate"], "viewer": ["view"] },
+  "defaultRoles": { "operator": ["view", "operate"], "viewer": ["view"], "graphics": ["view"] },
   "panels": [
     {
       "id": "control",

@@ -4,7 +4,7 @@ import { BundleManager } from '../src/bundles/manager.js';
 import type { ExtensionHost, ExtensionServices } from '../src/extension-host/extension-host.js';
 import { InlineHost } from '../src/extension-host/inline-host.js';
 import { WorkerHost } from '../src/extension-host/worker-host.js';
-import { type AppOptions, createApp } from '../src/http/app.js';
+import { type AppOptions, createApp, resolveLocalAdmin } from '../src/http/app.js';
 import { memoryStorage } from '../src/storage/replicant-store.js';
 import { memoryLogger } from './helpers.js';
 import { manifest, temporaryBundles } from './temp-bundles.js';
@@ -68,6 +68,7 @@ describe.each(hosts)('HTTP hardening with %s', (_name, createHost) => {
     await manager.start();
     cleanup.push(() => manager.close());
     const app = await createApp({
+      resolvePrincipal: resolveLocalAdmin,
       bundles: () => manager.list(),
       routes,
       lifecycle: manager,

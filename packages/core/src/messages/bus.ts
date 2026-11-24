@@ -1,7 +1,7 @@
 import { MoonCGError, type Timers } from '../errors.js';
 import { type Json, jsonProblem } from '../json.js';
 import { NAMESPACE_SEPARATOR } from '../names.js';
-import { bundlePermission } from '../permissions/authorize.js';
+import { bundlePermission, type PrincipalKind } from '../permissions/authorize.js';
 import { qualifyReplicantName } from '../replicant/registry.js';
 
 /** How long `request` waits for an answer unless the caller says otherwise. */
@@ -9,11 +9,15 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
 /** The longest a caller may ask `request` to wait. */
 export const MAX_REQUEST_TIMEOUT_MS = 60_000;
 
-/** Who sent a message: the principal's id and the bundle its connection belongs to. */
-export interface Sender {
+/**
+ * Who sent a message: the principal's id (`user:<id>`, `token:<id>`, `extension:<bundle>`),
+ * what kind of principal that is, and the bundle its connection belongs to.
+ */
+export type Sender = {
   readonly principal: string;
+  readonly kind: PrincipalKind;
   readonly bundle: string;
-}
+};
 
 export interface Topic {
   readonly bundle: string;

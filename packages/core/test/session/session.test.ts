@@ -113,7 +113,10 @@ describe('rep.sub', () => {
   });
 
   it('returns forbidden without the read permission', () => {
-    const { sent, receive } = setup().connect({ principal: viewer, policy: { roles: {} } });
+    const { sent, receive } = setup().connect({
+      principal: viewer,
+      policy: { roles: { viewer: ['bundle:scoreboard:operate'] } },
+    });
     receive({ t: 'rep.sub', id: 1, name: 'score' });
     expect(sent).toMatchObject([{ t: 'err', id: 1, code: 'forbidden' }]);
   });

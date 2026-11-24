@@ -31,8 +31,8 @@ describe('ReplicantRegistry', () => {
     const registry = new ReplicantRegistry();
     registry.declare('scoreboard', 'score', { initial: null });
     expect(registry.get('scoreboard:score')).toMatchObject({
-      readPermission: 'bundle:scoreboard:access',
-      writePermission: 'bundle:scoreboard:access',
+      readPermission: 'bundle:scoreboard:?',
+      writePermission: 'bundle:scoreboard:?',
     });
   });
 

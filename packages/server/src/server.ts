@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import {
-  ALLOW_ALL_POLICY,
   MessageBus,
   type Policy,
   ReplicantRegistry,
   RouteTable,
   SYSTEM_BUNDLE,
 } from '@mooncg/core';
+import { type Auth, createAuth } from './auth/auth.js';
+import type { ScryptParams } from './auth/password.js';
 import type { BundleRecord } from './bundles/bundles.js';
 import { BundleManager } from './bundles/manager.js';
 import type {
@@ -16,7 +17,8 @@ import type {
   HostStats,
 } from './extension-host/extension-host.js';
 import { WorkerHost } from './extension-host/worker-host.js';
-import { createApp, type ResolvePrincipal, resolveLocalAdmin } from './http/app.js';
+import { type BundleLifecycle, createApp } from './http/app.js';
+import { createIdentify, type ResolvePrincipal } from './http/identity.js';
 import { attachWebSocket } from './http/ws.js';
 import type { ServerConfig } from './kernel/config.js';
 import { createLifecycle } from './kernel/lifecycle.js';
@@ -28,8 +30,20 @@ export interface ServerOptions {
   readonly logger?: Logger;
   /** Path of the SDK's browser build. Without it `/sdk/mooncg.js` answers 404. */
   readonly sdkFile?: string | undefined;
+  /**
+   * For tests: who every request acts as, and against which policy, instead of the accounts
+   * in the store. Without them a request is whoever its session cookie or API token says,
+   * and anonymous otherwise. There is no other way around signing in.
+   */
   readonly policy?: Policy;
   readonly resolvePrincipal?: ResolvePrincipal;
+  /** The cost of password hashes. Tests lower it. */
+  readonly passwordCost?: ScryptParams;
+  /**
+   * How often open sockets are checked for access that changed behind the server's back,
+   * such as through the command line tool. Changes made through the server apply at once.
+   */
+  readonly socketRecheckMs?: number;
   /** What the server keeps across restarts. Defaults to SQLite in the configured data dir. */
   readonly storage?: Storage;
   /**
@@ -58,6 +72,14 @@ export interface RunningServer {
   readonly bundles: readonly BundleRecord[];
   readonly manager: BundleManager;
   readonly host: ExtensionHost;
+  /** Accounts, sessions, tokens and roles. */
+  readonly auth: Auth;
+  readonly storage: Storage;
+  readonly logger: Logger;
+  /** Where the first administrator is created; `undefined` once any user exists. */
+  readonly setupUrl: string | undefined;
+  /** Closes the sockets of principals whose access changed since they connected. */
+  recheckSockets(): void;
   /** Resolves when every bundle has finished starting, successfully or not. */
   readonly started: Promise<void>;
   /** How much is registered on the server right now. A leak shows as a count that grows. */
@@ -66,14 +88,32 @@ export interface RunningServer {
   close(): Promise<void>;
 }
 
+/** How often open sockets are checked for changed access unless configured otherwise. */
+export const SOCKET_RECHECK_MS = 5000;
+
+/**
+ * What to say when the server listens beyond this machine without `--secure-cookies`:
+ * passwords and session cookies then cross the network unencrypted. `undefined` on loopback.
+ */
+export function bindingWarning(
+  config: Pick<ServerConfig, 'host' | 'secureCookies'>,
+): string | undefined {
+  const { host, secureCookies } = config;
+  const loopback = host === 'localhost' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
+  if (loopback || secureCookies) return undefined;
+  return (
+    `Listening on ${host} without HTTPS: passwords and session cookies cross the network ` +
+    'unencrypted. Use this on a trusted network only, or put an HTTPS reverse proxy in front ' +
+    'and start with --secure-cookies --trust-proxy.'
+  );
+}
+
 /** Loads the bundles and starts serving. Failed bundles are reported, not fatal. */
 export async function startServer(
   config: ServerConfig,
   options: ServerOptions = {},
 ): Promise<RunningServer> {
   const logger = options.logger ?? createLogger();
-  const policy = options.policy ?? ALLOW_ALL_POLICY;
-  const resolvePrincipal = options.resolvePrincipal ?? resolveLocalAdmin;
   const lifecycle = createLifecycle(logger);
   const registry = new ReplicantRegistry({
     // Every declared replicant gets an epoch no earlier one had, in this run or a previous
@@ -94,7 +134,25 @@ export async function startServer(
     const persistence = createPersistence({ store: storage.replicants, logger });
     lifecycle.add('persistence', () => persistence.flush());
 
-    const services: ExtensionServices = { registry, bus, routes, logger };
+    const auth = createAuth({
+      store: storage.auth,
+      ...(options.passwordCost === undefined ? {} : { scrypt: options.passwordCost }),
+    });
+    const identify = createIdentify({
+      auth,
+      resolvePrincipal: options.resolvePrincipal,
+      policy: options.policy,
+      secureCookies: config.secureCookies,
+      trustProxy: config.trustProxy,
+    });
+
+    const services: ExtensionServices = {
+      registry,
+      bus,
+      routes,
+      logger,
+      checkPermission: (principal, permission) => auth.check(principal, permission),
+    };
     const host =
       options.createHost?.(services) ??
       new WorkerHost({
@@ -119,6 +177,27 @@ export async function startServer(
     // The bundles are known and show as `enabling`; their extensions start in the background,
     // so one that is slow to start does not keep the server from listening.
     await manager.load();
+    // A bundle seen for the first time brings grants for the built-in roles. Bundles appear
+    // at start and when one is enabled or reloaded, so that is when this is looked at.
+    const applyDefaults = () =>
+      auth.applyBundleDefaults(
+        manager
+          .list()
+          .flatMap(({ name, manifest }) =>
+            manifest ? [{ name, defaultRoles: manifest.defaultRoles }] : [],
+          ),
+      );
+    applyDefaults();
+    const change = (action: keyof BundleLifecycle) => async (name: string) => {
+      const record = await manager[action](name);
+      applyDefaults();
+      return record;
+    };
+    const bundleLifecycle: BundleLifecycle = {
+      enable: change('enable'),
+      disable: change('disable'),
+      reload: change('reload'),
+    };
     const started = manager.startAll().catch((error) => {
       logger.error(`Starting the bundles failed: ${errorMessage(error)}`);
     });
@@ -126,34 +205,62 @@ export async function startServer(
     const app = await createApp({
       bundles: () => manager.list(),
       sdkFile: options.sdkFile,
-      policy,
-      resolvePrincipal,
+      auth,
+      ...(options.policy === undefined ? {} : { policy: options.policy }),
+      ...(options.resolvePrincipal === undefined
+        ? {}
+        : { resolvePrincipal: options.resolvePrincipal }),
       routes,
-      lifecycle: manager,
+      lifecycle: bundleLifecycle,
       maxBodyBytes: config.maxBodyBytes,
       allowedOrigins: config.allowedOrigins,
+      secureCookies: config.secureCookies,
+      trustProxy: config.trustProxy,
     });
     lifecycle.add('http', () => app.close());
+    const sockets = attachWebSocket(app.server, {
+      registry,
+      bus,
+      // The shell is no bundle; it connects under the server's own name.
+      bundleExists: (name) => name === SYSTEM_BUNDLE || manager.isRunning(name),
+      identify,
+      allowedOrigins: config.allowedOrigins,
+      transport: { trustProxy: config.trustProxy },
+      logger,
+    });
+    lifecycle.add('websocket', () => sockets.close());
+    // A change made through this server reaches open sockets at once; one made behind its
+    // back, by the command line tool on the same data directory, at the next check.
     lifecycle.add(
-      'websocket',
-      attachWebSocket(app.server, {
-        registry,
-        bus,
-        // The shell is no bundle; it connects under the server's own name.
-        bundleExists: (name) => name === SYSTEM_BUNDLE || manager.isRunning(name),
-        policy,
-        resolvePrincipal,
-        allowedOrigins: config.allowedOrigins,
-        logger,
-      }),
+      'access changes',
+      auth.onChange(() => sockets.recheck()),
     );
+    const recheck = setInterval(
+      () => sockets.recheck(),
+      options.socketRecheckMs ?? SOCKET_RECHECK_MS,
+    );
+    recheck.unref();
+    lifecycle.add('socket check', () => clearInterval(recheck));
     await app.listen({ port: config.port, host: config.host });
 
     const { port } = app.server.address() as AddressInfo;
     const urlHost = config.host.includes(':') ? `[${config.host}]` : config.host;
+    const url = `http://${urlHost}:${port}`;
+    const warning = bindingWarning(config);
+    if (warning !== undefined) logger.warn(warning);
+    const setupCode = auth.setupCode();
+    const setupUrl = setupCode === undefined ? undefined : `${url}/setup?code=${setupCode}`;
+    if (setupUrl !== undefined) {
+      logger.info(`No user exists yet. Create the first administrator at ${setupUrl}`);
+    }
     return {
       port,
-      url: `http://${urlHost}:${port}`,
+      url,
+      auth,
+      storage,
+      logger,
+      setupUrl,
+      recheckSockets: () => sockets.recheck(),
       get bundles() {
         return manager.list();
       },

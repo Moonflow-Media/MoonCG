@@ -63,6 +63,8 @@ export interface ExtensionServices {
   readonly policy?: Policy | undefined;
   /** How long a route handler may take. */
   readonly httpTimeoutMs?: number | undefined;
+  /** Answers an extension's question whether a principal holds a permission of its bundle. */
+  readonly checkPermission?: ((principal: string, permission: string) => boolean) | undefined;
 }
 
 /**
@@ -86,6 +88,7 @@ export function connectExtension(
     bundleExists: (name) => name === spec.bundle,
     send,
     onError: (error) => log.error(`Failed to handle a message: ${errorMessage(error)}`),
+    checkPermission: services.checkPermission,
     extension: {
       capabilities: spec.capabilities,
       permissions: spec.permissions,

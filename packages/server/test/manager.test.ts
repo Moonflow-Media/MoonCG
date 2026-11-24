@@ -172,8 +172,16 @@ describe('BundleManager.start', () => {
     expect(manager.isRunning('lib')).toBe(true);
     expect(manager.isRunning('nope')).toBe(false);
     expect(registry.get('system:bundles')).toMatchObject({
+      readPermission: 'system:bundles.manage',
+      readOnly: true,
+    });
+    // What everyone with the dashboard may follow tells only that something changed.
+    expect(registry.get('system:revision')).toMatchObject({
       readPermission: 'system:dashboard.view',
       readOnly: true,
+    });
+    expect(registry.get('system:revision')?.replicant.value).toEqual({
+      bundles: expect.any(Number),
     });
     expect(registry.get('system:bundles')?.replicant.value).toEqual([
       { name: 'app', state: 'running', version: '1.0.0', errors: [] },

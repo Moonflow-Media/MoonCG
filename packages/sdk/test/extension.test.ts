@@ -67,11 +67,12 @@ function setup(capabilities: string[] = ['http.routes']) {
       params: match.params,
       query: {},
       headers: {},
+      sender: { principal: 'tester', kind: 'user', bundle: 'demo' },
       body: null,
       ...request,
     });
   };
-  const sender = { principal: 'tester', bundle: 'demo' };
+  const sender = { principal: 'tester', kind: 'user', bundle: 'demo' } as const;
   return { context, dispose, session, replicant, bus, routes, lines, call, sender };
 }
 
@@ -114,7 +115,7 @@ describe('createBundleContext', () => {
 
     expect(fromBus).toHaveBeenCalledExactlyOnceWith(
       { n: 1 },
-      { principal: 'extension:demo', bundle: 'demo' },
+      { principal: 'extension:demo', kind: 'extension', bundle: 'demo' },
     );
     expect(heard).toHaveBeenCalledExactlyOnceWith('now', { sender });
   });

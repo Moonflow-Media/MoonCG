@@ -39,7 +39,7 @@ function setup(
     capabilities,
     permissions: [],
   });
-  const sender = { principal: 'tester', bundle: 'demo' };
+  const sender = { principal: 'tester', kind: 'user', bundle: 'demo' } as const;
   const get = (path: string) => {
     const match = routes.match('demo', 'GET', path);
     if (!match) throw new Error(`No route for ${path}`);
@@ -49,6 +49,7 @@ function setup(
       params: match.params,
       query: {},
       headers: {},
+      sender: { principal: 'tester', kind: 'user', bundle: 'demo' },
       body: null,
     });
   };
@@ -139,8 +140,9 @@ describe.each([
       const without = setup(create);
       await expect(without.host.start(spec('full.js', []))).rejects.toThrow(/http\.routes/);
 
+      // Under a policy that grants it nothing, its own bundle is not there for it.
       const denied = setup(create, { policy: { roles: {} } });
-      await expect(denied.host.start(denied.spec('full.js'))).rejects.toThrow(/permission/i);
+      await expect(denied.host.start(denied.spec('full.js'))).rejects.toThrow(/not running/i);
 
       function spec(file: string, capabilities: string[]) {
         return without.spec(file, capabilities);

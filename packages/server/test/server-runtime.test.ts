@@ -4,8 +4,9 @@ import { join } from 'node:path';
 import { createClient } from '@mooncg/sdk/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorkerHost } from '../src/extension-host/worker-host.js';
+import { resolveLocalAdmin } from '../src/http/identity.js';
 import { type RunningServer, startServer } from '../src/server.js';
-import { memoryLogger } from './helpers.js';
+import { memoryLogger, testConfig } from './helpers.js';
 import { manifest, temporaryBundles } from './temp-bundles.js';
 
 const WORKER_BOOTSTRAP = new URL('./worker-bootstrap.mjs', import.meta.url);
@@ -62,24 +63,12 @@ async function temporaryData(): Promise<string> {
 /** A server whose extensions run in real worker threads, storing to SQLite. */
 async function start(bundlesDir: string, dataDir: string) {
   const { logger, lines } = memoryLogger();
-  const server = await startServer(
-    {
-      port: 0,
-      host: '127.0.0.1',
-      bundlesDir,
-      dataDir,
-      allowedOrigins: [],
-      extensionMemoryMb: 128,
-      extensionStartTimeoutMs: 10_000,
-      extensionHeartbeatTimeoutMs: 10_000,
-      maxBodyBytes: 1024 * 1024,
-    },
-    {
-      logger,
-      sdkFile: undefined,
-      createHost: (services) => new WorkerHost({ ...services, bootstrap: WORKER_BOOTSTRAP }),
-    },
-  );
+  const server = await startServer(testConfig({ bundlesDir, dataDir }), {
+    logger,
+    sdkFile: undefined,
+    resolvePrincipal: resolveLocalAdmin,
+    createHost: (services) => new WorkerHost({ ...services, bootstrap: WORKER_BOOTSTRAP }),
+  });
   let closed = false;
   const close = async () => {
     if (!closed) await server.close();

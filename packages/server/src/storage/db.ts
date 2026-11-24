@@ -12,22 +12,23 @@ export interface Db {
 }
 
 /**
- * How long a statement waits for a database file another connection has locked, such as a
- * backup tool reading it, before it fails.
+ * How long a statement waits for a database file another connection has locked, such as the
+ * `mooncg` command line tool or a backup tool, before it fails.
  */
 export const BUSY_TIMEOUT_MS = 5000;
 
 /** The module is loaded once per process, so its warning is dealt with exactly once. */
-let sqlite: Promise<typeof import('node:sqlite')> | undefined;
+let sqlite: typeof import('node:sqlite') | undefined;
 
 /**
  * Opens a SQLite database with Node's built-in `node:sqlite`. `file` is a path or `:memory:`.
+ * Foreign keys are enforced, so what belongs to a deleted row goes with it.
  */
-export async function openSqliteDb(file: string): Promise<Db> {
-  sqlite ??= importSqlite();
-  const { DatabaseSync } = await sqlite;
-  const database = new DatabaseSync(file);
+export function openSqliteDbSync(file: string): Db {
+  sqlite ??= loadSqlite();
+  const database = new sqlite.DatabaseSync(file);
   database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  database.exec('PRAGMA foreign_keys = ON');
   return {
     exec: (sql) => database.exec(sql),
     run: (sql, ...params) => {
@@ -42,12 +43,16 @@ export async function openSqliteDb(file: string): Promise<Db> {
   };
 }
 
+export async function openSqliteDb(file: string): Promise<Db> {
+  return openSqliteDbSync(file);
+}
+
 /**
  * `node:sqlite` works without a flag on Node 22 but announces itself with an
  * `ExperimentalWarning` when it is first loaded. Only that one warning is held back, and only
  * while the module loads; every other warning passes through.
  */
-async function importSqlite(): Promise<typeof import('node:sqlite')> {
+function loadSqlite(): typeof import('node:sqlite') {
   const emitWarning = process.emitWarning;
   process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
     const message = typeof warning === 'string' ? warning : warning.message;
@@ -55,7 +60,7 @@ async function importSqlite(): Promise<typeof import('node:sqlite')> {
     (emitWarning as (...args: unknown[]) => void).call(process, warning, ...rest);
   }) as typeof process.emitWarning;
   try {
-    return await import('node:sqlite');
+    return process.getBuiltinModule('node:sqlite');
   } finally {
     process.emitWarning = emitWarning;
   }
@@ -67,22 +72,31 @@ async function importSqlite(): Promise<typeof import('node:sqlite')> {
  * Never edit a migration that has shipped: add a new one.
  */
 export function migrate(db: Db, migrations: readonly string[]): number {
-  const current = db.all<{ user_version: number }>('PRAGMA user_version')[0]?.user_version ?? 0;
-  if (current > migrations.length) {
-    throw new Error(
-      `The database is at version ${current}, which is newer than this server (${migrations.length})`,
-    );
-  }
-  for (let version = current; version < migrations.length; version++) {
-    db.exec('BEGIN');
+  for (;;) {
+    // The write lock is taken before the version is read, for every step: two processes
+    // that open an old database at the same moment migrate it one after the other, and the
+    // second finds nothing left to do.
+    db.exec('BEGIN IMMEDIATE');
     try {
-      db.exec(migrations[version] as string);
-      db.exec(`PRAGMA user_version = ${version + 1}`);
+      const version = db.all<{ user_version: number }>('PRAGMA user_version')[0]?.user_version ?? 0;
+      if (version > migrations.length) {
+        throw new Error(
+          `The database is at version ${version}, which is newer than this server (${migrations.length})`,
+        );
+      }
+      if (version < migrations.length) {
+        try {
+          db.exec(migrations[version] as string);
+        } catch (error) {
+          throw new Error(`Database migration ${version + 1} failed: ${errorMessage(error)}`);
+        }
+        db.exec(`PRAGMA user_version = ${version + 1}`);
+      }
       db.exec('COMMIT');
+      if (version >= migrations.length) return migrations.length;
     } catch (error) {
       db.exec('ROLLBACK');
-      throw new Error(`Database migration ${version + 1} failed: ${errorMessage(error)}`);
+      throw error;
     }
   }
-  return migrations.length;
 }

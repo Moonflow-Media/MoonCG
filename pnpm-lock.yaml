@@ -26,6 +26,9 @@ importers:
       '@mooncg/core':
         specifier: workspace:*
         version: link:../core
+      '@mooncg/server':
+        specifier: workspace:*
+        version: link:../server
 
   packages/core:
     dependencies:

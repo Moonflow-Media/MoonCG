@@ -8,6 +8,7 @@ import {
   bundlePermission,
   type Policy,
   type Principal,
+  SYSTEM_BUNDLE,
 } from '../permissions/authorize.js';
 import {
   type BundleAccess,
@@ -64,6 +65,11 @@ export interface SessionOptions {
   readonly timers?: Timers | undefined;
   /** Present when the connection is a bundle's extension. */
   readonly extension?: ExtensionAccess | undefined;
+  /**
+   * Whether the principal with that id holds the permission right now. It answers an
+   * extension's `perm.check`; without it every check is answered with no.
+   */
+  readonly checkPermission?: ((principal: string, permission: string) => boolean) | undefined;
 }
 
 /** What a connection currently holds on the server. All of it is released by `close()`. */
@@ -128,6 +134,20 @@ export function createSession(options: SessionOptions): Session {
     }
   };
 
+  /**
+   * Whether the principal holds anything of the bundle a name (`bundle` or `bundle:name`)
+   * belongs to. What belongs to a bundle the principal holds nothing of is answered exactly
+   * like something that does not exist, so nothing tells which bundles are installed. The
+   * server's own namespace is guarded by system permissions instead.
+   */
+  const sees = (name: string) => {
+    const at = name.indexOf(NAMESPACE_SEPARATOR);
+    const target = at < 0 ? name : name.slice(0, at);
+    return (
+      target === SYSTEM_BUNDLE || authorize(principal, bundlePermission(target, undefined), policy)
+    );
+  };
+
   /** An extension reaches other bundles only with the capability its manifest asked for. */
   const reaches = (name: string, access: BundleAccess, ownBundle: string, id: number) => {
     const target = name.slice(0, name.indexOf(NAMESPACE_SEPARATOR));
@@ -152,7 +172,7 @@ export function createSession(options: SessionOptions): Session {
   ): { name: string; entry: ReplicantEntry } | undefined => {
     const name = qualifyReplicantName(request.name, ownBundle);
     const entry = registry.get(name);
-    if (!entry) {
+    if (!entry || !sees(name)) {
       fail('not_found', `Replicant "${name}" is not declared`, request.id);
       return undefined;
     }
@@ -249,11 +269,15 @@ export function createSession(options: SessionOptions): Session {
     const { id } = request;
     const name = qualifyReplicantName(request.name, ownBundle);
     const topic = messageBus.get(name);
-    if (!topic) {
+    if (!topic || !sees(name)) {
       fail('not_found', `Message "${name}" is not declared`, id);
       return;
     }
-    const sender: Sender = { principal: principal.id, bundle: ownBundle };
+    const sender: Sender = {
+      principal: principal.id,
+      kind: principal.kind ?? 'user',
+      bundle: ownBundle,
+    };
     switch (request.t) {
       case 'msg.sub':
         if (!reaches(name, 'read', ownBundle, id) || !permits(topic.listenPermission, id)) return;
@@ -346,6 +370,19 @@ export function createSession(options: SessionOptions): Session {
     send({ t: 'ok', id });
   };
 
+  const check = (request: Extract<ClientMessage, { t: 'perm.check' }>, ownBundle: string) => {
+    const { id, permission } = request;
+    if (!extension) {
+      fail('forbidden', 'Only a bundle extension can check permissions', id);
+    } else if (!extension.permissions.includes(permission)) {
+      fail('bad_request', `Permission "${permission}" is not declared by the bundle`, id);
+    } else {
+      const wanted = bundlePermission(ownBundle, permission);
+      const allowed = options.checkPermission?.(request.principal, wanted) ?? false;
+      send({ t: 'perm.res', id, allowed });
+    }
+  };
+
   const answer = (msg: Extract<ClientMessage, { call: number }>) => {
     if (!extension) {
       fail('forbidden', 'Only a bundle extension answers calls');
@@ -361,7 +398,7 @@ export function createSession(options: SessionOptions): Session {
       if (bundle !== undefined) fail('bad_request', 'hello was already sent');
       else if (msg.v !== PROTOCOL_VERSION) {
         fail('bad_request', `Unsupported protocol version ${msg.v}, expected ${PROTOCOL_VERSION}`);
-      } else if (!options.bundleExists(msg.bundle)) {
+      } else if (!options.bundleExists(msg.bundle) || !sees(msg.bundle)) {
         fail('not_found', `Bundle "${msg.bundle}" is not running`);
       } else {
         bundle = msg.bundle;
@@ -375,6 +412,7 @@ export function createSession(options: SessionOptions): Session {
     else if (msg.t === 'rep.op') applyOp(msg, bundle);
     else if (msg.t === 'call.ok' || msg.t === 'call.err') answer(msg);
     else if (msg.t === 'http.route') route(msg, bundle);
+    else if (msg.t === 'perm.check') check(msg, bundle);
     else if (bus) messages(msg, bundle, bus);
     else fail('bad_request', 'This server has no messages', msg.id);
   };

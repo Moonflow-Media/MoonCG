@@ -19,6 +19,8 @@ describe('loadConfig', () => {
       extensionStartTimeoutMs: 10000,
       extensionHeartbeatTimeoutMs: 10000,
       maxBodyBytes: 1048576,
+      secureCookies: false,
+      trustProxy: false,
     });
   });
 
@@ -34,6 +36,8 @@ describe('loadConfig', () => {
       extensionStartTimeoutMs: 10000,
       extensionHeartbeatTimeoutMs: 10000,
       maxBodyBytes: 1048576,
+      secureCookies: false,
+      trustProxy: false,
     });
   });
 
@@ -50,6 +54,8 @@ describe('loadConfig', () => {
       extensionStartTimeoutMs: 10000,
       extensionHeartbeatTimeoutMs: 10000,
       maxBodyBytes: 1048576,
+      secureCookies: false,
+      trustProxy: false,
     });
   });
 

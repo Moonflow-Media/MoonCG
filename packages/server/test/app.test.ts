@@ -1,8 +1,8 @@
-import { type Policy, type Principal, ReplicantRegistry } from '@mooncg/core';
+import { ANONYMOUS_PRINCIPAL, type Policy, type Principal, ReplicantRegistry } from '@mooncg/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadBundles } from '../src/bundles/bundles.js';
 import { InlineHost } from '../src/extension-host/inline-host.js';
-import { type AppOptions, createApp } from '../src/http/app.js';
+import { type AppOptions, createApp, resolveLocalAdmin } from '../src/http/app.js';
 import { fixture, memoryLogger } from './helpers.js';
 
 const apps: { close(): Promise<unknown> }[] = [];
@@ -19,7 +19,12 @@ async function setup(overrides: Partial<AppOptions> = {}) {
     host: new InlineHost({ registry, logger }),
     logger,
   });
-  const app = await createApp({ bundles, sdkFile: fixture('sdk/mooncg.js'), ...overrides });
+  const app = await createApp({
+    resolvePrincipal: resolveLocalAdmin,
+    bundles,
+    sdkFile: fixture('sdk/mooncg.js'),
+    ...overrides,
+  });
   apps.push(app);
   return app;
 }
@@ -88,9 +93,12 @@ describe('GET /api/v1/bundles', () => {
 
   it('leaves out panels and graphics the principal may not use', async () => {
     const app = await setup(asViewer);
-    const { bundles } = (await app.inject({ url: '/api/v1/bundles' })).json();
-    expect(bundles[2].panels).toEqual([]);
-    expect(bundles[2].graphics).toHaveLength(1);
+    const { bundles, canManage } = (await app.inject({ url: '/api/v1/bundles' })).json();
+    // Of the bundles, the viewer holds a permission of `good` only, so that is all it is shown.
+    expect(bundles.map((bundle: { name: string }) => bundle.name)).toEqual(['good']);
+    expect(bundles[0].panels).toEqual([]);
+    expect(bundles[0].graphics).toHaveLength(1);
+    expect(canManage).toBe(false);
   });
 });
 
@@ -148,18 +156,25 @@ describe('GET /sdk/mooncg.js', () => {
 });
 
 describe('authorization', () => {
+  it.each([['/'], ['/shell.js'], ['/api/v1/bundles']])(
+    'answers 403 for %s without any grant',
+    async (url) => {
+      const app = await setup(asNobody);
+      const response = await app.inject({ url });
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ error: { code: 'forbidden' } });
+    },
+  );
+
   it.each([
-    ['/'],
-    ['/shell.js'],
-    ['/api/v1/bundles'],
-    ['/sdk/mooncg.js'],
     ['/b/good/dashboard/control.html'],
+    ['/b/good/dashboard/style.css'],
     ['/b/good/graphics/overlay.html'],
-  ])('answers 403 for %s without any grant', async (url) => {
+  ])('answers 404 for %s to whoever holds nothing of the bundle', async (url) => {
     const app = await setup(asNobody);
     const response = await app.inject({ url });
-    expect(response.statusCode).toBe(403);
-    expect(response.json()).toMatchObject({ error: { code: 'forbidden' } });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual((await app.inject({ url: '/b/absent/x/y.html' })).json());
   });
 
   it('checks the permission a panel or graphic requires', async () => {
@@ -168,8 +183,26 @@ describe('authorization', () => {
     expect((await app.inject({ url: '/b/good/dashboard/control.html' })).statusCode).toBe(403);
   });
 
-  it('requires the implicit bundle permission for files no panel or graphic names', async () => {
+  it('opens files no panel or graphic names to whoever holds a permission of the bundle', async () => {
     const app = await setup(asViewer);
-    expect((await app.inject({ url: '/b/good/dashboard/style.css' })).statusCode).toBe(403);
+    expect((await app.inject({ url: '/b/good/dashboard/style.css' })).statusCode).toBe(200);
+  });
+
+  it('serves the SDK to anyone who is signed in, and refuses everything to who is not', async () => {
+    const signedIn = await setup(asNobody);
+    expect((await signedIn.inject({ url: '/sdk/mooncg.js' })).statusCode).toBe(200);
+    const anonymous = await setup({ resolvePrincipal: () => ANONYMOUS_PRINCIPAL });
+    for (const url of ['/', '/sdk/mooncg.js', '/api/v1/bundles', '/b/good/graphics/overlay.html']) {
+      const response = await anonymous.inject({ url });
+      expect(response.statusCode, url).toBe(401);
+      expect(response.json()).toMatchObject({ error: { code: 'forbidden' } });
+    }
+  });
+
+  it('refuses everyone when neither accounts nor a principal are given', async () => {
+    const app = await createApp({ bundles: [], sdkFile: undefined });
+    apps.push(app);
+    expect((await app.inject({ url: '/api/v1/bundles' })).statusCode).toBe(401);
+    expect((await app.inject({ url: '/sdk/mooncg.js' })).statusCode).toBe(401);
   });
 });

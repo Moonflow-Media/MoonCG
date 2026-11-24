@@ -118,7 +118,12 @@ await ctx.handle('reset', async (data, { sender }) => 'done');
   message has one handler. Throw a `MoonCGError` (from `@mooncg/sdk/extension`) to reject with a
   code of your choice; anything else reaches the caller as `internal`, and the details go to
   the log.
-- `sender` is `{ principal, bundle }`: who sent it, and from which bundle's page or extension.
+- `sender` is `{ principal, kind, bundle }`: who sent it (`user:<id>`, `token:<id>` or
+  `extension:<bundle>`), what kind of principal that is (`user`, `token` or `extension`), and
+  from which bundle's page or extension.
+- `await ctx.permissions.check(sender, 'operate')` tells whether that sender holds a permission
+  of your bundle right now. Use it for decisions inside a handler; see
+  [permissions.md](permissions.md#extensions).
 - Data is JSON, with the same limits as replicant values.
 - The manifest's `send` and `listen` permissions decide who may send or request, and who may
   listen. They apply to pages; an extension is limited by its capabilities instead.
@@ -143,13 +148,19 @@ await ctx.http.post(
 
 - Methods: `get`, `post`, `put`, `patch`, `delete`. A path is `/` or segments of literal text
   and `:name` parameters.
-- The handler gets `{ method, path, params, query, headers, body, text(), json() }`. `body` is
+- The handler gets `{ method, path, params, query, headers, sender, body, text(), json() }`.
+  `sender` is who calls, `{ principal, kind, bundle }` as for a message, so
+  `await ctx.permissions.check(request.sender, 'operate')` decides inside a handler. `body` is
   the whole body as a `Uint8Array`, at most 1 MiB unless the server is configured otherwise.
   `json()` fails the request with status 400 if the body is not JSON.
 - It returns `{ status?, headers?, body? }`. A string body is sent as text, a `Uint8Array` as
   bytes, anything else as JSON; `status` defaults to 200.
-- A caller needs the bundle's `access` permission, or the manifest permission named in
-  `permission`.
+- A caller needs the manifest permission named in `permission`; without one, any permission of
+  the bundle. The caller is checked before the handler runs, with a session cookie or an API
+  token (`Authorization: Bearer mcg_…`). The handler does not see the `Authorization` and
+  `Cookie` headers.
+- A request that changes something and comes with a session cookie must carry JSON or the
+  header `X-MoonCG-CSRF`; see [permissions.md](permissions.md#request-forgery).
 - A handler that returns nothing answers an empty 200. Anything that is not such an object, a
   status outside 200 to 599, a body that is not JSON, or a header with a line break in it
   answers 500.
@@ -209,7 +220,8 @@ the capability the call is rejected with `forbidden`.
 | `http.routes`         | Registering HTTP routes                                             |
 
 `<name>` may be `*`. Capabilities limit the extension; permissions limit the people using the
-bundle. Bundles are still trusted code: a worker thread is isolation against accidents, not a
+bundle. An extension that reaches into another bundle needs the capability and nothing else:
+it is not checked against that bundle's user permissions. Bundles are still trusted code: a worker thread is isolation against accidents, not a
 sandbox.
 
 To use another bundle, also list it under `dependencies` with a version range. MoonCG starts a

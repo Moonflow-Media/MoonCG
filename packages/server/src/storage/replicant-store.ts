@@ -1,7 +1,8 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Json } from '@mooncg/core';
-import { type Db, migrate, openSqliteDb } from './db.js';
+import { AUTH_MIGRATION, type AuthStore, sqlAuthStore } from './auth-store.js';
+import { type Db, migrate, openSqliteDb, openSqliteDbSync } from './db.js';
 
 export const DATABASE_FILE = 'mooncg.db';
 
@@ -16,6 +17,7 @@ export const MIGRATIONS: readonly string[] = [
    )`,
   // Bundles are enabled unless listed here.
   'CREATE TABLE disabled_bundles (name TEXT NOT NULL PRIMARY KEY)',
+  AUTH_MIGRATION,
 ];
 
 export interface StoredReplicant {
@@ -121,14 +123,22 @@ export interface BundleSettingsStore {
 export interface Storage {
   readonly replicants: ReplicantStore;
   readonly bundles: BundleSettingsStore;
+  /** Users, roles, tokens and sessions. */
+  readonly auth: AuthStore;
   close(): Promise<void>;
 }
 
-/** Keeps everything in memory. For tests. */
+/**
+ * Keeps everything in memory. For tests. Accounts and permissions live in an in-memory SQLite
+ * database with the real schema, so the tests run the same statements as production.
+ */
 export function memoryStorage(): Storage {
   const disabled = new Set<string>();
+  const db = openSqliteDbSync(':memory:');
+  migrate(db, MIGRATIONS);
   return {
     replicants: new MemoryReplicantStore(),
+    auth: sqlAuthStore(db),
     bundles: {
       disabled: async () => [...disabled].sort(),
       async setDisabled(bundle, value) {
@@ -136,7 +146,7 @@ export function memoryStorage(): Storage {
         else disabled.delete(bundle);
       },
     },
-    close: async () => {},
+    close: async () => db.close(),
   };
 }
 
@@ -147,6 +157,7 @@ export async function openSqliteStorage(dataDir: string): Promise<Storage> {
   const replicants = SqliteReplicantStore.create(db);
   return {
     replicants,
+    auth: sqlAuthStore(db),
     bundles: {
       disabled: async () =>
         db

@@ -23,7 +23,8 @@ export default async function start(ctx) {
   // The panel's reset button asks for this with `mc.request('reset')`.
   await ctx.handle('reset', async (_data, { sender }) => {
     await score.set({ home: 0, away: 0 });
-    ctx.log.info(`Score reset by ${sender.principal}`);
+    // `sender.kind` tells a signed-in user from an API token or another bundle's extension.
+    ctx.log.info(`Score reset by ${sender.kind} ${sender.principal}`);
     return score.value;
   });
 

@@ -106,6 +106,11 @@ export interface Connection extends MoonCGClient {
     handler: RouteHandler,
     permission?: string,
   ): Promise<void>;
+  /**
+   * Asks the server whether a principal holds a permission of the own bundle, named as in
+   * the bundle manifest.
+   */
+  checkPermission(principal: string, permission: string): Promise<boolean>;
 }
 
 export interface ConnectionOptions extends ClientOptions {
@@ -406,6 +411,9 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
       case 'msg.res':
         settle(msg.id, msg.data);
         return;
+      case 'perm.res':
+        settle(msg.id, msg.allowed);
+        return;
       case 'err': {
         const error = new MoonCGError(msg.code, msg.message);
         if (msg.id === undefined) {
@@ -581,6 +589,10 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
           : { t: 'http.route', id, method, pattern, permission };
       });
       routes.set(route, handler);
+    },
+    async checkPermission(principal, permission) {
+      await ready.promise;
+      return ask<boolean>((id) => ({ t: 'perm.check', id, principal, permission }));
     },
     close: () => stop(new MoonCGError('disconnected', 'The client was closed')),
   };

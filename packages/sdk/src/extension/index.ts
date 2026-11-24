@@ -6,6 +6,7 @@ import {
   type Json,
   jsonProblem,
   MoonCGError,
+  type Sender,
 } from '@mooncg/core';
 import type {
   Connection,
@@ -43,6 +44,11 @@ export interface HttpRequest {
   readonly query: Readonly<Record<string, string>>;
   /** Header names are lowercase. */
   readonly headers: Readonly<Record<string, string>>;
+  /**
+   * Who is calling: the same shape as the sender of a message, so it can be handed to
+   * `ctx.permissions.check`. The server has already checked the route's own permission.
+   */
+  readonly sender: Sender;
   /** The whole body, or `undefined` without one. */
   readonly body: Uint8Array | undefined;
   /** The body as UTF-8 text. */
@@ -66,7 +72,7 @@ export type HttpHandler = (request: HttpRequest) => HttpResponse | Promise<HttpR
 export interface RouteOptions {
   /**
    * A permission declared in the bundle manifest that a caller needs. Without it the route
-   * needs the bundle's general `access` permission.
+   * is open to whoever holds any permission of the bundle.
    */
   readonly permission?: string;
 }
@@ -83,6 +89,16 @@ export interface BundleHttp {
   readonly put: RegisterRoute;
   readonly patch: RegisterRoute;
   readonly delete: RegisterRoute;
+}
+
+/** Lets an extension apply its bundle's permissions to whoever sent a message. */
+export interface BundlePermissions {
+  /**
+   * Whether a sender holds a permission of this bundle right now. `permission` is a name
+   * from the bundle manifest, such as `operate`. Another bundle's extension always does:
+   * installed bundles are trusted code, limited by their capabilities.
+   */
+  check(sender: Sender, permission: string): Promise<boolean>;
 }
 
 /**
@@ -102,6 +118,7 @@ export interface BundleContext extends Messaging {
    */
   handle(name: string, handler: RequestHandler): Promise<() => void>;
   readonly http: BundleHttp;
+  readonly permissions: BundlePermissions;
   /** Registers cleanup to run when the extension stops. Callbacks run in reverse order. */
   onDispose(dispose: () => void | Promise<void>): void;
 }
@@ -151,6 +168,9 @@ export function createBundleContext(options: BundleContextOptions): {
       put: register('PUT'),
       patch: register('PATCH'),
       delete: register('DELETE'),
+    },
+    permissions: {
+      check: (sender, permission) => connection.checkPermission(sender.principal, permission),
     },
     onDispose: (dispose) => {
       disposers.push(dispose);
@@ -244,6 +264,7 @@ function toRequest(data: HttpRequestData): HttpRequest {
     params: data.params,
     query: data.query,
     headers: data.headers,
+    sender: data.sender,
     body,
     text,
     json() {

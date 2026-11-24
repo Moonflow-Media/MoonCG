@@ -11,7 +11,7 @@ const route = (overrides: Partial<Route> = {}): Route => ({
   bundle: 'scoreboard',
   method: 'GET',
   pattern: '/score',
-  permission: 'bundle:scoreboard:access',
+  permission: 'bundle:scoreboard:?',
   invoke: respond,
   ...overrides,
 });

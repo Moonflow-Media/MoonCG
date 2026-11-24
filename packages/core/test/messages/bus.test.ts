@@ -34,7 +34,7 @@ function fakeTimers() {
   };
 }
 
-const sender: Sender = { principal: 'local', bundle: 'scoreboard' };
+const sender: Sender = { principal: 'local', kind: 'user', bundle: 'scoreboard' };
 
 function setup() {
   const clock = fakeTimers();
@@ -55,8 +55,8 @@ describe('MessageBus topics', () => {
       listenPermission: 'bundle:scoreboard:view',
     });
     expect(bus.get('scoreboard:open')).toMatchObject({
-      sendPermission: 'bundle:scoreboard:access',
-      listenPermission: 'bundle:scoreboard:access',
+      sendPermission: 'bundle:scoreboard:?',
+      listenPermission: 'bundle:scoreboard:?',
     });
     expect(bus.get('scoreboard:nope')).toBeUndefined();
     expect(() => bus.declare('scoreboard', 'reset', {})).toThrow(/already declared/);

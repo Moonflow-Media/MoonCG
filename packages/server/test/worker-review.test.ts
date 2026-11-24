@@ -11,7 +11,7 @@ import {
   WorkerHost,
   type WorkerHostOptions,
 } from '../src/extension-host/worker-host.js';
-import { createApp } from '../src/http/app.js';
+import { createApp, resolveLocalAdmin } from '../src/http/app.js';
 import { fixture, memoryLogger } from './helpers.js';
 import { manifest, temporaryBundles } from './temp-bundles.js';
 
@@ -56,7 +56,7 @@ function setup(options: Partial<WorkerHostOptions> = {}) {
     capabilities: ['http.routes'],
     permissions: [],
   });
-  const sender = { principal: 'tester', bundle: 'demo' };
+  const sender = { principal: 'tester', kind: 'user', bundle: 'demo' } as const;
   const counts = () => ({
     registry: registry.stats(),
     bus: bus.stats(),
@@ -306,6 +306,7 @@ describe('an extension outside the workspace', () => {
         params: match.params,
         query: {},
         headers: {},
+        sender: { principal: 'tester', kind: 'user', bundle: 'demo' },
         body: null,
       });
 
@@ -352,6 +353,7 @@ describe('BundleManager with worker threads', () => {
     cleanup.push(() => manager.close());
     await manager.start();
     const app = await createApp({
+      resolvePrincipal: resolveLocalAdmin,
       bundles: () => manager.list(),
       routes,
       lifecycle: manager,
@@ -395,7 +397,7 @@ describe('BundleManager with worker threads', () => {
       await vi.waitFor(() => expect(manager.get('demo')?.state).toBe('running'), WAIT);
       await vi.waitFor(() => expect(host.stats().threads.live).toBe(1), WAIT);
 
-      bus.publish('demo:do', null, { principal: 'tester', bundle: 'demo' });
+      bus.publish('demo:do', null, { principal: 'tester', kind: 'user', bundle: 'demo' });
       const reloaded = await manager.reload('demo');
       await manager.idle();
       await vi.waitFor(() => expect(manager.get('demo')?.state).toBe('running'), WAIT);
@@ -419,7 +421,11 @@ describe('BundleManager with worker threads', () => {
       }`;
       const { manager, bus, app } = await managed(bundle(never, { double: {} }));
       const viaHttp = app.inject({ url: '/b/demo/api/never' });
-      const viaBus = bus.request('demo:double', 1, { principal: 'tester', bundle: 'demo' });
+      const viaBus = bus.request('demo:double', 1, {
+        principal: 'tester',
+        kind: 'user',
+        bundle: 'demo',
+      });
       viaBus.catch(() => {});
       await new Promise((resolve) => setTimeout(resolve, 200));
 

@@ -42,7 +42,7 @@ function setup() {
     bundle: { name: 'demo', version: '1.0.0' },
     log,
   });
-  const sender = { principal: 'tester', bundle: 'demo' };
+  const sender = { principal: 'tester', kind: 'user', bundle: 'demo' } as const;
   const ask = () => bus.request('demo:ask', null, sender, 300);
   const get = (path: string) => {
     const match = routes.match('demo', 'GET', path);
@@ -53,6 +53,7 @@ function setup() {
       params: match.params,
       query: {},
       headers: {},
+      sender: { principal: 'tester', kind: 'user', bundle: 'demo' },
       body: null,
     });
   };

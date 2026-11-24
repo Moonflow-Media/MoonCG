@@ -10,6 +10,7 @@ export default defineConfig({
       '@mooncg/core': src('./packages/core/src/index.ts'),
       '@mooncg/sdk/client': src('./packages/sdk/src/client/index.ts'),
       '@mooncg/sdk/extension': src('./packages/sdk/src/extension/index.ts'),
+      '@mooncg/server/accounts': src('./packages/server/src/accounts.ts'),
     },
   },
   test: {

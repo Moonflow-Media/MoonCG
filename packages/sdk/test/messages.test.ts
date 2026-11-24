@@ -34,7 +34,7 @@ function extensionConnection() {
   return { connection, socket, errors };
 }
 
-const sender = { principal: 'op', bundle: 'scoreboard' };
+const sender = { principal: 'op', kind: 'user', bundle: 'scoreboard' } as const;
 
 describe('client.send', () => {
   it('publishes to a topic and resolves when the server confirms', async () => {
@@ -267,6 +267,7 @@ describe('extension-only connection features', () => {
       params: { id: '7' },
       query: {},
       headers: {},
+      sender: { principal: 'tester', kind: 'user', bundle: 'demo' },
       body: null,
     };
     const handler = vi.fn(async () => ({ status: 200, headers: {}, body: 'eA==' }));
@@ -295,6 +296,7 @@ describe('extension-only connection features', () => {
     const registering = connection.route('GET', '/x', async () => ({
       status: 200,
       headers: {},
+      sender: { principal: 'tester', kind: 'user', bundle: 'demo' },
       body: null,
     }));
     await tick();

@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorkerHost } from '../src/extension-host/worker-host.js';
+import { resolveLocalAdmin } from '../src/http/identity.js';
 import { startServer } from '../src/server.js';
 import { memoryStorage } from '../src/storage/replicant-store.js';
-import { memoryLogger } from './helpers.js';
+import { memoryLogger, testConfig } from './helpers.js';
 import { manifest, temporaryBundles } from './temp-bundles.js';
 
 const WORKER_BOOTSTRAP = new URL('./worker-bootstrap.mjs', import.meta.url);
@@ -33,20 +34,14 @@ async function start(startTimeoutMs: number) {
   const { logger } = memoryLogger();
   const began = Date.now();
   const server = await startServer(
-    {
-      port: 0,
-      host: '127.0.0.1',
+    testConfig({
       bundlesDir: await temporary.create(files()),
-      dataDir: 'unused',
-      allowedOrigins: [],
-      extensionMemoryMb: 128,
       extensionStartTimeoutMs: startTimeoutMs,
-      extensionHeartbeatTimeoutMs: 10_000,
-      maxBodyBytes: 1024 * 1024,
-    },
+    }),
     {
       logger,
       sdkFile: undefined,
+      resolvePrincipal: resolveLocalAdmin,
       storage: memoryStorage(),
       createHost: (services) =>
         new WorkerHost({ ...services, bootstrap: WORKER_BOOTSTRAP, startTimeoutMs }),

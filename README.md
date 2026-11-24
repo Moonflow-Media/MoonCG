@@ -5,10 +5,10 @@ A **bundle** brings dashboard panels, graphics for OBS or vMix, and an optional 
 extension. Bundles share state through **replicants**: values the server owns and syncs to every
 panel and graphic over a WebSocket.
 
-This repository is at its third milestone. It loads bundles from a folder, serves their panels
+This repository is at its fourth milestone. It loads bundles from a folder, serves their panels
 and graphics, syncs replicants and messages, runs each bundle's extension in its own worker
-thread, and can enable, disable and reload bundles while it runs. Authentication, live reload
-on file changes and the real dashboard come later.
+thread, can enable, disable and reload bundles while it runs, and has users, roles, permissions
+and API tokens. Live reload on file changes and the real dashboard come later.
 
 ## Run the example
 
@@ -21,15 +21,25 @@ pnpm start
 
 `pnpm start` builds the packages and starts the server with the bundles in `examples/`. Then:
 
-1. Open <http://127.0.0.1:9090/>. The shell lists the `scoreboard` bundle with its state,
-   embeds its panel and offers buttons to reload or disable it.
-2. Open <http://127.0.0.1:9090/b/scoreboard/graphics/overlay.html> in a second tab, or add it to
-   OBS as a 1920x1080 browser source.
-3. Click the buttons in the panel. The graphic follows.
-4. Open <http://127.0.0.1:9090/b/scoreboard/api/score> for the score as JSON, served by the
+1. On the first start the server prints a setup URL. Open it and create the first
+   administrator, then sign in at <http://127.0.0.1:9090/>.
+2. The shell lists the `scoreboard` bundle with its state, embeds its panel and offers buttons
+   to reload or disable it.
+3. Open <http://127.0.0.1:9090/b/scoreboard/graphics/overlay.html> in a second tab.
+4. Click the buttons in the panel. The graphic follows.
+5. Open <http://127.0.0.1:9090/b/scoreboard/api/score> for the score as JSON, served by the
    bundle's extension.
 
-The server only listens on loopback because there is no authentication yet.
+Nothing is served without signing in. For OBS, create an API token and put it into the URL of
+the browser source:
+
+```sh
+node packages/cli/dist/main.js token create OBS --user <you> --grant bundle:scoreboard:view
+# http://127.0.0.1:9090/b/scoreboard/graphics/overlay.html?token=mcg_…
+```
+
+[docs/permissions.md](docs/permissions.md) describes users, roles, permissions, tokens and the
+setup. The server listens on loopback unless started with `--host`.
 
 ## Configuration
 
@@ -44,20 +54,32 @@ The server only listens on loopback because there is no authentication yet.
 | `--max-body-bytes`                 | `MOONCG_MAX_BODY_BYTES`                 | `1048576`   | Largest request body a bundle HTTP route accepts   |
 | `--extension-start-timeout-ms`     | `MOONCG_EXTENSION_START_TIMEOUT_MS`     | `10000`     | How long an extension may take to start            |
 | `--extension-heartbeat-timeout-ms` | `MOONCG_EXTENSION_HEARTBEAT_TIMEOUT_MS` | `10000`     | How long a running extension may stay unresponsive |
+| `--secure-cookies`                 | `MOONCG_SECURE_COOKIES`                 | off         | Marks session cookies `Secure` (HTTPS only)        |
+| `--trust-proxy`                    | `MOONCG_TRUST_PROXY`                    | off         | Believes `X-Forwarded-Proto` and `X-Forwarded-For` |
 
 Flags win over environment variables. Relative paths resolve against the working directory.
 `--allowed-origin` can be repeated; the environment variable takes a comma-separated list.
+The two switches are on in the environment as `1` or `true`.
+
+`--host 0.0.0.0` opens the server to the network. It speaks plain HTTP, so on a network you do
+not fully trust put an HTTPS reverse proxy in front and start with `--secure-cookies
+--trust-proxy`; the server warns when it listens beyond loopback without secure cookies. See
+[docs/permissions.md](docs/permissions.md#listening-beyond-this-machine).
 
 A browser page may open the WebSocket, or send a request that changes something (anything but
 `GET` and `HEAD`), only if it was loaded from the server itself (its `Origin` matches the `Host`
 it connects to) or from an allowed origin. Clients that send no `Origin`, such as Node scripts,
-curl and OBS, are accepted. A WebSocket frame may be at most 1 MiB.
+curl and OBS, pass this check; they still need a session or a token. A request that changes
+something and is authenticated by a cookie must also carry JSON or the header `X-MoonCG-CSRF`.
+A WebSocket frame may be at most 1 MiB.
 
 The server listens as soon as it knows its bundles; their extensions start in the background,
 and a bundle shows as `enabling` until its extension has started.
 
 The data directory is created on first start. It holds `mooncg.db`, a SQLite database with the
-persistent replicants and the list of disabled bundles. Deleting it resets them to their defaults. `data/` is git-ignored.
+persistent replicants, the list of disabled bundles, and the users, roles, tokens and sessions.
+Deleting it resets all of that, and the next start offers the setup again. `data/` is
+git-ignored.
 
 To run the built server yourself:
 
@@ -83,10 +105,10 @@ TypeScript directly, so rebuild after changing sources. Tests need no build.
 | Path                  | Content                                                                                                                                               |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `packages/core`       | Pure logic without IO: manifest parser, replicant engine, message bus, route table, bundle state machine, wire protocol, permissions, session handler |
-| `packages/server`     | Config, logger and lifecycle, bundle manager, schema validation, storage, worker-thread extension host, HTTP and WebSocket transport                  |
+| `packages/server`     | Config, logger and lifecycle, bundle manager, schema validation, storage, accounts, worker-thread extension host, HTTP and WebSocket transport        |
 | `packages/sdk`        | What bundle authors use: `@mooncg/sdk/client` (browser and Node client), `/extension` (extension context), `/vue` and `/react` adapters               |
-| `docs/`               | `extensions.md` (the extension API, with notes for NodeCG authors) and `folder-structure.md`                                                          |
-| `packages/cli`        | The `mooncg` command line, for now only `mooncg types`                                                                                                |
+| `docs/`               | `permissions.md` (accounts, roles, tokens, setup), `extensions.md` (the extension API, with notes for NodeCG authors) and `folder-structure.md`       |
+| `packages/cli`        | The `mooncg` command line: `mooncg types`, `mooncg user` and `mooncg token`                                                                           |
 | `examples/scoreboard` | A reference bundle with one panel, one graphic and an extension                                                                                       |
 
 ## Writing a bundle

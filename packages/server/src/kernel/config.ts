@@ -24,6 +24,17 @@ export interface ServerConfig {
   readonly extensionHeartbeatTimeoutMs: number;
   /** The largest request body a bundle's HTTP route accepts, in bytes. */
   readonly maxBodyBytes: number;
+  /**
+   * Marks the session cookies `Secure`, so browsers send them over HTTPS only. Turn it on
+   * whenever people reach the server through HTTPS.
+   */
+  readonly secureCookies: boolean;
+  /**
+   * Says that the server sits behind a reverse proxy that sets `X-Forwarded-Proto` and
+   * `X-Forwarded-For`. Only then are these headers believed: for marking cookies `Secure` on
+   * HTTPS requests and for telling clients apart when logins are throttled.
+   */
+  readonly trustProxy: boolean;
 }
 
 export interface ConfigSources {
@@ -36,9 +47,10 @@ export interface ConfigSources {
 /**
  * Builds the configuration. Each flag (`--port`, `--host`, `--bundles-dir`, `--data-dir`,
  * `--extension-memory-mb`, `--extension-start-timeout-ms`, `--extension-heartbeat-timeout-ms`,
- * `--max-body-bytes`, repeatable `--allowed-origin`) wins over its environment variable: the
- * flag in capitals with `MOONCG_` in front and underscores for dashes, such as
- * `MOONCG_DATA_DIR`, and `MOONCG_ALLOWED_ORIGINS` as a comma-separated list. That wins over
+ * `--max-body-bytes`, repeatable `--allowed-origin`, and the switches `--secure-cookies` and
+ * `--trust-proxy`) wins over its environment variable: the flag in capitals with `MOONCG_` in
+ * front and underscores for dashes, such as `MOONCG_DATA_DIR`, and `MOONCG_ALLOWED_ORIGINS` as
+ * a comma-separated list. A switch is on in the environment as `1` or `true`. That wins over
  * the default.
  */
 export function loadConfig({ argv, env, cwd }: ConfigSources): ServerConfig {
@@ -54,12 +66,15 @@ export function loadConfig({ argv, env, cwd }: ConfigSources): ServerConfig {
       'extension-heartbeat-timeout-ms': { type: 'string' },
       'max-body-bytes': { type: 'string' },
       'allowed-origin': { type: 'string', multiple: true },
+      'secure-cookies': { type: 'boolean' },
+      'trust-proxy': { type: 'boolean' },
     },
   });
+  const on = (value: string | undefined) => value === '1' || value === 'true';
   const origins = values['allowed-origin'] ?? env.MOONCG_ALLOWED_ORIGINS?.split(',') ?? [];
   return {
     port: parsePort(values.port ?? env.MOONCG_PORT ?? '9090'),
-    // Loopback only: there is no authentication yet.
+    // Loopback unless asked otherwise: `--host 0.0.0.0` opens the server to the network.
     host: values.host ?? env.MOONCG_HOST ?? '127.0.0.1',
     bundlesDir: resolve(cwd, values['bundles-dir'] ?? env.MOONCG_BUNDLES_DIR ?? 'bundles'),
     allowedOrigins: origins.map((origin) => parseOrigin(origin.trim())),
@@ -82,6 +97,8 @@ export function loadConfig({ argv, env, cwd }: ConfigSources): ServerConfig {
       'body size',
       values['max-body-bytes'] ?? env.MOONCG_MAX_BODY_BYTES ?? String(1024 * 1024),
     ),
+    secureCookies: values['secure-cookies'] ?? on(env.MOONCG_SECURE_COOKIES),
+    trustProxy: values['trust-proxy'] ?? on(env.MOONCG_TRUST_PROXY),
   };
 }
 

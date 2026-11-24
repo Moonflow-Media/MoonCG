@@ -3,10 +3,11 @@ import { encodeMessage, PROTOCOL_VERSION, type ServerMessage } from '@mooncg/cor
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { InlineHost } from '../src/extension-host/inline-host.js';
+import { resolveLocalAdmin } from '../src/http/identity.js';
 import { MAX_FRAME_BYTES, upgradeRefusal } from '../src/http/ws.js';
 import { type RunningServer, type ServerOptions, startServer } from '../src/server.js';
 import { memoryStorage } from '../src/storage/replicant-store.js';
-import { fixture, memoryLogger } from './helpers.js';
+import { fixture, memoryLogger, testConfig } from './helpers.js';
 
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
@@ -18,26 +19,14 @@ async function start(
   allowedOrigins: string[] = [],
 ): Promise<RunningServer & { lines: string[] }> {
   const { logger, lines } = memoryLogger();
-  const server = await startServer(
-    {
-      port: 0,
-      host: '127.0.0.1',
-      bundlesDir: fixture('bundles'),
-      allowedOrigins,
-      dataDir: fixture('unused-data'),
-      extensionMemoryMb: 128,
-      extensionStartTimeoutMs: 10_000,
-      extensionHeartbeatTimeoutMs: 10_000,
-      maxBodyBytes: 1024 * 1024,
-    },
-    {
-      logger,
-      sdkFile: undefined,
-      storage: memoryStorage(),
-      createHost: (services) => new InlineHost(services),
-      ...options,
-    },
-  );
+  const server = await startServer(testConfig({ bundlesDir: fixture('bundles'), allowedOrigins }), {
+    logger,
+    sdkFile: undefined,
+    resolvePrincipal: resolveLocalAdmin,
+    storage: memoryStorage(),
+    createHost: (services) => new InlineHost(services),
+    ...options,
+  });
   cleanup.push(() => server.close());
   await server.started;
   return Object.assign(server, { lines });

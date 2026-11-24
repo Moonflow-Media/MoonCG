@@ -91,7 +91,7 @@ my-show/
 ├── modules/              system modules (auth providers, storage, …)   (milestone 8)
 │   └── <name>/
 ├── data/                 everything MoonCG writes at runtime
-│   ├── mooncg.db         replicants, disabled bundles (today); users, roles, tokens, sessions, layouts (milestone 4–5)
+│   ├── mooncg.db         replicants, disabled bundles, users, roles, tokens, sessions (today); layouts (milestone 5)
 │   ├── config/
 │   │   └── <bundle>.json bundle config                                 (milestone 5)
 │   ├── assets/
@@ -138,11 +138,11 @@ MoonCG/
 │   ├── core/         @mooncg/core — pure logic, no file or network access
 │   │   └── src/      manifest/ replicant/ messages/ http/ bundle/ protocol/ permissions/ session/
 │   ├── server/       @mooncg/server
-│   │   ├── src/      kernel/ bundles/ extension-host/ http/ replicants/ storage/
+│   │   ├── src/      kernel/ auth/ bundles/ extension-host/ http/ replicants/ storage/
 │   │   └── public/   minimal HTML shell (replaced by the dashboard in milestone 5)
 │   ├── sdk/          @mooncg/sdk — the only package bundle authors depend on
 │   │   └── src/      client/ extension/ vue/ react/ — later module/ (milestone 8)
-│   ├── cli/          the `mooncg` command — today only `mooncg types`
+│   ├── cli/          the `mooncg` command — `types`, `user` and `token`
 │   └── dashboard/    Vue 3 app                                         (milestone 5)
 ├── examples/
 │   └── scoreboard/   reference bundle
@@ -171,3 +171,5 @@ The folder names show up in the URLs, so the mapping is worth knowing:
 | Bundle HTTP routes | wherever the extension mounts them | `/b/<name>/api/…`                  |
 | Assets             | `/assets/<name>/<category>/<file>` | `/b/<name>/assets/…` (milestone 5) |
 | Client API script  | injected                           | `/sdk/mooncg.js`                   |
+| Sign in, setup     | `/login/` (if enabled)             | `/login`, `/setup`                 |
+| Server API         | none                               | `/api/v1/…`                        |
