@@ -1,6 +1,7 @@
 import {
   createSession,
   extensionPrincipal,
+  type Json,
   type MessageBus,
   type Policy,
   type ReplicantRegistry,
@@ -22,6 +23,11 @@ export interface ExtensionSpec {
   readonly capabilities: readonly string[];
   /** The permission names the manifest declares. */
   readonly permissions: readonly string[];
+  /**
+   * The bundle's configuration, secrets included. It reaches the extension as its
+   * `ctx.config` and goes nowhere else: not over the connection and not into a log.
+   */
+  readonly config?: Readonly<Record<string, Json>> | undefined;
 }
 
 export interface HostStats {

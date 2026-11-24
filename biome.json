@@ -1,6 +1,14 @@
 {
   "files": {
-    "includes": ["**", "!**/dist", "!**/coverage", "!.atl", "!.claude", "!**/mooncg-env.d.ts"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/coverage",
+      "!**/test-results",
+      "!.atl",
+      "!.claude",
+      "!**/mooncg-env.d.ts"
+    ]
   },
   "formatter": {
     "indentStyle": "space",

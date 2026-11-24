@@ -15,7 +15,10 @@ import {
   SYSTEM_BUNDLE,
   type Timers,
 } from '@mooncg/core';
-import type { ExtensionHost } from '../extension-host/extension-host.js';
+import type { AssetStore } from '../assets/store.js';
+import type { BundleConfigs } from '../config/bundle-config.js';
+import type { ExtensionHost, ExtensionSpec } from '../extension-host/extension-host.js';
+import type { GraphicInstances } from '../graphics/instances.js';
 import { errorMessage, type Logger } from '../kernel/logger.js';
 import { declareReplicants } from '../replicants/declare.js';
 import type { ReplicantPersistence } from '../replicants/persistence.js';
@@ -58,6 +61,15 @@ export interface BundleManagerOptions {
   readonly persistence?: ReplicantPersistence | undefined;
   /** Remembers which bundles are disabled. Without it, all start enabled every time. */
   readonly settings?: BundleSettingsStore | undefined;
+  /** Lists the connected pages of each graphic. Without it no such list exists. */
+  readonly instances?: Pick<GraphicInstances, 'declare' | 'retract'> | undefined;
+  /** Lists the files of each asset category. Without it no such list exists. */
+  readonly assets?: Pick<AssetStore, 'declare' | 'retract'> | undefined;
+  /**
+   * The configuration of each bundle. Without it every bundle starts with an empty one. Its
+   * `scrub` takes the secrets out of every error before that is logged or published.
+   */
+  readonly config?: Pick<BundleConfigs, 'load' | 'scrub'> | undefined;
   /** For the restart delays. Defaults to real time. */
   readonly timers?: Timers | undefined;
 }
@@ -242,6 +254,35 @@ export class BundleManager {
     });
   }
 
+  /**
+   * Stops and starts the extension of a running bundle, with the configuration as it is
+   * stored now. What the manifest declares stays where it is, so pages keep the replicants
+   * and messages they follow; only what the extension itself registered goes and comes back.
+   * A bundle whose extension does not start again ends up `failed`, like after a crash, and
+   * is not restarted on its own.
+   */
+  restartExtension(name: string): Promise<BundleRecord> {
+    return this.#change(name, this.#withDependents(name), async () => {
+      const record = this.#known(name);
+      const { manifest } = record;
+      if (record.state !== 'running' || !manifest) {
+        throw new MoonCGError('conflict', `Bundle "${name}" is ${record.state}`);
+      }
+      this.#forgetRestarts(name);
+      const { host, config: configs } = this.#options;
+      const config = await configs?.load({ name, dir: record.dir, manifest });
+      if (manifest.extension === undefined && config?.ok !== false) return record;
+      await host.stop(name);
+      if (config && !config.ok) return this.#failRunning(record, config.errors);
+      try {
+        await host.start(this.#spec(record, manifest, config?.values));
+      } catch (error) {
+        return this.#failRunning(record, [`Extension failed to start: ${errorMessage(error)}`]);
+      }
+      return record;
+    });
+  }
+
   /** Resolves once no change of state is running or waiting. */
   async idle(): Promise<void> {
     for (let seen: unknown[] = []; ; ) {
@@ -301,8 +342,10 @@ export class BundleManager {
   }
 
   /** The full error goes to the log; what is published has its file paths taken out. */
-  #fail(record: Mutable, errors: readonly string[]): Mutable {
+  #fail(record: Mutable, given: readonly string[]): Mutable {
     this.#move(record, 'fail');
+    // An extension may fail with a secret of its configuration in the message.
+    const errors = given.map((error) => this.#options.config?.scrub(error) ?? error);
     const log = this.#options.logger.child(`bundle:${record.name}`);
     for (const error of errors) log.error(error);
     record.errors = errors.map((error) => publicError(error, record.dir, this.#roots));
@@ -346,23 +389,23 @@ export class BundleManager {
     });
     if (problems.length > 0) return this.#fail(record, problems);
 
+    // A stored configuration that does not fit its schema keeps the bundle from starting.
+    const config = await this.#options.config?.load({ name, dir: record.dir, manifest });
+    if (config && !config.ok) return this.#fail(record, config.errors);
+
     const replicants = await declareReplicants(
       { name, dir: record.dir, manifest },
       { registry, persistence, logger: logger.child(`bundle:${name}`) },
     );
     if (replicants.errors.length > 0) return this.#fail(record, replicants.errors);
+    this.#options.instances?.declare(name, manifest);
+    await this.#options.assets?.declare(name, manifest);
     for (const [topic, permissions] of Object.entries(manifest.messages)) {
       bus?.declare(name, topic, permissions);
     }
     try {
       if (manifest.extension !== undefined) {
-        await host.start({
-          bundle: name,
-          version: manifest.version,
-          entry: join(record.dir, manifest.extension),
-          capabilities: manifest.capabilities,
-          permissions: Object.keys(manifest.permissions),
-        });
+        await host.start(this.#spec(record, manifest, config?.values));
       }
     } catch (error) {
       // Nothing of this bundle is being saved yet, so what its extension wrote is dropped.
@@ -375,6 +418,39 @@ export class BundleManager {
     record.lastError = undefined;
     this.#publish();
     return record;
+  }
+
+  /** What the host needs to run a bundle's extension. */
+  #spec(
+    record: BundleRecord,
+    manifest: Manifest,
+    config: Readonly<Record<string, Json>> | undefined,
+  ): ExtensionSpec {
+    return {
+      bundle: record.name,
+      version: manifest.version,
+      entry: join(record.dir, manifest.extension ?? ''),
+      capabilities: manifest.capabilities,
+      permissions: Object.keys(manifest.permissions),
+      config: config ?? {},
+    };
+  }
+
+  /**
+   * Fails a bundle that was running and whose extension is stopped already. The bundles that
+   * depend on it are stopped first, as after a crash, and wait for it to come back.
+   */
+  async #failRunning(record: Mutable, errors: readonly string[]): Promise<Mutable> {
+    const { name } = record;
+    const dependents = this.#runningDependents(name);
+    for (const dependent of [...dependents].reverse()) {
+      await this.#stop(dependent);
+      this.#fail(this.#known(dependent), [`Stopped because bundle "${name}" failed`]);
+    }
+    this.#stranded.set(name, [...new Set([...dependents, ...(this.#stranded.get(name) ?? [])])]);
+    await this.#options.persistence?.flush();
+    this.#retract(name);
+    return this.#fail(record, errors);
   }
 
   async #disable(record: Mutable): Promise<void> {
@@ -397,6 +473,8 @@ export class BundleManager {
   #retract(name: string): void {
     this.#options.registry.undeclare(name);
     this.#options.bus?.undeclare(name);
+    this.#options.instances?.retract(name);
+    this.#options.assets?.retract(name);
   }
 
   /**

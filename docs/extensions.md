@@ -73,11 +73,57 @@ throws or rejects, the bundle is `failed` and nothing it wrote to persistent rep
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `ctx.bundle`                                      | `{ name, version }` from the manifest                                                                   |
 | `ctx.log`                                         | `info(message)`, `warn(message)`, `error(message)`; lines appear in the server log as `[bundle:<name>]` |
-| `ctx.config`                                      | The bundle's configuration. An empty object for now                                                     |
+| `ctx.config`                                      | The bundle's [configuration](#configuration), secrets included                                          |
 | `ctx.replicant(name)`                             | A replicant handle, the same as in a page                                                               |
 | `ctx.send`, `ctx.on`, `ctx.request`, `ctx.handle` | Messages                                                                                                |
 | `ctx.http`                                        | HTTP routes                                                                                             |
 | `ctx.onDispose(fn)`                               | Cleanup when the extension stops                                                                        |
+
+### Configuration
+
+`ctx.config` is what an administrator entered on the dashboard's settings page, checked
+against the JSON Schema the manifest names:
+
+```json
+{ "config": { "schema": "schemas/config.json" } }
+```
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "title": { "type": "string", "default": "Scoreboard" },
+    "resultsApiKey": { "type": "string", "x-secret": true }
+  }
+}
+```
+
+```js
+export default async function start(ctx) {
+  const { title, resultsApiKey } = ctx.config; // title is "Scoreboard" until one is stored
+}
+```
+
+| Fact                                       | Consequence                                                      |
+| ------------------------------------------ | ---------------------------------------------------------------- |
+| It is read once, when the extension starts | Read it at the top of `start`; it never changes under you        |
+| Saving the settings restarts the extension | `onDispose` runs, then `start` again with the new values         |
+| Only the extension restarts                | Replicants and messages stay; pages keep what they follow        |
+| Defaults of the schema are filled in       | A property with a `default` is always there                      |
+| The values always fit the schema           | If the stored file does not, the bundle is `failed` and says why |
+| Without `config` in the manifest           | `ctx.config` is an empty object                                  |
+| The object is frozen                       | Change settings through the dashboard or the API, not in place   |
+
+**Secrets.** A property with `"x-secret": true` reaches the extension like any other and
+nobody else: the API and the dashboard never send it back. The server also takes it out of
+every line the extension logs and out of the error it fails with, provided it has at least
+8 characters; a shorter one cannot be told from ordinary text, and the server warns about it. What the extension itself
+puts into a replicant, a message or the answer of a route is not filtered, so keep secrets
+out of those. Pages cannot read the configuration; publish what a graphic needs of it in a
+replicant, as the example does with its title.
+
+The values live in `<data-dir>/config/<bundle>.json`. [dashboard.md](dashboard.md#bundle-settings)
+describes the form, the API and the rules for secrets.
 
 ### Replicants
 
@@ -95,6 +141,12 @@ await score.update((draft) => {
 
 Replicants are declared in the manifest, not in code. A write that the schema rejects fails with
 the code `invalid`.
+
+Besides the replicants its manifest declares, a bundle has read-only ones the server keeps:
+`$assets.<category>` lists the uploaded files of an asset category, and
+`$instances.<graphic>` the pages that show a graphic right now. An extension reads them like
+any other: `ctx.replicant('$assets.logos')`. [dashboard.md](dashboard.md#assets) describes
+both.
 
 ### Messages
 
@@ -261,6 +313,8 @@ goes beyond them is ended and treated as crashed.
 | A running extension crashes                                       | Bundle `failed`, then restarted after 1 s, 2 s and 4 s. A start that fails during such a restart counts as one of the three. After three it stays `failed`      |
 | It has run for a minute since a restart                           | The count of restarts starts over                                                                                                                               |
 | An administrator enables, disables or reloads it                  | Pending restarts are dropped                                                                                                                                    |
+| An administrator saves the bundle's settings                      | The extension alone is stopped and started with the new values. If it does not start, the bundle is `failed`; not retried                                       |
+| The stored configuration does not fit the schema                  | Bundle `failed` with the reason; not retried. Saving settings that fit starts it                                                                                |
 | A bundle it depends on crashes                                    | It is stopped (`failed`, with an error naming that bundle) and started again when that bundle is back. If that bundle is not restarted again, it stays `failed` |
 | It does not start again after a bundle it depends on was reloaded | It stays `failed`, not retried; the error says that the restart followed that reload                                                                            |
 

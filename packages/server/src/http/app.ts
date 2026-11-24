@@ -11,16 +11,23 @@ import {
   HTTP_METHODS,
   type HttpMethod,
   isSafeRelativePath,
+  LOGS_VIEW,
   MoonCGError,
   normalizeRoutePath,
   type Policy,
   type RouteTable,
+  SETTINGS_MANAGE,
 } from '@mooncg/core';
 import fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import { assetType } from '../assets/names.js';
+import { AssetError, type AssetStore } from '../assets/store.js';
 import type { Auth } from '../auth/auth.js';
 import { redactSecrets } from '../auth/secrets.js';
 import type { BundleRecord } from '../bundles/bundles.js';
-import { registerAuthRoutes } from './auth-routes.js';
+import type { BundleConfigs } from '../config/bundle-config.js';
+import type { GraphicInstances } from '../graphics/instances.js';
+import type { LogBuffer } from '../kernel/logger.js';
+import { jsonBody, registerAuthRoutes } from './auth-routes.js';
 import {
   createIdentify,
   type Identify,
@@ -60,11 +67,28 @@ export const BUILT_IN_CSP = [
   "frame-ancestors 'none'",
 ].join('; ');
 
+/**
+ * What an uploaded file is served with. `sandbox` makes whatever a browser opens from it a
+ * document without an origin and without scripts, so an uploaded page or SVG cannot act as
+ * this server towards whoever looks at it. Used as an image, a font or a clip by a page of a
+ * bundle, the file works as before: the policy binds the file as a document, not its users.
+ */
+export const ASSET_CSP = [
+  'sandbox',
+  "default-src 'none'",
+  "img-src 'self' data:",
+  "media-src 'self'",
+  "style-src 'unsafe-inline'",
+  "frame-ancestors 'self'",
+].join('; ');
+
 /** Changes a bundle's state. Each rejects with a `MoonCGError`. */
 export interface BundleLifecycle {
   enable(name: string): Promise<BundleRecord>;
   disable(name: string): Promise<BundleRecord>;
   reload(name: string): Promise<BundleRecord>;
+  /** Starts the extension of a running bundle again, with the configuration as it is now. */
+  restartExtension?(name: string): Promise<BundleRecord>;
 }
 
 export interface AppOptions {
@@ -72,6 +96,13 @@ export interface AppOptions {
   readonly bundles: readonly BundleRecord[] | (() => readonly BundleRecord[]);
   /** Path of the SDK's browser build, served at `/sdk/mooncg.js`. */
   readonly sdkFile: string | undefined;
+  /**
+   * The folder with the built dashboard: `index.html` and its files under `ui/`. Without it
+   * the dashboard routes answer 404.
+   */
+  readonly dashboardDir?: string | undefined;
+  /** The latest lines of the server log, for `GET /api/v1/logs`. Without it that is a 404. */
+  readonly logs?: LogBuffer | undefined;
   /**
    * Accounts and permissions. With it the app serves login, setup and the user, role and
    * token APIs, and identifies every request by its session cookie or API token.
@@ -87,6 +118,12 @@ export interface AppOptions {
   readonly routes?: RouteTable | undefined;
   /** Without it the lifecycle API answers 404. */
   readonly lifecycle?: BundleLifecycle | undefined;
+  /** The connected graphic pages. Without it no instance can be reloaded. */
+  readonly instances?: Pick<GraphicInstances, 'get' | 'reload' | 'disconnect' | 'of'> | undefined;
+  /** The files uploaded for each bundle. Without it there are no assets. */
+  readonly assets?: AssetStore | undefined;
+  /** The configuration of each bundle. Without it the configuration API answers 404. */
+  readonly config?: Pick<BundleConfigs, 'describe' | 'write' | 'scrub'> | undefined;
   readonly maxBodyBytes?: number | undefined;
   /** Origins besides the server's own whose pages may send state-changing requests. */
   readonly allowedOrigins?: readonly string[] | undefined;
@@ -97,6 +134,19 @@ export interface AppOptions {
 }
 
 const SERVED_AREAS = new Set(['dashboard', 'graphics']);
+/** The paths the dashboard application draws. Each is answered with its one page. */
+export const DASHBOARD_ROUTES = [
+  '/',
+  '/w/:workspace',
+  '/bundles',
+  '/graphics',
+  '/assets',
+  '/admin/users',
+  '/admin/roles',
+  '/admin/tokens',
+  '/settings',
+  '/logs',
+] as const;
 const LIFECYCLE_ACTIONS = ['enable', 'disable', 'reload'] as const;
 
 /** Headers a bundle route may not set: they describe the connection, which the server owns. */
@@ -184,11 +234,13 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   const running = (name: string) =>
     bundles().find((candidate) => candidate.name === name && candidate.state === 'running');
   const identify: Identify = createIdentify(options);
-  const shellPage = await readFile(publicFile('index.html'), 'utf8');
-  const shellScript = await readFile(publicFile('shell.js'), 'utf8');
-  // No message leaves the server with an API token in it, whatever put it there.
-  const fail = (reply: FastifyReply, status: number, code: string, message: string) =>
-    reply.code(status).send({ error: { code, message: redactSecrets(message) } });
+  const { dashboardDir } = options;
+  // No message leaves the server with an API token or a secret of a bundle's configuration
+  // in it, whatever put it there.
+  const fail = (reply: FastifyReply, status: number, code: string, message: string) => {
+    const safe = redactSecrets(options.config?.scrub(message) ?? message);
+    return reply.code(status).send({ error: { code, message: safe } });
+  };
   /** Answers for an error the HTTP layer itself raised, such as a body that is too large. */
   const refuse = (reply: FastifyReply, error: unknown) => {
     const status = (error as { statusCode?: unknown }).statusCode;
@@ -334,18 +386,39 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     if (request.raw.url?.startsWith('/api/')) reply.header('cache-control', 'no-store');
   });
 
-  app.get('/', async (request, reply) => {
+  // The dashboard is one page that draws all of its routes itself, so each of them answers
+  // with that page. The page is not cached: it names the built files, which change.
+  const dashboardPage = async (request: FastifyRequest, reply: FastifyReply) => {
     // Whoever is not signed in is sent where that can be done.
     if (auth && anonymous(request)) {
       return reply.redirect(auth.setupCode() === undefined ? '/login' : '/setup', 302);
     }
     if (!can(request, DASHBOARD_VIEW)) return deny(request, reply, DASHBOARD_VIEW);
-    return builtIn(reply).send(shellPage);
-  });
+    const page =
+      dashboardDir === undefined
+        ? undefined
+        : await readFile(join(dashboardDir, 'index.html'), 'utf8').catch(() => undefined);
+    if (page === undefined) {
+      return fail(reply, 404, 'not_found', 'The dashboard is not built yet. Run "pnpm build".');
+    }
+    return builtIn(reply).header('cache-control', 'no-cache').send(page);
+  };
+  for (const path of DASHBOARD_ROUTES) app.get(path, dashboardPage);
 
-  app.get('/shell.js', requireDashboard, (_request, reply) =>
-    reply.type(CONTENT_TYPES['.js'] as string).send(shellScript),
-  );
+  // The scripts and styles the dashboard page loads.
+  app.get<{ Params: { '*': string } }>('/ui/*', async (request, reply) => {
+    if (anonymous(request)) return unauthenticated(reply);
+    const rest = request.params['*'];
+    const path =
+      dashboardDir === undefined || !isSafeRelativePath(rest)
+        ? undefined
+        : await canonicalFile(join(dashboardDir, 'ui'), rest);
+    if (path === undefined) return notFound(reply);
+    return reply
+      .type(CONTENT_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream')
+      .header('cache-control', 'no-cache')
+      .send(createReadStream(path));
+  });
 
   // The SDK is what every page of a bundle loads, also a graphic opened with a token that
   // holds nothing but one bundle permission. So it takes being signed in, and no more.
@@ -381,13 +454,31 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
                 workspace,
                 url: fileUrl(name, file),
               })),
+            dialogs: (served?.dialogs ?? [])
+              .filter((dialog) => usable(dialog, name))
+              .map(({ id, title, width, file }) => ({
+                id,
+                title,
+                width,
+                url: fileUrl(name, file),
+              })),
+            // The asset categories the caller may see, and whether they may change them.
+            assets: (served ? (options.assets?.categories(name) ?? []) : [])
+              .filter((category) => can(request, category.read))
+              .map(({ id, title, accept, write }) => ({
+                id,
+                title,
+                accept,
+                canWrite: can(request, write),
+              })),
             graphics: (served?.graphics ?? [])
               .filter((graphic) => usable(graphic, name))
-              .map(({ id, title, width, height, file }) => ({
+              .map(({ id, title, width, height, file, singleInstance }) => ({
                 id,
                 title,
                 width,
                 height,
+                singleInstance: singleInstance === true,
                 url: fileUrl(name, file),
               })),
           };
@@ -410,6 +501,232 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
       }
     },
   );
+
+  // A bundle's configuration holds secrets, and changing it restarts the bundle's extension.
+  // So it is for whoever may manage the server's settings, and for nobody else, whatever
+  // they hold of the bundle. The permission is checked first: without it, a bundle that
+  // exists is answered like one that does not.
+  const configurable = (name: string) =>
+    bundles().find((record) => record.name === name && record.manifest?.config !== undefined);
+  const record = (name: string) => bundles().find((candidate) => candidate.name === name);
+
+  app.get('/api/v1/config', async (request, reply) => {
+    if (!options.config) return notFound(reply);
+    if (!can(request, SETTINGS_MANAGE)) return deny(request, reply, SETTINGS_MANAGE);
+    return {
+      bundles: bundles()
+        .filter(({ name }) => configurable(name))
+        .map(describeBundle),
+    };
+  });
+
+  app.get<{ Params: { name: string } }>('/api/v1/bundles/:name/config', async (request, reply) => {
+    const { config } = options;
+    if (!config) return notFound(reply);
+    if (!can(request, SETTINGS_MANAGE)) return deny(request, reply, SETTINGS_MANAGE);
+    const bundle = configurable(request.params.name);
+    if (!bundle?.manifest) return notFound(reply);
+    try {
+      const described = await config.describe({ ...bundle, manifest: bundle.manifest });
+      return { ...described, bundle: describeBundle(bundle) };
+    } catch (error) {
+      return failWith(reply, error);
+    }
+  });
+
+  app.put<{ Params: { name: string } }>('/api/v1/bundles/:name/config', async (request, reply) => {
+    const { config } = options;
+    const { name } = request.params;
+    if (!config) return notFound(reply);
+    if (!can(request, SETTINGS_MANAGE)) return deny(request, reply, SETTINGS_MANAGE);
+    const bundle = configurable(name);
+    if (!bundle?.manifest) return notFound(reply);
+    try {
+      const { values } = jsonBody(request);
+      if (values === undefined) {
+        throw new MoonCGError('bad_request', '"values" must be the configuration');
+      }
+      const described = await config.write({ ...bundle, manifest: bundle.manifest }, values);
+      // From here on the values are stored, and the answer says so whatever else happens.
+      // The extension reads its configuration when it starts, so it is started again: the
+      // extension only, so that graphics on air keep what they follow. A bundle that failed,
+      // perhaps over the very configuration, gets another try.
+      const { state } = record(name) ?? bundle;
+      let restartNote: string | undefined;
+      try {
+        if (bundle.manifest.extension === undefined) {
+          restartNote = 'The bundle has no extension that could be restarted.';
+        } else if (state === 'running') await lifecycle?.restartExtension?.(name);
+        else if (state === 'failed') await lifecycle?.enable(name);
+        else restartNote = `The bundle is ${state}. The settings apply when it is started.`;
+      } catch (error) {
+        // Such as a change of the bundle's state that got in between.
+        restartNote =
+          error instanceof MoonCGError ? error.message : 'The extension could not be restarted.';
+      }
+      const now = record(name) ?? bundle;
+      if (restartNote === undefined && now.state !== 'running') {
+        restartNote = now.lastError ?? `The bundle is ${now.state}.`;
+      }
+      return {
+        ...described,
+        restarted: restartNote === undefined,
+        ...(restartNote === undefined
+          ? {}
+          : { restartNote: redactSecrets(config.scrub(restartNote)) }),
+        bundle: describeBundle(now),
+      };
+    } catch (error) {
+      return failWith(reply, error);
+    }
+  });
+
+  // Assets: the files people upload for a bundle. Listing and loading take what the category
+  // asks for reading, uploading and deleting what it asks for writing; a category that names
+  // neither takes any permission of the bundle. Whoever holds nothing of the bundle gets 404.
+  type AssetParams = { name: string; category: string; file?: string };
+  const assetCategory = (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    access: 'read' | 'write',
+  ) => {
+    const { name, category: id } = request.params as AssetParams;
+    if (anonymous(request)) return void unauthenticated(reply);
+    if (!BUNDLE_NAME_PATTERN.test(name) || !can(request, bundlePermission(name, undefined))) {
+      return void notFound(reply);
+    }
+    const category = options.assets?.category(name, id);
+    if (!category) return void notFound(reply);
+    // Whoever may not see the files may not change them either.
+    const needed = access === 'read' ? [category.read] : [category.read, category.write];
+    for (const permission of needed) {
+      if (!can(request, permission)) return void deny(request, reply, permission);
+    }
+    return category;
+  };
+
+  app.get<{ Params: AssetParams }>(
+    '/api/v1/bundles/:name/assets/:category',
+    async (request, reply) => {
+      const category = assetCategory(request, reply, 'read');
+      if (!category || !options.assets) return reply;
+      const files = await options.assets.list(request.params.name, category.id);
+      return {
+        files,
+        used: files.reduce((sum, file) => sum + file.size, 0),
+        limits: {
+          maxFileBytes: options.assets.maxFileBytes,
+          quotaBytes: options.assets.quotaBytes,
+          maxFiles: options.assets.maxFiles,
+        },
+      };
+    },
+  );
+
+  app.delete<{ Params: AssetParams }>(
+    '/api/v1/bundles/:name/assets/:category/:file',
+    async (request, reply) => {
+      const category = assetCategory(request, reply, 'write');
+      if (!category || !options.assets) return reply;
+      const { name, file = '' } = request.params;
+      const removed = await options.assets.remove(name, category.id, file);
+      return removed ? reply.code(204).send() : notFound(reply);
+    },
+  );
+
+  // An upload is the body of the request, as it comes: one file, named by the URL. Here the
+  // body is not read into memory first, as everywhere else, but handed on as it arrives, and
+  // the store counts it against the limits while it writes.
+  await app.register(async (uploads) => {
+    uploads.removeAllContentTypeParsers();
+    uploads.addContentTypeParser('*', (_request, _payload, done) => done(null));
+    uploads.put<{ Params: AssetParams }>(
+      '/api/v1/bundles/:name/assets/:category/:file',
+      async (request, reply) => {
+        const category = assetCategory(request, reply, 'write');
+        if (!category || !options.assets) return reply;
+        const { name, file = '' } = request.params;
+        const length = request.headers['content-length'];
+        try {
+          const stored = await options.assets.put(
+            name,
+            category,
+            file,
+            request.raw,
+            length === undefined ? undefined : Number(length),
+          );
+          return reply.code(201).send({ file: stored });
+        } catch (error) {
+          if (!(error instanceof AssetError)) return failWith(reply, error);
+          // What is left of a refused upload is not waited for.
+          reply.header('connection', 'close');
+          const code = error.status >= 500 ? 'internal' : 'bad_request';
+          return fail(reply, error.status, code, error.message);
+        }
+      },
+    );
+  });
+
+  // What can be done to one connected graphic page: `reload` tells it to load itself again,
+  // `disconnect` takes it off its graphic, which frees the place of a graphic that takes
+  // one instance. Both interrupt what is on air, so they take what reloading a bundle
+  // takes, besides being allowed to open the graphic.
+  const INSTANCE_ACTIONS = ['reload', 'disconnect'] as const;
+  app.post<{ Params: { name: string; instance: string; action: string } }>(
+    '/api/v1/bundles/:name/instances/:instance/:action',
+    async (request, reply) => {
+      const { name, instance } = request.params;
+      const action = INSTANCE_ACTIONS.find((known) => known === request.params.action);
+      if (!action) return notFound(reply);
+      if (anonymous(request)) return unauthenticated(reply);
+      if (!BUNDLE_NAME_PATTERN.test(name)) return notFound(reply);
+      if (!can(request, bundlePermission(name, undefined))) return notFound(reply);
+      const open = options.instances?.get(instance);
+      if (open?.bundle !== name) return notFound(reply);
+      if (!can(request, open.permission)) return deny(request, reply, open.permission);
+      if (!can(request, BUNDLES_MANAGE)) return deny(request, reply, BUNDLES_MANAGE);
+      return options.instances?.[action](instance) ? reply.code(204).send() : notFound(reply);
+    },
+  );
+
+  // Who has the graphics of a bundle open. The replicants say that a page is connected;
+  // who it acts as is told here, to whoever manages the installation.
+  app.get<{ Params: { name: string } }>(
+    '/api/v1/bundles/:name/instances',
+    async (request, reply) => {
+      const { name } = request.params;
+      if (anonymous(request)) return unauthenticated(reply);
+      if (!BUNDLE_NAME_PATTERN.test(name)) return notFound(reply);
+      if (!can(request, bundlePermission(name, undefined))) return notFound(reply);
+      if (!can(request, BUNDLES_MANAGE)) return deny(request, reply, BUNDLES_MANAGE);
+      const { policy } = identityOf(request);
+      return {
+        instances: (options.instances?.of(name) ?? []).map(({ id, graphic, principal, since }) => ({
+          id,
+          graphic,
+          principal: principal.id,
+          kind: principal.kind ?? 'user',
+          name: auth?.describe({ principal, policy }).name ?? null,
+          since,
+        })),
+      };
+    },
+  );
+
+  // The latest lines of the server log. `after` is the id of the last line the caller has,
+  // so a page that follows the log asks only for what is new.
+  app.get<{ Querystring: { after?: string } }>('/api/v1/logs', async (request, reply) => {
+    if (!options.logs) return notFound(reply);
+    if (!can(request, LOGS_VIEW)) return deny(request, reply, LOGS_VIEW);
+    const { after = '0' } = request.query;
+    if (!/^\d{1,15}$/.test(after)) {
+      return fail(reply, 400, 'bad_request', '"after" must be the id of a log line');
+    }
+    const entries = options.logs.entries(Number(after));
+    // `last` is where the log ends, whatever was asked for: a page that is ahead of it, as
+    // after a restart of the server, sees that and starts over.
+    return { entries, last: options.logs.entries().at(-1)?.id ?? 0 };
+  });
 
   if (auth) {
     registerAuthRoutes(app, {
@@ -498,6 +815,41 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
       // A bundle the caller holds nothing of is answered like one that does not exist.
       if (!can(request, bundlePermission(name, undefined))) return notFound(reply);
       const bundle = running(name);
+      if (bundle && area === 'assets') {
+        // `<category>/<file>`, and nothing deeper: a category is one flat folder.
+        const [id = '', file, ...deeper] = rest.split('/');
+        const category = options.assets?.category(name, id);
+        if (!category || file === undefined || deeper.length > 0) return notFound(reply);
+        if (!can(request, category.read)) return deny(request, reply, category.read);
+        // Opened first, and measured through what was opened: a file that is replaced
+        // while it is being sent is still sent whole, with the length that was announced.
+        const found = await options.assets?.open(name, id, file);
+        if (!found) return notFound(reply);
+        const { handle, size } = found;
+        const { type, inline } = assetType(file);
+        reply
+          .type(type)
+          .header('accept-ranges', 'bytes')
+          .header('cache-control', 'no-cache')
+          .header('content-security-policy', ASSET_CSP);
+        // What a browser cannot show safely is handed over as a download.
+        if (!inline) reply.header('content-disposition', 'attachment');
+        // A player that seeks or loops a clip asks for parts of the file.
+        const range = byteRange(request.headers.range, size);
+        if (range === 'unsatisfiable') {
+          await handle.close();
+          reply.type('application/json; charset=utf-8').header('content-range', `bytes */${size}`);
+          return fail(reply, 416, 'bad_request', 'The range is outside the file');
+        }
+        const { start, end } = range ?? { start: 0, end: size - 1 };
+        if (range) reply.code(206).header('content-range', `bytes ${start}-${end}/${size}`);
+        reply.header('content-length', end - start + 1);
+        if (request.method === 'HEAD' || size === 0) {
+          await handle.close();
+          return reply.send();
+        }
+        return reply.send(handle.createReadStream({ start, end }));
+      }
       if (!bundle?.manifest || !SERVED_AREAS.has(area) || !isSafeRelativePath(rest)) {
         return notFound(reply);
       }
@@ -560,4 +912,30 @@ async function canonicalFile(areaDir: string, requested: string): Promise<string
   } catch {
     return undefined;
   }
+}
+
+/**
+ * What a `Range` header asks for of a file of `size` bytes: one range of bytes, with both
+ * ends inside the file. `undefined` for no header and for anything that is not one range of
+ * bytes, which is then answered with the whole file; `'unsatisfiable'` for a range that
+ * lies outside the file.
+ */
+export function byteRange(
+  header: string | undefined,
+  size: number,
+): { readonly start: number; readonly end: number } | 'unsatisfiable' | undefined {
+  const match = header === undefined ? null : /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match) return undefined;
+  const [, first = '', last = ''] = match;
+  if (first === '') {
+    // The last so many bytes.
+    if (last === '') return undefined;
+    const length = Number(last);
+    if (length === 0 || size === 0) return 'unsatisfiable';
+    return { start: Math.max(0, size - length), end: size - 1 };
+  }
+  const start = Number(first);
+  const end = last === '' ? size - 1 : Math.min(Number(last), size - 1);
+  if (last !== '' && Number(last) < start) return undefined;
+  return start >= size ? 'unsatisfiable' : { start, end };
 }

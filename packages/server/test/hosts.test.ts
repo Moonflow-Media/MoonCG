@@ -65,6 +65,17 @@ describe.each([
   ['WorkerHost', worker],
 ])('%s', (_name, create) => {
   it(
+    'hands the extension the configuration it was started with',
+    async () => {
+      const { host, out, spec } = setup(create);
+      const config = { league: 'A', mail: { password: 'pw-123' } };
+      await host.start({ ...spec('full.js'), config });
+      expect(out.value).toMatchObject({ config });
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
     'runs an extension that uses the whole context',
     async () => {
       const { host, out, bus, lines, spec, sender, get } = setup(create);

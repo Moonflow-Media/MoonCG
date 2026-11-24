@@ -66,7 +66,8 @@ const JSON_HEADERS = { 'content-type': 'application/json' };
  */
 const HTTP: [string, string, number[]][] = [
   ['GET', '/', [200, 200, 200, 403, 403, 403, 302]],
-  ['GET', '/shell.js', [200, 200, 200, 403, 403, 403, 401]],
+  // The dashboard's built files are for whoever is signed in, like the SDK.
+  ['GET', '/ui/app.js', [200, 200, 200, 200, 200, 200, 401]],
   ['GET', '/sdk/mooncg.js', [200, 200, 200, 200, 200, 200, 401]],
   ['GET', '/api/v1/bundles', [200, 200, 200, 403, 403, 403, 401]],
   ['GET', '/api/v1/me', [200, 200, 200, 200, 200, 200, 401]],

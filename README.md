@@ -5,10 +5,13 @@ A **bundle** brings dashboard panels, graphics for OBS or vMix, and an optional 
 extension. Bundles share state through **replicants**: values the server owns and syncs to every
 panel and graphic over a WebSocket.
 
-This repository is at its fourth milestone. It loads bundles from a folder, serves their panels
+This repository is at its fifth milestone. It loads bundles from a folder, serves their panels
 and graphics, syncs replicants and messages, runs each bundle's extension in its own worker
 thread, can enable, disable and reload bundles while it runs, and has users, roles, permissions
-and API tokens. Live reload on file changes and the real dashboard come later.
+and API tokens. Its dashboard has workspaces, pages for bundles, graphics, users, roles, tokens
+and logs, dialogs that panels open, a settings form for each bundle's configuration, and
+uploaded assets. Installing bundles from the dashboard and live reload on file changes come
+later.
 
 ## Run the example
 
@@ -23,12 +26,21 @@ pnpm start
 
 1. On the first start the server prints a setup URL. Open it and create the first
    administrator, then sign in at <http://127.0.0.1:9090/>.
-2. The shell lists the `scoreboard` bundle with its state, embeds its panel and offers buttons
+2. The dashboard shows the workspace `Show` with the panel of the `scoreboard` bundle; the
+   page `Bundles` lists the bundle with its state and offers buttons
    to reload or disable it.
 3. Open <http://127.0.0.1:9090/b/scoreboard/graphics/overlay.html> in a second tab.
-4. Click the buttons in the panel. The graphic follows.
+4. Click the buttons in the panel. The graphic follows. `Reset` asks first, in a dialog.
 5. Open <http://127.0.0.1:9090/b/scoreboard/api/score> for the score as JSON, served by the
    bundle's extension.
+6. On the page `Settings`, change the title and save: the extension restarts with it and the
+   graphic shows it. The results service key is a secret: stored, never shown again.
+7. On the page `Assets`, upload an image called `home.png` or `away.png`. The graphic shows it
+   next to the score without a reload.
+8. Open the graphic in a third tab. It takes one instance, and you are the same account, so
+   the new tab takes the place and the old one says so. Someone else who opens it is told
+   that it is open elsewhere, and takes over when you close yours. The page `Graphics` lists
+   which pages are connected and can reload or disconnect each.
 
 Nothing is served without signing in. For OBS, create an API token and put it into the URL of
 the browser source:
@@ -52,6 +64,9 @@ setup. The server listens on loopback unless started with `--host`.
 | `--allowed-origin`                 | `MOONCG_ALLOWED_ORIGINS`                | none        | Extra origin whose pages may open the WebSocket    |
 | `--extension-memory-mb`            | `MOONCG_EXTENSION_MEMORY_MB`            | `256`       | Heap each bundle extension may use, in MiB         |
 | `--max-body-bytes`                 | `MOONCG_MAX_BODY_BYTES`                 | `1048576`   | Largest request body a bundle HTTP route accepts   |
+| `--asset-max-file-bytes`           | `MOONCG_ASSET_MAX_FILE_BYTES`           | `52428800`  | Largest file that can be uploaded as an asset      |
+| `--asset-quota-bytes`              | `MOONCG_ASSET_QUOTA_BYTES`              | `524288000` | What one asset category of a bundle may hold       |
+| `--asset-max-files`                | `MOONCG_ASSET_MAX_FILES`                | `1000`      | How many files one asset category may hold         |
 | `--extension-start-timeout-ms`     | `MOONCG_EXTENSION_START_TIMEOUT_MS`     | `10000`     | How long an extension may take to start            |
 | `--extension-heartbeat-timeout-ms` | `MOONCG_EXTENSION_HEARTBEAT_TIMEOUT_MS` | `10000`     | How long a running extension may stay unresponsive |
 | `--secure-cookies`                 | `MOONCG_SECURE_COOKIES`                 | off         | Marks session cookies `Secure` (HTTPS only)        |
@@ -90,26 +105,28 @@ node packages/server/dist/main.js --bundles-dir examples --port 9090
 
 ## Development
 
-| Command          | What it does                                                       |
-| ---------------- | ------------------------------------------------------------------ |
-| `pnpm test`      | Runs all tests with Vitest, straight from the TypeScript sources   |
-| `pnpm typecheck` | Type-checks the packages (`tsc -b`), the tests and a typed fixture |
-| `pnpm lint`      | Checks formatting and lint rules with Biome (`pnpm format` to fix) |
-| `pnpm build`     | Compiles every package to `dist/` and bundles the browser SDK      |
+| Command          | What it does                                                                                  |
+| ---------------- | --------------------------------------------------------------------------------------------- |
+| `pnpm test`      | Runs all tests with Vitest, straight from the TypeScript sources                              |
+| `pnpm typecheck` | Type-checks the packages (`tsc -b`), the tests and a typed fixture                            |
+| `pnpm lint`      | Checks formatting and lint rules with Biome (`pnpm format` to fix)                            |
+| `pnpm build`     | Compiles every package, bundles the browser SDK, builds the dashboard                         |
+| `pnpm test:e2e`  | Builds, then runs the browser smoke test (needs `pnpm exec playwright install chromium` once) |
 
 TypeScript is compiled with `tsc -b` and the server runs the JavaScript in `dist/`. Nothing runs
 TypeScript directly, so rebuild after changing sources. Tests need no build.
 
 ## Repository layout
 
-| Path                  | Content                                                                                                                                               |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/core`       | Pure logic without IO: manifest parser, replicant engine, message bus, route table, bundle state machine, wire protocol, permissions, session handler |
-| `packages/server`     | Config, logger and lifecycle, bundle manager, schema validation, storage, accounts, worker-thread extension host, HTTP and WebSocket transport        |
-| `packages/sdk`        | What bundle authors use: `@mooncg/sdk/client` (browser and Node client), `/extension` (extension context), `/vue` and `/react` adapters               |
-| `docs/`               | `permissions.md` (accounts, roles, tokens, setup), `extensions.md` (the extension API, with notes for NodeCG authors) and `folder-structure.md`       |
-| `packages/cli`        | The `mooncg` command line: `mooncg types`, `mooncg user` and `mooncg token`                                                                           |
-| `examples/scoreboard` | A reference bundle with one panel, one graphic and an extension                                                                                       |
+| Path                  | Content                                                                                                                                                         |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/core`       | Pure logic without IO: manifest parser, replicant engine, message bus, route table, bundle state machine, wire protocol, permissions, session handler           |
+| `packages/server`     | Config, logger and lifecycle, bundle manager, schema validation, storage, accounts, worker-thread extension host, HTTP and WebSocket transport                  |
+| `packages/sdk`        | What bundle authors use: `@mooncg/sdk/client` (browser and Node client), `/extension` (extension context), `/vue` and `/react` adapters                         |
+| `docs/`               | `permissions.md` (accounts, roles, tokens, setup), `extensions.md` (the extension API, with notes for NodeCG authors), `dashboard.md` and `folder-structure.md` |
+| `packages/cli`        | The `mooncg` command line: `mooncg types`, `mooncg user` and `mooncg token`                                                                                     |
+| `packages/dashboard`  | The dashboard: a Vue application the server serves at `/`; see [docs/dashboard.md](docs/dashboard.md)                                                           |
+| `examples/scoreboard` | A reference bundle with a panel, a dialog, a graphic, an extension, an asset category and a config schema with a secret                                         |
 
 ## Writing a bundle
 
@@ -144,10 +161,19 @@ Panel files live under `dashboard/`, graphic files under `graphics/`. They are s
 requested name are served: a name that differs in case, or a path that goes through a symlink or
 junction, gets a 404. The extension must live outside those two folders.
 
+A manifest can declare more, each described in [docs/dashboard.md](docs/dashboard.md):
+
+| Manifest                                        | Gives the bundle                                                                             |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `dialogs`                                       | Pages a panel opens over the dashboard with `mc.dialogs.open(id, data)` and gets a result of |
+| `"singleInstance": true` on a graphic           | A graphic that one page shows at a time; a second page is told so                            |
+| `"config": { "schema": "schemas/config.json" }` | A settings form in the dashboard and `ctx.config` in the extension, with write-only secrets  |
+| `assets`                                        | Categories of uploaded files, served under `/b/<bundle>/assets/` and listed in a replicant   |
+
 ### Bundle states
 
 A bundle is `running`, `failed` or `disabled` (and briefly `enabling` or `disabling`). Bundles
-can be changed while the server runs, from the shell page or over HTTP:
+can be changed while the server runs, from the dashboard's bundle page or over HTTP:
 
 ```sh
 curl -X POST http://127.0.0.1:9090/api/v1/bundles/scoreboard/reload
@@ -166,7 +192,8 @@ curl -X POST http://127.0.0.1:9090/api/v1/bundles/scoreboard/enable
   whose extension is slow to start.
 - Only real bundle names are accepted: lowercase letters, digits and dashes.
 - These calls need the permission `system:bundles.manage`.
-- The states are also a read-only replicant, `system:bundles`, which the shell page follows.
+- The states are also a read-only replicant, `system:bundles`, for whoever may manage bundles.
+  The dashboard follows `system:revision`, which only counts changes, and asks for the list.
 
 `dependencies` in the manifest (`{ "team-data": "^2.0.0" }`) decide the start order. A bundle
 whose dependency is missing, has the wrong version, is not running, or is part of a cycle is
@@ -351,8 +378,9 @@ export default async function start(ctx) {
 }
 ```
 
-[docs/extensions.md](docs/extensions.md) describes the whole API, capabilities, and what
-changes for authors coming from NodeCG.
+[docs/extensions.md](docs/extensions.md) describes the whole API, the configuration an
+extension receives as `ctx.config`, capabilities, and what changes for authors coming from
+NodeCG.
 
 An extension that throws, rejects, exits, loops or runs out of memory ends its own thread, not
 the server: the bundle becomes `failed` with the error and is restarted up to three times. So

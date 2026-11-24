@@ -1,3 +1,5 @@
+import type { Json } from '@mooncg/core';
+
 /**
  * What crosses the thread boundary between the server and an extension's worker, besides the
  * extension's connection itself. Everything is plain data.
@@ -30,6 +32,8 @@ export interface WorkerData {
   readonly bundle: string;
   readonly version: string;
   readonly entry: string;
+  /** The bundle's configuration, for `ctx.config`. */
+  readonly config: Readonly<Record<string, Json>>;
 }
 
 export const LOG_LEVELS = ['info', 'warn', 'error'] as const;

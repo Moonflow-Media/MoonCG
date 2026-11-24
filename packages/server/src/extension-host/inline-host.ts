@@ -57,6 +57,7 @@ export class InlineHost implements ExtensionHost {
       connection,
       bundle: { name: spec.bundle, version: spec.version },
       log,
+      config: spec.config,
     });
     this.#running.set(spec.bundle, { session, dispose });
     try {

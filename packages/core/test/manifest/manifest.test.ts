@@ -205,6 +205,32 @@ describe('parseManifest', () => {
     ]);
   });
 
+  it('takes a permission to read and one to write for an asset category', () => {
+    const result = parseManifest({
+      ...minimal(),
+      permissions: { view: 'See it', operate: 'Change it' },
+      assets: [{ id: 'logos', accept: ['.png'], read: 'view', write: 'operate' }],
+    });
+    expect(result.ok && result.manifest.assets).toEqual([
+      { id: 'logos', accept: ['.png'], read: 'view', write: 'operate' },
+    ]);
+  });
+
+  it('rejects an asset category that accepts nothing', () => {
+    expect(pathsOf({ ...minimal(), assets: [{ id: 'logos', accept: [] }] })).toEqual([
+      'assets.0.accept',
+    ]);
+  });
+
+  it('rejects an asset category that is declared twice or names an undeclared permission', () => {
+    const paths = pathsOf({
+      ...minimal(),
+      permissions: { view: 'See it' },
+      assets: [{ id: 'logos', read: 'view', write: 'operate' }, { id: 'logos' }],
+    });
+    expect(paths).toEqual(['assets.1.id', 'assets.0.write']);
+  });
+
   it('rejects replicant names containing the namespace separator', () => {
     expect(pathsOf({ ...minimal(), replicants: { 'a:b': {} } })).toEqual(['replicants.a:b']);
   });

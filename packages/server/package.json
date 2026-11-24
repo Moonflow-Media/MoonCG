@@ -1,6 +1,6 @@
 {
   "name": "@mooncg/server",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "The MoonCG server: kernel, HTTP, WebSocket transport, extension host.",
   "type": "module",
@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@mooncg/core": "workspace:*",
+    "@mooncg/dashboard": "workspace:*",
     "@mooncg/sdk": "workspace:*",
     "ajv": "^8.20.0",
     "fastify": "^5.12.8",

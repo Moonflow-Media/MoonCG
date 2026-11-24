@@ -52,9 +52,19 @@
           .catch(report);
       document.getElementById('home').addEventListener('click', increment('home'));
       document.getElementById('away').addEventListener('click', increment('away'));
-      document
-        .getElementById('reset')
-        .addEventListener('click', () => mc.request('reset').catch(report));
+
+      // Reset asks first, in a dialog the dashboard shows over everything. `open` resolves
+      // with what the dialog closed with, or `null` if it was dismissed.
+      document.getElementById('reset').addEventListener('click', async () => {
+        try {
+          const confirmed = await mc.dialogs.open('confirm-reset', score.value);
+          if (confirmed === true) await mc.request('reset');
+        } catch (error) {
+          // Opened on its own, outside the dashboard, the panel has nobody to ask.
+          if (error.code === 'unavailable') mc.request('reset').catch(report);
+          else report(error);
+        }
+      });
     </script>
   </body>
 </html>

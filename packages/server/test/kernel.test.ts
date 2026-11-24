@@ -19,6 +19,9 @@ describe('loadConfig', () => {
       extensionStartTimeoutMs: 10000,
       extensionHeartbeatTimeoutMs: 10000,
       maxBodyBytes: 1048576,
+      assetMaxFileBytes: 52428800,
+      assetQuotaBytes: 524288000,
+      assetMaxFiles: 1000,
       secureCookies: false,
       trustProxy: false,
     });
@@ -36,6 +39,9 @@ describe('loadConfig', () => {
       extensionStartTimeoutMs: 10000,
       extensionHeartbeatTimeoutMs: 10000,
       maxBodyBytes: 1048576,
+      assetMaxFileBytes: 52428800,
+      assetQuotaBytes: 524288000,
+      assetMaxFiles: 1000,
       secureCookies: false,
       trustProxy: false,
     });
@@ -54,9 +60,25 @@ describe('loadConfig', () => {
       extensionStartTimeoutMs: 10000,
       extensionHeartbeatTimeoutMs: 10000,
       maxBodyBytes: 1048576,
+      assetMaxFileBytes: 52428800,
+      assetQuotaBytes: 524288000,
+      assetMaxFiles: 1000,
       secureCookies: false,
       trustProxy: false,
     });
+  });
+
+  it('takes the limits for assets from flags and the environment', () => {
+    const argv = ['--asset-max-file-bytes', '1000', '--asset-max-files', '7'];
+    const env = { MOONCG_ASSET_MAX_FILE_BYTES: '5', MOONCG_ASSET_QUOTA_BYTES: '2000' };
+    expect(loadConfig({ argv, env, cwd })).toMatchObject({
+      assetMaxFileBytes: 1000,
+      assetQuotaBytes: 2000,
+      assetMaxFiles: 7,
+    });
+    expect(() => loadConfig({ argv: ['--asset-quota-bytes', '0'], env: {}, cwd })).toThrow(
+      /asset/i,
+    );
   });
 
   it('accepts port 0 for an ephemeral port', () => {

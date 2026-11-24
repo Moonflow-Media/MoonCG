@@ -1,4 +1,4 @@
-import { isPlainObject, MoonCGError, TOKENS_MANAGE, USERS_MANAGE } from '@mooncg/core';
+import { isPlainObject, type Json, MoonCGError, TOKENS_MANAGE, USERS_MANAGE } from '@mooncg/core';
 import type {
   FastifyInstance,
   FastifyReply,
@@ -6,7 +6,7 @@ import type {
   HTTPMethods,
   RouteHandlerMethod,
 } from 'fastify';
-import { SESSION_MAX_MS, ThrottledError } from '../auth/auth.js';
+import { isPrefKey, SESSION_MAX_MS, ThrottledError } from '../auth/auth.js';
 import type { TokenRecord } from '../storage/auth-store.js';
 import type { HttpContext } from './app.js';
 import { credentialsOf, SESSION_COOKIE, sessionCookie, TOKEN_COOKIE } from './identity.js';
@@ -18,7 +18,7 @@ import { credentialsOf, SESSION_COOKIE, sessionCookie, TOKEN_COOKIE } from './id
 export const AUTH_BODY_LIMIT = 16 * 1024;
 
 /** The JSON object a request carries. Anything else is a `bad_request`. */
-function jsonBody(request: FastifyRequest): Record<string, unknown> {
+export function jsonBody(request: FastifyRequest): Record<string, unknown> {
   const type = request.headers['content-type']?.toLowerCase() ?? '';
   if (!type.startsWith('application/json')) {
     throw new MoonCGError('bad_request', 'Expected a JSON body (Content-Type: application/json)');
@@ -216,6 +216,44 @@ export function registerAuthRoutes(app: FastifyInstance, context: HttpContext): 
         { revokeTokens },
       );
       return setSession(request, reply, session).code(204).send();
+    }),
+  );
+
+  // --- Preferences: small values a user keeps on the server, so they follow the user to
+  // another browser. They belong to a person; a token has none.
+  type WithKey = FastifyRequest<{ Params: { key: string } }>;
+  const owner = (request: FastifyRequest, reply: FastifyReply): string | undefined => {
+    const { id, kind } = actor(request);
+    if (kind === 'user' && id.startsWith('user:')) return id.slice('user:'.length);
+    if (kind === 'anonymous') fail(reply, 401, 'forbidden', 'Authentication required');
+    else fail(reply, 403, 'forbidden', 'Only a user has preferences');
+    return undefined;
+  };
+  route(
+    'GET',
+    '/api/v1/me/prefs/:key',
+    handle(undefined, (request: WithKey, reply) => {
+      const user = owner(request, reply);
+      if (user === undefined) return reply;
+      const { key } = request.params;
+      // A key that cannot be one has nothing under it, ever. One that can, but has nothing
+      // stored yet, is the ordinary first visit: that answers `null`, not an error.
+      if (!isPrefKey(key)) return fail(reply, 404, 'not_found', 'Not found');
+      return { value: auth.getPref(user, key) ?? null };
+    }),
+  );
+  route(
+    'PUT',
+    '/api/v1/me/prefs/:key',
+    handle(undefined, (request: WithKey, reply) => {
+      const user = owner(request, reply);
+      if (user === undefined) return reply;
+      const body = jsonBody(request);
+      if (!Object.hasOwn(body, 'value')) {
+        throw new MoonCGError('bad_request', 'Expected { "value": ... }');
+      }
+      auth.setPref(user, request.params.key, body.value as Json);
+      return reply.code(204).send();
     }),
   );
 

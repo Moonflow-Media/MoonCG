@@ -77,7 +77,16 @@ const message = z.strictObject({
 const asset = z.strictObject({
   id,
   title: z.string().min(1).optional(),
-  accept: z.array(z.string().min(1)).optional(),
+  /**
+   * What may be uploaded: file extensions such as `.png` and media types such as `image/*`.
+   * Without it, or with the entry for every media type (a star on both sides of the
+   * slash), any file. An empty list would take nothing and is refused.
+   */
+  accept: z.array(z.string().min(1)).min(1, 'Must name at least one kind of file').optional(),
+  /** Needed to list and load the files. Without it, any permission of the bundle. */
+  read: permissionName.optional(),
+  /** Needed to upload and delete. Without it, `system:bundles.manage`. */
+  write: permissionName.optional(),
 });
 
 export const manifestSchema = z.strictObject({
@@ -151,7 +160,7 @@ export function manifestJsonSchema(): Record<string, unknown> {
 
 function duplicateIdErrors(manifest: Manifest): ManifestError[] {
   const errors: ManifestError[] = [];
-  for (const key of ['panels', 'dialogs', 'graphics'] as const) {
+  for (const key of ['panels', 'dialogs', 'graphics', 'assets'] as const) {
     const seen = new Set<string>();
     manifest[key].forEach((item, index) => {
       if (seen.has(item.id)) {
@@ -178,6 +187,10 @@ function permissionReferenceErrors(manifest: Manifest): ManifestError[] {
     references.push([`messages.${name}.send`, declaration.send]);
     references.push([`messages.${name}.listen`, declaration.listen]);
   }
+  manifest.assets.forEach((category, index) => {
+    references.push([`assets.${index}.read`, category.read]);
+    references.push([`assets.${index}.write`, category.write]);
+  });
   for (const [role, permissions] of Object.entries(manifest.defaultRoles)) {
     permissions.forEach((permission, index) => {
       references.push([`defaultRoles.${role}.${index}`, permission]);

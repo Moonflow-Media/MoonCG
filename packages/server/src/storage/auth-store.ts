@@ -160,6 +160,24 @@ export interface SessionRepository {
   deleteUserSessionsBefore(limits: { readonly lastSeen: number; readonly createdAt: number }): void;
 }
 
+/** Small values a user keeps on the server, such as a dashboard layout. */
+export interface PrefsRepository {
+  /** The stored JSON text. */
+  get(userId: string, key: string): string | undefined;
+  put(userId: string, key: string, json: string): void;
+  count(userId: string): number;
+}
+
+/** The schema for user preferences, added as its own migration. */
+export const PREFS_MIGRATION = `
+  CREATE TABLE user_prefs (
+    user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    json TEXT NOT NULL,
+    PRIMARY KEY (user_id, key)
+  )
+`;
+
 export interface BundleDefaultsRepository {
   /** Whether the bundle's `defaultRoles` were turned into grants already. */
   applied(bundle: string): boolean;
@@ -174,6 +192,7 @@ export interface AuthStore {
   readonly tokens: TokenRepository;
   readonly sessions: SessionRepository;
   readonly bundleDefaults: BundleDefaultsRepository;
+  readonly prefs: PrefsRepository;
   /** Runs `work` so that all of its changes are kept, or none if it throws. */
   transaction<T>(work: () => T): T;
 }
@@ -376,6 +395,25 @@ export function sqlAuthStore(db: Db): AuthStore {
         db.all('SELECT 1 FROM bundle_defaults WHERE bundle = ?', bundle).length > 0,
       markApplied: (bundle) =>
         db.run('INSERT OR IGNORE INTO bundle_defaults (bundle) VALUES (?)', bundle),
+    },
+    prefs: {
+      get: (userId, key) =>
+        db.all<{ json: string }>(
+          'SELECT json FROM user_prefs WHERE user_id = ? AND key = ?',
+          userId,
+          key,
+        )[0]?.json,
+      put: (userId, key, json) =>
+        db.run(
+          `INSERT INTO user_prefs (user_id, key, json) VALUES (?, ?, ?)
+           ON CONFLICT (user_id, key) DO UPDATE SET json = excluded.json`,
+          userId,
+          key,
+          json,
+        ),
+      count: (userId) =>
+        db.all<{ n: number }>('SELECT COUNT(*) AS n FROM user_prefs WHERE user_id = ?', userId)[0]
+          ?.n ?? 0,
     },
     transaction(work) {
       // A transaction inside another is part of it.

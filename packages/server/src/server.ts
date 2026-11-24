@@ -7,22 +7,31 @@ import {
   RouteTable,
   SYSTEM_BUNDLE,
 } from '@mooncg/core';
+import { AssetStore } from './assets/store.js';
 import { type Auth, createAuth } from './auth/auth.js';
 import type { ScryptParams } from './auth/password.js';
 import type { BundleRecord } from './bundles/bundles.js';
 import { BundleManager } from './bundles/manager.js';
+import { BundleConfigs, scrubbingLogger } from './config/bundle-config.js';
 import type {
   ExtensionHost,
   ExtensionServices,
   HostStats,
 } from './extension-host/extension-host.js';
 import { WorkerHost } from './extension-host/worker-host.js';
+import { GraphicInstances } from './graphics/instances.js';
 import { type BundleLifecycle, createApp } from './http/app.js';
 import { createIdentify, type ResolvePrincipal } from './http/identity.js';
 import { attachWebSocket } from './http/ws.js';
 import type { ServerConfig } from './kernel/config.js';
 import { createLifecycle } from './kernel/lifecycle.js';
-import { createLogger, errorMessage, type Logger } from './kernel/logger.js';
+import {
+  createLogBuffer,
+  createLogger,
+  errorMessage,
+  type Logger,
+  recordingLogger,
+} from './kernel/logger.js';
 import { createPersistence } from './replicants/persistence.js';
 import { openSqliteStorage, type Storage } from './storage/replicant-store.js';
 
@@ -30,6 +39,8 @@ export interface ServerOptions {
   readonly logger?: Logger;
   /** Path of the SDK's browser build. Without it `/sdk/mooncg.js` answers 404. */
   readonly sdkFile?: string | undefined;
+  /** Folder of the built dashboard. Without it the dashboard routes answer 404. */
+  readonly dashboardDir?: string | undefined;
   /**
    * For tests: who every request acts as, and against which policy, instead of the accounts
    * in the store. Without them a request is whoever its session cookie or API token says,
@@ -44,6 +55,10 @@ export interface ServerOptions {
    * such as through the command line tool. Changes made through the server apply at once.
    */
   readonly socketRecheckMs?: number;
+  /** How long an asset upload may send nothing before it is given up. */
+  readonly assetUploadIdleMs?: number;
+  /** How often open sockets are pinged; one that misses two pings in a row is dropped. */
+  readonly socketHeartbeatMs?: number;
   /** What the server keeps across restarts. Defaults to SQLite in the configured data dir. */
   readonly storage?: Storage;
   /**
@@ -113,7 +128,16 @@ export async function startServer(
   config: ServerConfig,
   options: ServerOptions = {},
 ): Promise<RunningServer> {
-  const logger = options.logger ?? createLogger();
+  // Everything the server logs is also kept for the log page.
+  const logs = createLogBuffer();
+  // No line is printed or kept with a secret of a bundle's configuration in it.
+  let warn = (_message: string) => {};
+  const configs = new BundleConfigs({
+    dataDir: config.dataDir,
+    warn: (message) => warn(message),
+  });
+  const logger = scrubbingLogger(recordingLogger(options.logger ?? createLogger(), logs), configs);
+  warn = (message) => logger.warn(message);
   const lifecycle = createLifecycle(logger);
   const registry = new ReplicantRegistry({
     // Every declared replicant gets an epoch no earlier one had, in this run or a previous
@@ -164,9 +188,22 @@ export async function startServer(
         heartbeatIntervalMs: Math.min(5000, Math.ceil(config.extensionHeartbeatTimeoutMs / 2)),
       });
     lifecycle.add('extension host', () => host.close());
+    const instances = new GraphicInstances(registry);
+    const assets = new AssetStore({
+      dataDir: config.dataDir,
+      registry,
+      maxFileBytes: config.assetMaxFileBytes,
+      quotaBytes: config.assetQuotaBytes,
+      maxFiles: config.assetMaxFiles,
+      uploadIdleMs: options.assetUploadIdleMs,
+    });
+    await assets.sweep();
     const manager = new BundleManager({
       bundlesDir: config.bundlesDir,
       registry,
+      instances,
+      assets,
+      config: configs,
       bus,
       host,
       logger,
@@ -188,7 +225,7 @@ export async function startServer(
           ),
       );
     applyDefaults();
-    const change = (action: keyof BundleLifecycle) => async (name: string) => {
+    const change = (action: 'enable' | 'disable' | 'reload') => async (name: string) => {
       const record = await manager[action](name);
       applyDefaults();
       return record;
@@ -197,6 +234,7 @@ export async function startServer(
       enable: change('enable'),
       disable: change('disable'),
       reload: change('reload'),
+      restartExtension: (name) => manager.restartExtension(name),
     };
     const started = manager.startAll().catch((error) => {
       logger.error(`Starting the bundles failed: ${errorMessage(error)}`);
@@ -205,6 +243,8 @@ export async function startServer(
     const app = await createApp({
       bundles: () => manager.list(),
       sdkFile: options.sdkFile,
+      dashboardDir: options.dashboardDir,
+      logs,
       auth,
       ...(options.policy === undefined ? {} : { policy: options.policy }),
       ...(options.resolvePrincipal === undefined
@@ -212,6 +252,9 @@ export async function startServer(
         : { resolvePrincipal: options.resolvePrincipal }),
       routes,
       lifecycle: bundleLifecycle,
+      instances,
+      assets,
+      config: configs,
       maxBodyBytes: config.maxBodyBytes,
       allowedOrigins: config.allowedOrigins,
       secureCookies: config.secureCookies,
@@ -224,8 +267,10 @@ export async function startServer(
       // The shell is no bundle; it connects under the server's own name.
       bundleExists: (name) => name === SYSTEM_BUNDLE || manager.isRunning(name),
       identify,
+      graphics: instances,
       allowedOrigins: config.allowedOrigins,
       transport: { trustProxy: config.trustProxy },
+      heartbeatMs: options.socketHeartbeatMs,
       logger,
     });
     lifecycle.add('websocket', () => sockets.close());

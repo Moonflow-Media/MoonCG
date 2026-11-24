@@ -23,6 +23,7 @@ async function setup(overrides: Partial<AppOptions> = {}) {
     resolvePrincipal: resolveLocalAdmin,
     bundles,
     sdkFile: fixture('sdk/mooncg.js'),
+    dashboardDir: fixture('dashboard'),
     ...overrides,
   });
   apps.push(app);
@@ -38,19 +39,19 @@ const asViewer = { policy: viewerPolicy, resolvePrincipal: () => viewer };
 const asNobody = { policy: { roles: {} }, resolvePrincipal: () => viewer };
 
 describe('shell', () => {
-  it('serves the minimal dashboard shell and its script', async () => {
+  it('serves the dashboard page and its built files', async () => {
     const app = await setup();
 
     const page = await app.inject({ url: '/' });
-    const script = await app.inject({ url: '/shell.js' });
+    const script = await app.inject({ url: '/ui/app.js' });
 
     expect(page.statusCode).toBe(200);
     expect(page.headers['content-type']).toContain('text/html');
-    expect(page.body).toContain('MoonCG');
-    expect(page.body).toContain('/shell.js');
+    expect(page.body).toContain('dashboard fixture');
+    expect(page.body).toContain('/ui/app.js');
     expect(script.statusCode).toBe(200);
     expect(script.headers['content-type']).toContain('text/javascript');
-    expect(script.body).toContain('/api/v1/bundles');
+    expect(script.body).toContain('fixture');
   });
 });
 
@@ -78,8 +79,16 @@ describe('GET /api/v1/bundles', () => {
       panels: [
         { id: 'control', title: 'Control', width: 2, url: '/b/good/dashboard/control.html' },
       ],
+      dialogs: [],
+      assets: [],
       graphics: [
-        { id: 'overlay', width: 1920, height: 1080, url: '/b/good/graphics/overlay.html' },
+        {
+          id: 'overlay',
+          width: 1920,
+          height: 1080,
+          singleInstance: false,
+          url: '/b/good/graphics/overlay.html',
+        },
       ],
     });
     expect(bundles[0]).toMatchObject({ name: 'broken', state: 'failed', panels: [], graphics: [] });
@@ -156,15 +165,12 @@ describe('GET /sdk/mooncg.js', () => {
 });
 
 describe('authorization', () => {
-  it.each([['/'], ['/shell.js'], ['/api/v1/bundles']])(
-    'answers 403 for %s without any grant',
-    async (url) => {
-      const app = await setup(asNobody);
-      const response = await app.inject({ url });
-      expect(response.statusCode).toBe(403);
-      expect(response.json()).toMatchObject({ error: { code: 'forbidden' } });
-    },
-  );
+  it.each([['/'], ['/api/v1/bundles']])('answers 403 for %s without any grant', async (url) => {
+    const app = await setup(asNobody);
+    const response = await app.inject({ url });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ error: { code: 'forbidden' } });
+  });
 
   it.each([
     ['/b/good/dashboard/control.html'],

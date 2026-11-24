@@ -12,11 +12,23 @@
         overflow: hidden;
         background: transparent;
       }
+      #title {
+        position: absolute;
+        top: 16px;
+        left: 60px;
+        color: #fff;
+        font: 600 28px system-ui, sans-serif;
+        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+      }
+      #board img {
+        height: 72px;
+      }
       #board {
         position: absolute;
         top: 60px;
         left: 60px;
         display: flex;
+        align-items: center;
         gap: 24px;
         padding: 16px 32px;
         border-radius: 12px;
@@ -28,21 +40,42 @@
     </style>
   </head>
   <body>
+    <div id="title"></div>
     <div id="board">
+      <img id="home-logo" alt="" hidden />
       <span>HOME</span>
       <span id="home">0</span>
       <span>:</span>
       <span id="away">0</span>
       <span>AWAY</span>
+      <img id="away-logo" alt="" hidden />
     </div>
 
     <script type="module">
       import { createClient } from '/sdk/mooncg.js';
 
-      const score = createClient().replicant('score');
-      score.subscribe((value) => {
+      const mc = createClient();
+      mc.replicant('score').subscribe((value) => {
         document.getElementById('home').textContent = value.home;
         document.getElementById('away').textContent = value.away;
+      });
+
+      // Set by the extension from the bundle's settings.
+      mc.replicant('title').subscribe((value) => {
+        document.getElementById('title').textContent = value;
+      });
+
+      // The server keeps the list of each asset category in a read-only replicant, so the
+      // overlay follows uploads. A logo is the file called `home.<type>` or `away.<type>`.
+      mc.replicant('$assets.logos').subscribe((files) => {
+        for (const side of ['home', 'away']) {
+          const image = document.getElementById(`${side}-logo`);
+          const file = files.find((item) => item.name.toLowerCase().startsWith(`${side}.`));
+          image.hidden = !file;
+          // The time it was written makes a replaced file a new URL, so it is loaded again.
+          if (file) image.src = `${file.url}?v=${encodeURIComponent(file.modified)}`;
+          else image.removeAttribute('src');
+        }
       });
     </script>
   </body>

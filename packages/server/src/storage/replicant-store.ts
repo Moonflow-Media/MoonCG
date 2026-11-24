@@ -1,7 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Json } from '@mooncg/core';
-import { AUTH_MIGRATION, type AuthStore, sqlAuthStore } from './auth-store.js';
+import { AUTH_MIGRATION, type AuthStore, PREFS_MIGRATION, sqlAuthStore } from './auth-store.js';
 import { type Db, migrate, openSqliteDb, openSqliteDbSync } from './db.js';
 
 export const DATABASE_FILE = 'mooncg.db';
@@ -18,6 +18,7 @@ export const MIGRATIONS: readonly string[] = [
   // Bundles are enabled unless listed here.
   'CREATE TABLE disabled_bundles (name TEXT NOT NULL PRIMARY KEY)',
   AUTH_MIGRATION,
+  PREFS_MIGRATION,
 ];
 
 export interface StoredReplicant {

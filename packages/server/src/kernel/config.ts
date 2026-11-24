@@ -1,6 +1,11 @@
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
+/** The largest asset file unless configured otherwise: 50 MiB. */
+export const DEFAULT_ASSET_MAX_FILE_BYTES = 50 * 1024 * 1024;
+/** What one asset category may hold unless configured otherwise: 500 MiB. */
+export const DEFAULT_ASSET_QUOTA_BYTES = 500 * 1024 * 1024;
+
 export interface ServerConfig {
   readonly port: number;
   readonly host: string;
@@ -24,6 +29,12 @@ export interface ServerConfig {
   readonly extensionHeartbeatTimeoutMs: number;
   /** The largest request body a bundle's HTTP route accepts, in bytes. */
   readonly maxBodyBytes: number;
+  /** The largest file that can be uploaded as an asset, in bytes. */
+  readonly assetMaxFileBytes: number;
+  /** How many bytes the files of one asset category of one bundle may take together. */
+  readonly assetQuotaBytes: number;
+  /** How many files one asset category of one bundle may hold. */
+  readonly assetMaxFiles: number;
   /**
    * Marks the session cookies `Secure`, so browsers send them over HTTPS only. Turn it on
    * whenever people reach the server through HTTPS.
@@ -47,7 +58,7 @@ export interface ConfigSources {
 /**
  * Builds the configuration. Each flag (`--port`, `--host`, `--bundles-dir`, `--data-dir`,
  * `--extension-memory-mb`, `--extension-start-timeout-ms`, `--extension-heartbeat-timeout-ms`,
- * `--max-body-bytes`, repeatable `--allowed-origin`, and the switches `--secure-cookies` and
+ * `--max-body-bytes`, `--asset-max-file-bytes`, `--asset-quota-bytes`, `--asset-max-files`, repeatable `--allowed-origin`, and the switches `--secure-cookies` and
  * `--trust-proxy`) wins over its environment variable: the flag in capitals with `MOONCG_` in
  * front and underscores for dashes, such as `MOONCG_DATA_DIR`, and `MOONCG_ALLOWED_ORIGINS` as
  * a comma-separated list. A switch is on in the environment as `1` or `true`. That wins over
@@ -65,6 +76,9 @@ export function loadConfig({ argv, env, cwd }: ConfigSources): ServerConfig {
       'extension-start-timeout-ms': { type: 'string' },
       'extension-heartbeat-timeout-ms': { type: 'string' },
       'max-body-bytes': { type: 'string' },
+      'asset-max-file-bytes': { type: 'string' },
+      'asset-quota-bytes': { type: 'string' },
+      'asset-max-files': { type: 'string' },
       'allowed-origin': { type: 'string', multiple: true },
       'secure-cookies': { type: 'boolean' },
       'trust-proxy': { type: 'boolean' },
@@ -96,6 +110,22 @@ export function loadConfig({ argv, env, cwd }: ConfigSources): ServerConfig {
     maxBodyBytes: parsePositive(
       'body size',
       values['max-body-bytes'] ?? env.MOONCG_MAX_BODY_BYTES ?? String(1024 * 1024),
+    ),
+    assetMaxFileBytes: parsePositive(
+      'asset file size',
+      values['asset-max-file-bytes'] ??
+        env.MOONCG_ASSET_MAX_FILE_BYTES ??
+        String(DEFAULT_ASSET_MAX_FILE_BYTES),
+    ),
+    assetQuotaBytes: parsePositive(
+      'asset quota',
+      values['asset-quota-bytes'] ??
+        env.MOONCG_ASSET_QUOTA_BYTES ??
+        String(DEFAULT_ASSET_QUOTA_BYTES),
+    ),
+    assetMaxFiles: parsePositive(
+      'asset file count',
+      values['asset-max-files'] ?? env.MOONCG_ASSET_MAX_FILES ?? '1000',
     ),
     secureCookies: values['secure-cookies'] ?? on(env.MOONCG_SECURE_COOKIES),
     trustProxy: values['trust-proxy'] ?? on(env.MOONCG_TRUST_PROXY),

@@ -18,6 +18,15 @@
       "requires": "operate"
     }
   ],
+  "dialogs": [
+    {
+      "id": "confirm-reset",
+      "title": "Reset the score?",
+      "file": "dashboard/confirm-reset.html",
+      "width": 4,
+      "requires": "operate"
+    }
+  ],
   "graphics": [
     {
       "id": "overlay",
@@ -35,9 +44,24 @@
       "persistent": true,
       "read": "view",
       "write": "operate"
+    },
+    "title": {
+      "default": "",
+      "read": "view",
+      "write": "operate"
     }
   },
   "messages": {
     "reset": { "send": "operate" }
-  }
+  },
+  "assets": [
+    {
+      "id": "logos",
+      "title": "Team logos",
+      "accept": ["image/*"],
+      "read": "view",
+      "write": "operate"
+    }
+  ],
+  "config": { "schema": "schemas/config.json" }
 }

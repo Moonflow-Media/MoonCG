@@ -4,6 +4,8 @@ import {
   authorize,
   effectiveGrants,
   isGrantPattern,
+  type Json,
+  jsonProblem,
   MoonCGError,
   type Policy,
   type Principal,
@@ -66,6 +68,12 @@ const ADMIN_ROLE = 'admin';
 const LOCAL = 'local';
 const USER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const ROLE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const PREF_KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+/** Whether a text can be the key of a preference. */
+export const isPrefKey = (key: unknown): key is string =>
+  typeof key === 'string' && PREF_KEY.test(key);
+/** How many preferences one user can keep. Each is at most one request body in size. */
+export const MAX_PREFS = 50;
 
 /**
  * Whether a login is worth looking at: the name could be a user name and the password is not
@@ -231,6 +239,10 @@ export interface Auth {
       readonly defaultRoles: Readonly<Record<string, readonly string[]>>;
     }[],
   ): void;
+  /** A value the user stored under a key, such as a dashboard layout. */
+  getPref(userId: string, key: string): Json | undefined;
+  /** Stores a value. A user keeps at most `MAX_PREFS` of them. */
+  setPref(userId: string, key: string, value: Json): void;
   /** `listener` is called after anything changed that can change someone's access. */
   onChange(listener: () => void): () => void;
   /** What the throttles hold and how many passwords are being checked. A leak shows here. */
@@ -786,6 +798,27 @@ export function createAuth(options: AuthOptions): Auth {
         applied = true;
       }
       if (applied) changed();
+    },
+
+    getPref(userId, key) {
+      const json = store.prefs.get(userId, key);
+      return json === undefined ? undefined : (JSON.parse(json) as Json);
+    },
+
+    setPref(userId, key, value) {
+      existing(userId);
+      if (typeof key !== 'string' || !PREF_KEY.test(key)) {
+        throw bad(
+          'A preference key has 1 to 64 lowercase letters, digits, dots, dashes or underscores',
+        );
+      }
+      if (jsonProblem(value) !== null) throw bad('A preference must be JSON');
+      store.transaction(() => {
+        if (store.prefs.get(userId, key) === undefined && store.prefs.count(userId) >= MAX_PREFS) {
+          throw new MoonCGError('conflict', `A user can keep at most ${MAX_PREFS} preferences`);
+        }
+        store.prefs.put(userId, key, JSON.stringify(value));
+      });
     },
 
     onChange(listener) {

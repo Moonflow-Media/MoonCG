@@ -104,7 +104,12 @@ export class WorkerHost implements ExtensionHost {
     const reportDropped = (dropped: number) => {
       if (dropped > 0) log.warn(`${dropped} log lines dropped`);
     };
-    const workerData: WorkerData = { bundle, version: spec.version, entry: spec.entry };
+    const workerData: WorkerData = {
+      bundle,
+      version: spec.version,
+      entry: spec.entry,
+      config: spec.config ?? {},
+    };
     const worker = new Worker(
       this.#options.bootstrap ?? new URL('./worker-main.js', import.meta.url),
       {

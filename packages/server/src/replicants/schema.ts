@@ -16,8 +16,10 @@ export const MAX_REPORTED_ERRORS = 10;
 /**
  * Compiles a JSON Schema into a replicant validator. Schemas are draft-07 unless their `$schema`
  * names draft 2020-12. Throws with a readable message when the schema itself is not usable.
+ * `extra` adds options for one schema, such as `useDefaults`, which makes the validator fill
+ * the schema's defaults into the value it checks.
  */
-export function compileSchema(schema: unknown): Validate {
+export function compileSchema(schema: unknown, extra: Options = {}): Validate {
   if (!isPlainObject(schema) && typeof schema !== 'boolean') {
     throw new Error('A JSON Schema must be a JSON object');
   }
@@ -33,7 +35,8 @@ export function compileSchema(schema: unknown): Validate {
       ? schema.$schema.replace(/#$/, '')
       : undefined;
   // One instance per schema, so equal `$id`s in different bundles cannot collide.
-  const ajv = declared === DRAFT_2020_12 ? new Ajv2020(OPTIONS) : new Ajv(OPTIONS);
+  const options = { ...OPTIONS, ...extra };
+  const ajv = declared === DRAFT_2020_12 ? new Ajv2020(options) : new Ajv(options);
   const check = ajv.compile(schema);
   return (value) => {
     const valid: unknown = check(value);

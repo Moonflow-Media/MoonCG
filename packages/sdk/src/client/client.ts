@@ -5,9 +5,11 @@ import {
   decodeServerMessage,
   deepFreeze,
   encodeMessage,
+  type GraphicEndReason,
   type HttpMethod,
   type HttpRequestData,
   type HttpResponseData,
+  isSafeRelativePath,
   type Json,
   jsonProblem,
   MoonCGError,
@@ -20,6 +22,7 @@ import {
   type ServerMessage,
   updateWithRetry,
 } from '@mooncg/core';
+import { createDialogs, type Dialogs } from './dialogs.js';
 
 /** The part of the WebSocket API the client uses. Browser and Node 22 `WebSocket` both fit. */
 export interface SocketLike {
@@ -40,6 +43,29 @@ export interface ClientOptions {
   createSocket?: (url: string) => SocketLike;
   /** How long to wait before reconnecting after the socket drops. Defaults to 1000. */
   reconnectDelayMs?: number;
+  /**
+   * The graphic this page is, as its file inside the bundle (`graphics/overlay.html`).
+   * Defaults to the `/b/<bundle>/graphics/…` part of the page URL, so a graphic need not say
+   * it. The server lists the page as a connected instance of that graphic.
+   */
+  graphic?: string | undefined;
+  /**
+   * Called with `true` when the server refuses this page because its graphic takes a single
+   * instance and is open somewhere else, and with `false` once the page got the place after
+   * all. Until then nothing loads. By default the page shows a notice instead.
+   */
+  onDuplicate?: (duplicate: boolean) => void;
+  /**
+   * Called when the server ends this page as the instance of its graphic: `replaced` when
+   * the same account opened the graphic again somewhere, `disconnected` when an operator
+   * took the place away. The client is closed then and does not connect again; reload the
+   * page to ask for the place anew. By default the page shows a notice.
+   */
+  onEnded?: (reason: GraphicEndReason) => void;
+  /** How long a refused duplicate waits before it asks again. Defaults to 3000. */
+  duplicateRetryMs?: number;
+  /** What a graphic does when the server asks it to reload. Defaults to reloading the page. */
+  reloadPage?: () => void;
 }
 
 /**
@@ -85,6 +111,11 @@ export interface MoonCGClient extends Messaging {
   readonly bundle: string;
   /** Resolves after the first successful handshake. Rejects on a protocol mismatch. */
   readonly ready: Promise<void>;
+  /**
+   * Dialogs of this page's bundle, shown over the dashboard. They need no connection to the
+   * server, only the dashboard around the page.
+   */
+  readonly dialogs: Dialogs;
   /** Closes the socket for good. */
   close(): void;
 }
@@ -122,6 +153,68 @@ export interface ConnectionOptions extends ClientOptions {
 export function bundleFromPath(pathname: string): string | undefined {
   const name = /^\/b\/([^/]+)\//.exec(pathname)?.[1];
   return name !== undefined && BUNDLE_NAME_PATTERN.test(name) ? name : undefined;
+}
+
+/**
+ * The file of the graphic a page served under `/b/<bundle>/graphics/…` is, as a manifest
+ * names it. `undefined` for every other page.
+ */
+export function graphicFromPath(pathname: string): string | undefined {
+  const rest = /^\/b\/[^/]+\/(graphics\/.+)$/.exec(pathname)?.[1];
+  if (rest === undefined) return undefined;
+  try {
+    const file = rest.split('/').map(decodeURIComponent).join('/');
+    return isSafeRelativePath(file) ? file : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const DUPLICATE_NOTICE_ID = 'mooncg-duplicate';
+
+const ENDED_NOTICE_ID = 'mooncg-ended';
+const ENDED_TEXT: Readonly<Record<GraphicEndReason, string>> = {
+  replaced:
+    'This graphic was opened again somewhere else by the same account, and takes one ' +
+    'instance. Reload this page to bring it back here.',
+  disconnected: 'This graphic was disconnected by an operator. Reload this page to connect again.',
+};
+
+/** Covers the page with a notice that this graphic is open elsewhere, or takes it away. */
+function showDuplicateNotice(duplicate: boolean): void {
+  showNotice(
+    DUPLICATE_NOTICE_ID,
+    duplicate
+      ? 'This graphic is already open somewhere else and takes one instance. ' +
+          'This page shows it as soon as the other one is closed.'
+      : undefined,
+  );
+}
+
+/** Covers the page with a notice, or takes the one with that id away. */
+function showNotice(id: string, text: string | undefined): void {
+  if (typeof document === 'undefined') return;
+  document.getElementById(id)?.remove();
+  if (text === undefined) return;
+  const notice = document.createElement('div');
+  notice.id = id;
+  notice.setAttribute('role', 'alert');
+  notice.textContent = text;
+  // Set as properties, which a page's Content-Security-Policy does not count as inline style.
+  Object.assign(notice.style, {
+    position: 'fixed',
+    inset: '0',
+    zIndex: '2147483647',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '32px',
+    background: '#101218',
+    color: '#fff',
+    font: '24px system-ui, sans-serif',
+    textAlign: 'center',
+  });
+  (document.body ?? document.documentElement).append(notice);
 }
 
 interface Deferred<T = void> {
@@ -165,8 +258,8 @@ interface TopicState {
 
 /** Connects a page to the server. */
 export function createClient(options: ClientOptions = {}): MoonCGClient {
-  const { bundle, ready, replicant, send, on, request, close } = createConnection(options);
-  return { bundle, ready, replicant, send, on, request, close };
+  const { bundle, ready, dialogs, replicant, send, on, request, close } = createConnection(options);
+  return { bundle, ready, dialogs, replicant, send, on, request, close };
 }
 
 export function createConnection(options: ConnectionOptions = {}): Connection {
@@ -180,6 +273,18 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
   if (!url) throw new Error('MoonCG: unknown server. Pass { url } when not running in a page.');
   const createSocket = options.createSocket ?? ((target) => new WebSocket(target));
   const reconnectDelayMs = options.reconnectDelayMs ?? 1000;
+  const duplicateRetryMs = options.duplicateRetryMs ?? 3000;
+  const graphic =
+    'graphic' in options
+      ? options.graphic
+      : page && bundleFromPath(page.pathname) === bundle
+        ? graphicFromPath(page.pathname)
+        : undefined;
+  const onDuplicate = options.onDuplicate ?? showDuplicateNotice;
+  const onEnded =
+    options.onEnded ??
+    ((reason: GraphicEndReason) => showNotice(ENDED_NOTICE_ID, ENDED_TEXT[reason]));
+  const reloadPage = options.reloadPage ?? (() => page?.reload());
   const report =
     options.onError ??
     ((message: string, error: unknown) => console.error(`MoonCG: ${message}`, error));
@@ -197,6 +302,8 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
   /** Set once the client is down for good: closed by the caller or refused by the server. */
   let stopError: MoonCGError | undefined;
   let nextId = 1;
+  /** The server refused this page as a second instance of its graphic; it keeps asking. */
+  let duplicate = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
   const send = (msg: ClientMessage) => socket?.send(encodeMessage(msg));
@@ -319,6 +426,10 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
           return;
         }
         connected = true;
+        if (duplicate) {
+          duplicate = false;
+          onDuplicate(false);
+        }
         ready.resolve();
         for (const [name, state] of replicants) subscribe(name, state);
         for (const [name, topic] of topics) {
@@ -381,6 +492,18 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
           }
         }
         return;
+      case 'reload':
+        reloadPage();
+        return;
+      case 'graphic.end': {
+        // Not asked for again: two pages of one account would take the place from each
+        // other for ever, and a page an operator disconnected would be back at once.
+        const error = new MoonCGError('conflict', ENDED_TEXT[msg.reason]);
+        for (const state of replicants.values()) setError(state, error);
+        stop(error);
+        onEnded(msg.reason);
+        return;
+      }
       case 'msg.gone':
         // The server ended the subscription; a reconnect must not ask for it again.
         topics.delete(msg.name);
@@ -418,7 +541,13 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
         const error = new MoonCGError(msg.code, msg.message);
         if (msg.id === undefined) {
           // Before the handshake completes, an error without a request id refuses the hello.
-          if (!connected) stop(error);
+          if (connected) return;
+          if (msg.code === 'conflict' && graphic !== undefined) {
+            // Refused as a duplicate, which ends when the other instance does: ask again.
+            if (!duplicate) onDuplicate(true);
+            duplicate = true;
+            socket?.close();
+          } else stop(error);
           return;
         }
         const refused = pendingSubs.get(msg.id);
@@ -437,7 +566,11 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
     const current = createSocket(url);
     socket = current;
     current.addEventListener('open', () => {
-      send({ t: 'hello', v: PROTOCOL_VERSION, bundle });
+      send(
+        graphic === undefined
+          ? { t: 'hello', v: PROTOCOL_VERSION, bundle }
+          : { t: 'hello', v: PROTOCOL_VERSION, bundle, graphic },
+      );
     });
     current.addEventListener('message', (event) => {
       const decoded = decodeServerMessage(String(event.data));
@@ -450,7 +583,8 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
       const dropped = new MoonCGError('disconnected', 'The connection to the server was lost');
       for (const waiting of pending.values()) waiting.reject(dropped);
       pending.clear();
-      if (!stopError) reconnectTimer = setTimeout(connect, reconnectDelayMs);
+      if (stopError) return;
+      reconnectTimer = setTimeout(connect, duplicate ? duplicateRetryMs : reconnectDelayMs);
     });
   };
 
@@ -513,6 +647,7 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
   return {
     bundle,
     ready: ready.promise,
+    dialogs: createDialogs(),
     replicant(name: string) {
       const qualified = qualifyReplicantName(name, bundle);
       let state = replicants.get(qualified);

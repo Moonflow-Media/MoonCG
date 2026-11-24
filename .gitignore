@@ -6,6 +6,10 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 
+# Playwright
+test-results/
+playwright-report/
+
 # Local tooling
 .idea/
 .atl/

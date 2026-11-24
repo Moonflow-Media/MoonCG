@@ -1,0 +1,379 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  --line: #2a2e36;
+  --muted: #9aa1ad;
+}
+body {
+  margin: 0;
+  background: #14161a;
+  color: #e6e8eb;
+}
+a {
+  color: #8ab4f8;
+}
+h1 {
+  margin: 0 0 16px;
+  font-size: 20px;
+}
+h2 {
+  margin: 24px 0 12px;
+  font-size: 16px;
+}
+button,
+input,
+textarea {
+  padding: 4px 8px;
+  font: inherit;
+}
+code {
+  font-size: 13px;
+}
+main {
+  padding: 24px;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--line);
+}
+.top nav {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.top nav a {
+  text-decoration: none;
+}
+.top nav a.router-link-active {
+  color: #fff;
+  font-weight: 600;
+}
+.brand {
+  font-weight: 700;
+}
+.user,
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+.problem {
+  margin: 8px 24px;
+  color: #ff9d9d;
+}
+main .problem {
+  margin: 8px 0;
+}
+.empty {
+  color: var(--muted);
+}
+.secret {
+  padding: 12px;
+  border: 1px solid #5a7d3a;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 16px;
+}
+.panel {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: var(--line);
+}
+.panel h2 {
+  margin: 0;
+  font-size: 13px;
+}
+.tools button {
+  margin-left: 2px;
+  padding: 0 6px;
+  font-size: 12px;
+}
+.panel iframe {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+.w-1 {
+  grid-column: span 1;
+}
+.w-2 {
+  grid-column: span 2;
+}
+.w-3 {
+  grid-column: span 3;
+}
+.w-4 {
+  grid-column: span 4;
+}
+.w-5 {
+  grid-column: span 5;
+}
+.w-6 {
+  grid-column: span 6;
+}
+.w-7 {
+  grid-column: span 7;
+}
+.w-8 {
+  grid-column: span 8;
+}
+.w-9 {
+  grid-column: span 9;
+}
+.w-10 {
+  grid-column: span 10;
+}
+.w-11 {
+  grid-column: span 11;
+}
+.w-12 {
+  grid-column: span 12;
+}
+.h-1 {
+  height: 140px;
+}
+.h-2 {
+  height: 280px;
+}
+.h-3 {
+  height: 420px;
+}
+.h-4 {
+  height: 560px;
+}
+.h-5 {
+  height: 700px;
+}
+.h-6 {
+  height: 840px;
+}
+
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rows > li {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.rows button {
+  margin-left: 8px;
+}
+.rows input[readonly] {
+  width: 420px;
+  max-width: 100%;
+}
+.state {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  background: #1f5132;
+}
+.state.failed {
+  background: #7a2222;
+}
+.state.disabled {
+  background: #4a4f5a;
+}
+.checks {
+  margin-left: 12px;
+}
+.check {
+  margin-right: 12px;
+  font-size: 13px;
+}
+.grants {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.inline {
+  display: inline-block;
+  margin-left: 12px;
+}
+.stack {
+  display: grid;
+  gap: 10px;
+  max-width: 360px;
+}
+.stack label {
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+}
+.log {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+}
+.log li {
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+.log .level,
+.log time {
+  color: var(--muted);
+}
+.log .warn {
+  color: #f0c674;
+}
+.log .error {
+  color: #ff9d9d;
+}
+
+.instances {
+  flex-basis: 100%;
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+.rows > li > p {
+  flex-basis: 100%;
+  margin: 8px 0 0;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.6);
+}
+.dialog {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  height: 420px;
+  max-height: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #1b1e24;
+  overflow: hidden;
+}
+.dialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.dialog > header h2 {
+  margin: 0;
+}
+.dialog > iframe {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+.dialog-w-1 {
+  width: 100px;
+}
+.dialog-w-2 {
+  width: 200px;
+}
+.dialog-w-3 {
+  width: 300px;
+}
+.dialog-w-4 {
+  width: 400px;
+}
+.dialog-w-5 {
+  width: 500px;
+}
+.dialog-w-6 {
+  width: 600px;
+}
+.dialog-w-7 {
+  width: 700px;
+}
+.dialog-w-8 {
+  width: 800px;
+}
+.dialog-w-9 {
+  width: 900px;
+}
+.dialog-w-10 {
+  width: 1000px;
+}
+.dialog-w-11 {
+  width: 1100px;
+}
+.dialog-w-12 {
+  width: 1200px;
+}
+
+.config {
+  max-width: 640px;
+}
+.config fieldset {
+  margin: 12px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 12px 0;
+}
+.field > label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.field input[type="checkbox"] {
+  align-self: flex-start;
+}
+.field-note {
+  margin: 0;
+}
+.secret-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.inline {
+  font-size: 13px;
+  font-weight: 400;
+}
+.done {
+  color: #9dd89d;
+}
+
+.assets {
+  margin: 0 0 24px;
+}
+.assets h3 {
+  margin: 16px 0 8px;
+  font-size: 14px;
+}
+.upload {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 13px;
+}

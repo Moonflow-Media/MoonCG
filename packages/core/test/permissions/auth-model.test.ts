@@ -168,9 +168,9 @@ describe('a principal limited to its own grants (an API token)', () => {
   });
 });
 
-describe('protocol version 4', () => {
-  it('is version 4', () => {
-    expect(PROTOCOL_VERSION).toBe(4);
+describe('the protocol', () => {
+  it('has a version', () => {
+    expect(PROTOCOL_VERSION).toBe(5);
   });
 
   it('carries the kind of principal in a sender', () => {

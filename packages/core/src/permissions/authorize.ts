@@ -150,3 +150,12 @@ export function effectiveGrants(principal: Principal, policy: Policy): Effective
   const grants = sorted(principal.roles.flatMap((role) => policy.roles[role] ?? []));
   return principal.only === undefined ? { grants } : { grants, only: sorted(principal.only) };
 }
+
+/**
+ * Whether one of the grants covers the permission, by the same rule as `authorize()`. For
+ * code that has a list of grants and no principal, such as a page that decides what to show.
+ */
+export function grantsCover(grants: readonly string[], permission: string): boolean {
+  const wanted = permission.split(':');
+  return grants.some((grant) => grantMatches(grant, wanted));
+}

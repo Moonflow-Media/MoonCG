@@ -15,6 +15,6 @@
       "@mooncg/server/accounts": ["./packages/server/src/accounts.ts"]
     }
   },
-  "include": ["packages/*/test/**/*.ts", "vitest.config.ts"],
+  "include": ["packages/*/test/**/*.ts", "e2e/**/*.ts", "playwright.config.ts", "vitest.config.ts"],
   "exclude": ["packages/*/test/fixtures/typed"]
 }

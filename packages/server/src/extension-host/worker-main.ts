@@ -9,7 +9,7 @@ import type { HostToWorker, LogLevel, WorkerData, WorkerToHost } from './worker-
 
 if (!parentPort) throw new Error('This file is the entry of a worker thread');
 const port = parentPort;
-const { bundle, version, entry } = workerData as WorkerData;
+const { bundle, version, entry, config } = workerData as WorkerData;
 const post = (message: WorkerToHost) => port.postMessage(message);
 const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -45,6 +45,7 @@ const { context, dispose } = createBundleContext({
   connection,
   bundle: { name: bundle, version },
   log: bundleLog,
+  config,
 });
 
 port.on('message', (message: HostToWorker) => {

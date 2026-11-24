@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './kernel/config.js';
 import { createLogger, errorMessage } from './kernel/logger.js';
@@ -14,13 +15,27 @@ function builtSdkFile(): string | undefined {
   }
 }
 
+/** The built dashboard, if `pnpm build` has produced it. */
+function builtDashboardDir(): string | undefined {
+  try {
+    const manifest = fileURLToPath(import.meta.resolve('@mooncg/dashboard/package.json'));
+    return join(dirname(manifest), 'dist');
+  } catch {
+    return undefined;
+  }
+}
+
 const logger = createLogger();
 // A last resort. Extensions run in their own threads and cannot fail this process; this only
 // keeps a bug in the server itself from ending a running show.
 installProcessGuard(process, logger);
 try {
   const config = loadConfig({ argv: process.argv.slice(2), env: process.env, cwd: process.cwd() });
-  const server = await startServer(config, { logger, sdkFile: builtSdkFile() });
+  const server = await startServer(config, {
+    logger,
+    sdkFile: builtSdkFile(),
+    dashboardDir: builtDashboardDir(),
+  });
   logger.info(
     `MoonCG is listening on ${server.url} (bundles: ${config.bundlesDir}, data: ${config.dataDir})`,
   );

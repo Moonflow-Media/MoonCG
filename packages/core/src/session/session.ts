@@ -19,6 +19,7 @@ import {
 import {
   type ClientMessage,
   decodeClientMessage,
+  type GraphicEndReason,
   isHttpResponse,
   PROTOCOL_VERSION,
   type ServerMessage,
@@ -47,6 +48,30 @@ export interface ExtensionAccess {
   readonly httpTimeoutMs?: number;
 }
 
+/**
+ * The graphics of the running bundles and the pages that show them right now. The server
+ * keeps it; a session asks it when a page says in `hello` which graphic it is.
+ */
+export interface GraphicPages {
+  /** The graphic whose page a file of a bundle is, with the permission it takes to open it. */
+  find(bundle: string, file: string): { readonly permission: string } | undefined;
+  /**
+   * Registers a connected instance of that graphic and returns the function that removes it
+   * again. Returns `undefined` when the graphic takes a single instance and another
+   * principal has it; an instance of the same principal is ended and replaced.
+   */
+  enter(bundle: string, file: string, instance: GraphicInstance): (() => void) | undefined;
+}
+
+/** One page that shows a graphic, as its session describes it. */
+export interface GraphicInstance {
+  readonly principal: Principal;
+  /** Tells the page to load itself again. */
+  reload(): void;
+  /** Tells the page that it is no longer the instance. It is taken off the list already. */
+  end(reason: GraphicEndReason): void;
+}
+
 export interface SessionOptions {
   /** Who the connection acts as, resolved by the transport before the session starts. */
   readonly principal: Principal;
@@ -70,6 +95,8 @@ export interface SessionOptions {
    * extension's `perm.check`; without it every check is answered with no.
    */
   readonly checkPermission?: ((principal: string, permission: string) => boolean) | undefined;
+  /** Where graphic pages are registered. Without it no page counts as an instance. */
+  readonly graphics?: GraphicPages | undefined;
 }
 
 /** What a connection currently holds on the server. All of it is released by `close()`. */
@@ -119,6 +146,8 @@ export function createSession(options: SessionOptions): Session {
   const calls = new Map<number, PendingCall>();
   let nextCall = 1;
   let bundle: string | undefined;
+  /** Takes this connection out of the instances of its graphic, if it is one. */
+  let leaveGraphic: (() => void) | undefined;
   let closed = false;
 
   const fail = (code: ErrorCode, message: string, id?: number) =>
@@ -393,6 +422,32 @@ export function createSession(options: SessionOptions): Session {
     else pending?.reject(new MoonCGError(msg.code, msg.message));
   };
 
+  /**
+   * Registers the page as an instance of the graphic it says it is. Answers no, after having
+   * said why, when the principal may not open that graphic or it is open already and takes
+   * one instance. A file that is no graphic of the bundle makes the page one like any other.
+   */
+  const enterGraphic = (ownBundle: string, file: string | undefined): boolean => {
+    const graphic = file === undefined ? undefined : options.graphics?.find(ownBundle, file);
+    if (file === undefined || !graphic) return true;
+    if (!authorize(principal, graphic.permission, policy)) {
+      fail('forbidden', `Missing permission "${graphic.permission}"`);
+      return false;
+    }
+    leaveGraphic = options.graphics?.enter(ownBundle, file, {
+      principal,
+      reload: () => {
+        if (!closed) send({ t: 'reload' });
+      },
+      end: (reason) => {
+        if (!closed) send({ t: 'graphic.end', reason });
+      },
+    });
+    if (leaveGraphic) return true;
+    fail('conflict', 'This graphic is already open somewhere else and takes one instance');
+    return false;
+  };
+
   const handle = (msg: ClientMessage) => {
     if (msg.t === 'hello') {
       if (bundle !== undefined) fail('bad_request', 'hello was already sent');
@@ -400,7 +455,7 @@ export function createSession(options: SessionOptions): Session {
         fail('bad_request', `Unsupported protocol version ${msg.v}, expected ${PROTOCOL_VERSION}`);
       } else if (!options.bundleExists(msg.bundle) || !sees(msg.bundle)) {
         fail('not_found', `Bundle "${msg.bundle}" is not running`);
-      } else {
+      } else if (enterGraphic(msg.bundle, msg.graphic)) {
         bundle = msg.bundle;
         send({ t: 'welcome', v: PROTOCOL_VERSION });
       }
@@ -440,6 +495,8 @@ export function createSession(options: SessionOptions): Session {
     },
     close() {
       closed = true;
+      leaveGraphic?.();
+      leaveGraphic = undefined;
       for (const release of [
         ...replicants.values(),
         ...listeners.values(),

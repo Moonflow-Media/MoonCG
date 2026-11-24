@@ -42,7 +42,7 @@ const serverMessages: ServerMessage[] = [
 
 describe('protocol', () => {
   it('has a version', () => {
-    expect(PROTOCOL_VERSION).toBe(4);
+    expect(PROTOCOL_VERSION).toBe(5);
   });
 
   it.each(clientMessages)('round-trips client message $t', (msg) => {

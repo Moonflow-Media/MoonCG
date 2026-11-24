@@ -14,6 +14,122 @@ initial commit of the repository.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-24
+
+The dashboard, with dialogs, bundle settings and assets. Wire protocol version 5.
+
+### Added
+
+- New package `@mooncg/dashboard`: a Vue 3 application built with Vite and served at `/`, with
+  the routes `/w/<workspace>`, `/bundles`, `/graphics`, `/assets`, `/admin/users`,
+  `/admin/roles`, `/admin/tokens`, `/settings` and `/logs`. The navigation shows only what the
+  signed-in user may use.
+- Workspaces: panels are grouped by the manifest's `workspace` (default `Main`) and shown as
+  iframes in a 12-column grid that each user can rearrange and resize with buttons.
+- Layouts are stored on the server per user: `GET` and `PUT /api/v1/me/prefs/<key>` keep small
+  JSON values (16 KiB per request, 50 keys per user) in the new table `user_prefs`.
+- Bundle page with state, errors and enable, disable and reload for whoever may manage
+  bundles; it follows `system:revision`.
+- Graphics page with the URL of every graphic and a copy button.
+- Pages for users, roles with their grants, and API tokens, on the existing API.
+- Log page at `/logs`: the server keeps its latest 1000 log lines in memory and serves them at
+  `GET /api/v1/logs` (`?after=<id>` for what is new) under `system:logs.view`. API tokens and
+  the setup code are never in what it serves.
+- The dashboard asks before deleting a user, a role or a token, and says so when a layout
+  could not be saved.
+- `grantsCover` in `@mooncg/core` and `@mooncg/sdk/client`: the rule the server matches grants
+  by, which the dashboard now uses instead of a copy.
+- Connected graphics: a graphic page says in `hello` which graphic it is, and the server
+  lists the connected pages of each graphic in the read-only replicant
+  `<bundle>:$instances.<graphic>`, readable with the graphic's own permission. The graphics
+  page shows them.
+- `"singleInstance": true` on a graphic is enforced by the server: a second page of another
+  user or token is refused with `conflict`, shows a notice instead of the graphic and takes
+  over when the first is gone. The same user or token opening it again replaces its own
+  page, which is told so (`graphic.end`) and does not ask again. `createClient` takes
+  `graphic`, `onDuplicate`, `onEnded`, `duplicateRetryMs` and `reloadPage`.
+- `POST /api/v1/bundles/<bundle>/instances/<id>/reload` and `…/disconnect` tell one connected
+  graphic page to load itself again or take it off its graphic, and
+  `GET /api/v1/bundles/<bundle>/instances` lists the connected pages with who each acts as.
+  All three are for holders of `system:bundles.manage`. The replicant `$instances` itself
+  names no principal.
+- Every WebSocket is pinged every 15 seconds and dropped after two unanswered pings, so a
+  machine that vanished holds nothing, such as the place of a single-instance graphic.
+- Dialogs: `dialogs` in the manifest, `mc.dialogs.open(id, data)` in a panel, which resolves
+  with the dialog's result, and `mc.dialogs.current()` in the dialog page. They travel as
+  typed `postMessage` between panel, dashboard and dialog page; the dashboard checks origin,
+  source window and that the dialog belongs to the calling panel's bundle, and closes a
+  dialog whose panel is reloaded or goes away.
+- Bundle configuration: `"config": { "schema": … }` in the manifest names a JSON Schema. The
+  values are kept in `<data-dir>/config/<bundle>.json`, checked with Ajv on load and before
+  every write, written atomically, and handed to the extension as `ctx.config` with the
+  schema's defaults. `GET /api/v1/config`, `GET` and `PUT /api/v1/bundles/<bundle>/config`
+  under `system:settings.manage`. Saving restarts the bundle's extension and nothing else, so
+  pages keep the replicants they follow.
+- Secrets: a config property with `"x-secret": true` is never sent back, is kept when a write
+  leaves it out and removed by `null`, and is replaced by `***` in every log line and error,
+  also in those the extension produces. A `$ref` into the same schema is followed wherever it
+  stands; a schema with a reference that cannot be followed is refused. A secret shorter than
+  8 characters is not masked, and the log says so once.
+- The answer to `PUT …/config` says with `restarted` and `restartNote` whether the extension
+  runs with the stored values; it is 200 once the values are stored.
+- A stored configuration that does not fit its schema fails that bundle with a readable error;
+  the server keeps running, and saving values that fit starts the bundle.
+- The settings page: a form drawn from each bundle's schema (text, numbers, switches, choices,
+  nested objects, lists of text or numbers, JSON for the rest, password fields for secrets).
+- Assets: `assets` categories in the manifest with `accept` and optional `read` and `write`
+  permissions. Upload with `PUT /api/v1/bundles/<bundle>/assets/<category>/<name>` (the file
+  as the request body), list with `GET …/assets/<category>`, delete with `DELETE`. Files are
+  kept in `<data-dir>/assets/<bundle>/<category>/`, served at
+  `/b/<bundle>/assets/<category>/<name>`, and listed in the read-only replicant
+  `<bundle>:$assets.<category>`. The assets page uploads, lists and deletes.
+- Limits for assets: `--asset-max-file-bytes` (50 MiB), `--asset-quota-bytes` (500 MiB per
+  category) and `--asset-max-files` (1000 per category). An upload that sends nothing for 30
+  seconds is given up, and a slow upload holds up no other. File names are cleaned (Windows
+  device names, forbidden characters, dots and spaces at the ends); names that are paths or
+  short names of Windows (`~1`) are refused.
+- A category without `write` takes `system:bundles.manage` to upload and delete. `accept`
+  takes `*/*` for any file; an empty `accept` is a manifest error.
+- Assets are served with `Accept-Ranges: bytes` and answer `Range` requests (206, 416).
+- What interrupted uploads left behind is removed when the server starts.
+- The example bundle has a dialog that confirms a reset, an asset category for team logos
+  that the overlay shows, and a config schema with a title, a highest score and a secret.
+- `pnpm test:e2e`: a Playwright smoke test that runs the built server, the dashboard and the
+  example bundle in Chromium.
+- `docs/dashboard.md`.
+
+### Changed
+
+- **Breaking:** the minimal shell page (`index.html`, `/shell.js`) is gone. `/` serves the
+  built dashboard and answers 404 with a hint until `pnpm build` has been run.
+- **Breaking:** wire protocol version 5. `hello` may carry `graphic`, and the server may send
+  `reload` and `graphic.end`. Clients built against version 4 are refused; pages that load `/sdk/mooncg.js`
+  from the server get the new client by themselves.
+- **Breaking:** a graphic with `singleInstance` is now really limited to one page. A setup
+  that had the same graphic open twice shows the notice in the second one.
+- `system:settings.manage` is no longer only reserved: it gives access to the configuration
+  of every bundle.
+- `ctx.config` is frozen and holds the stored configuration; it was always empty before.
+- Uploaded assets are served with `Content-Security-Policy: sandbox; …` and, unless they are
+  an image, a font, sound, video, JSON or text, as a download. No other header changed.
+- The database is migrated to schema version 4 (`user_prefs`).
+- `pnpm build` also builds the dashboard; `pnpm typecheck` also checks it.
+
+- **Breaking:** layouts are stored under a new preference key that is different for every
+  workspace name (`A b` and `a-b` used to share one). Layouts saved before are not found
+  again and start from the default.
+- `GET /api/v1/logs` answers `last` as the id of the newest line the server has, also when
+  `after` is beyond it, so the log page starts over after a server restart.
+
+### Known limits
+
+- One dialog is open at a time, and a dialog cannot open another.
+- A graphic page that does not use the SDK is neither listed as an instance nor held to
+  `singleInstance`.
+- A page that was replaced or disconnected stays away until it is reloaded.
+- The settings form does not follow `$ref`, `oneOf` and the like: such a property is one field
+  that takes JSON.
+
 ## [0.4.0] - 2026-11-24
 
 Accounts and permissions. Wire protocol version 4.

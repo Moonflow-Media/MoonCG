@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Reset the score?</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        font-family: system-ui, sans-serif;
+        text-align: center;
+      }
+      p {
+        margin: 0 0 16px;
+      }
+      button {
+        padding: 8px 12px;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <p>The score is <strong id="score">-:-</strong>. Set it back to 0:0?</p>
+    <button id="confirm" type="button">Reset</button>
+    <button id="cancel" type="button">Keep the score</button>
+
+    <script type="module">
+      import { createClient } from '/sdk/mooncg.js';
+
+      // A dialog is a page of the bundle like a panel. The dashboard shows it when a panel
+      // calls `mc.dialogs.open('confirm-reset', data)`, and hands it that data.
+      const dialog = await createClient().dialogs.current();
+      document.getElementById('score').textContent = `${dialog.data.home}:${dialog.data.away}`;
+
+      // Whatever the dialog closes with is what `open` resolves with in the panel.
+      document.getElementById('confirm').addEventListener('click', () => dialog.close(true));
+      document.getElementById('cancel').addEventListener('click', () => dialog.close(false));
+    </script>
+  </body>
+</html>

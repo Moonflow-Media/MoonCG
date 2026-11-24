@@ -8,6 +8,7 @@ import {
 import { isPlainObject, type Json, jsonProblem } from '../json.js';
 import type { Sender } from '../messages/bus.js';
 import { BUNDLE_NAME_PATTERN } from '../names.js';
+import { isSafeRelativePath } from '../paths.js';
 import { PRINCIPAL_KINDS } from '../permissions/authorize.js';
 import type { PatchOp } from '../replicant/patch.js';
 
@@ -15,14 +16,25 @@ import type { PatchOp } from '../replicant/patch.js';
 export const MAX_FRAME_BYTES = 1024 * 1024;
 
 /** Sent in `hello` and `welcome`. Bump on any incompatible change to the messages below. */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /**
  * `name` is a replicant or message name, either bare (the session's own bundle) or
  * `bundle:name`. `id` numbers a request; the answer echoes it.
  */
 export type ClientMessage =
-  | { readonly t: 'hello'; readonly v: number; readonly bundle: string }
+  | {
+      readonly t: 'hello';
+      readonly v: number;
+      readonly bundle: string;
+      /**
+       * Sent by a page that is a graphic: its file inside the bundle, such as
+       * `graphics/overlay.html`. The server lists the page as a connected instance of that
+       * graphic, and refuses it with `conflict` if the graphic takes a single instance and
+       * has one.
+       */
+      readonly graphic?: string;
+    }
   | {
       readonly t: 'rep.sub';
       readonly id: number;
@@ -94,9 +106,20 @@ export interface KnownState {
   readonly rev: number;
 }
 
+export const GRAPHIC_END_REASONS = ['replaced', 'disconnected'] as const;
+export type GraphicEndReason = (typeof GRAPHIC_END_REASONS)[number];
+
 /** `name` is always the qualified `bundle:name`. `id` echoes the request being answered. */
 export type ServerMessage =
   | { readonly t: 'welcome'; readonly v: number }
+  /** To a graphic page: load yourself again. */
+  | { readonly t: 'reload' }
+  /**
+   * To a graphic page: you are no longer the instance of your graphic. `replaced` when the
+   * same principal opened it again, `disconnected` when an operator took the place away.
+   * Either way the page is not to ask for the place again by itself.
+   */
+  | { readonly t: 'graphic.end'; readonly reason: GraphicEndReason }
   | {
       readonly t: 'rep.snap';
       readonly id: number;
@@ -160,8 +183,12 @@ export function decodeClientMessage(text: string): Decoded<ClientMessage> {
   return decode(text, (m) => {
     switch (m.t) {
       case 'hello':
-        return isRev(m.v) && typeof m.bundle === 'string' && BUNDLE_NAME_PATTERN.test(m.bundle)
-          ? { t: 'hello', v: m.v, bundle: m.bundle }
+        if (!isRev(m.v) || typeof m.bundle !== 'string' || !BUNDLE_NAME_PATTERN.test(m.bundle)) {
+          return null;
+        }
+        if (m.graphic === undefined) return { t: 'hello', v: m.v, bundle: m.bundle };
+        return isFile(m.graphic)
+          ? { t: 'hello', v: m.v, bundle: m.bundle, graphic: m.graphic }
           : null;
       case 'rep.sub':
         if (!isId(m.id) || !isName(m.name)) return null;
@@ -226,6 +253,12 @@ export function decodeServerMessage(text: string): Decoded<ServerMessage> {
     switch (m.t) {
       case 'welcome':
         return isRev(m.v) ? { t: 'welcome', v: m.v } : null;
+      case 'reload':
+        return { t: 'reload' };
+      case 'graphic.end': {
+        const reason = GRAPHIC_END_REASONS.find((known) => known === m.reason);
+        return reason ? { t: 'graphic.end', reason } : null;
+      }
       case 'rep.snap':
         return isId(m.id) && isName(m.name) && isRev(m.rev) && isName(m.epoch) && isJson(m.value)
           ? { t: 'rep.snap', id: m.id, name: m.name, rev: m.rev, value: m.value, epoch: m.epoch }
@@ -303,6 +336,11 @@ function isRev(value: unknown): value is number {
 
 function isName(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 200;
+}
+
+/** A file inside a bundle, as a manifest names it. */
+function isFile(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 500 && isSafeRelativePath(value);
 }
 
 /** Also refuses a value nested deeper than the limit, before anything walks it. */

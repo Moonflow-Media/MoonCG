@@ -139,6 +139,7 @@ describe('loadBundles', () => {
         entry: fixture('bundles/crashy/extension/index.js'),
         capabilities: [],
         permissions: [],
+        config: {},
       },
       {
         bundle: 'good',
@@ -146,6 +147,7 @@ describe('loadBundles', () => {
         entry: fixture('bundles/good/extension/index.js'),
         capabilities: [],
         permissions: ['view', 'operate'],
+        config: {},
       },
     ]);
   });

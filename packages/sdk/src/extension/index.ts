@@ -110,7 +110,11 @@ export interface BundlePermissions {
 export interface BundleContext extends Messaging {
   readonly bundle: { readonly name: string; readonly version: string };
   readonly log: BundleLog;
-  /** The bundle's configuration. Empty for now. */
+  /**
+   * The bundle's configuration as it was when the extension started: the stored values with
+   * the defaults of the manifest's `config.schema`, secrets included. Empty without a schema.
+   * A change to the configuration restarts the extension, so this never goes stale.
+   */
   readonly config: Readonly<Record<string, Json>>;
   /**
    * Answers requests for a message of this bundle. There is one handler per message.
@@ -130,6 +134,8 @@ export interface BundleContextOptions {
   readonly connection: Connection;
   readonly bundle: { readonly name: string; readonly version: string };
   readonly log: BundleLog;
+  /** The bundle's configuration. Empty without one. */
+  readonly config?: Readonly<Record<string, Json>> | undefined;
 }
 
 /**
@@ -156,7 +162,7 @@ export function createBundleContext(options: BundleContextOptions): {
   const context: BundleContext = {
     bundle,
     log,
-    config: {},
+    config: Object.freeze({ ...options.config }),
     replicant: ((name: string) => connection.replicant(name)) as BundleContext['replicant'],
     send: (name: string, data?: Json) => connection.send(name, data),
     on: (name: string, listener: MessageListener) => connection.on(name, listener),

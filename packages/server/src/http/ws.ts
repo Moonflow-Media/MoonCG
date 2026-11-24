@@ -3,6 +3,7 @@ import {
   createSession,
   effectiveGrants,
   encodeMessage,
+  type GraphicPages,
   MAX_FRAME_BYTES,
   type MessageBus,
   type ReplicantRegistry,
@@ -22,10 +23,19 @@ export interface WebSocketOptions {
   readonly identify: Identify;
   /** Origins besides the server's own whose pages may connect. */
   readonly allowedOrigins: readonly string[];
+  /** Where graphic pages are registered as connected instances. */
+  readonly graphics?: GraphicPages | undefined;
   /** Whether a proxy is trusted to say that the server is reached over HTTPS. */
   readonly transport?: Transport | undefined;
+  /** How often each socket is asked for a sign of life. Defaults to `HEARTBEAT_MS`. */
+  readonly heartbeatMs?: number | undefined;
   readonly logger: Logger;
 }
+
+/** How often each socket is pinged unless configured otherwise. */
+export const HEARTBEAT_MS = 15_000;
+/** A socket that left this many pings in a row unanswered is dropped. */
+export const MISSED_PINGS = 2;
 
 export interface WebSocketHandle {
   /**
@@ -80,6 +90,26 @@ export function attachWebSocket(server: Server, options: WebSocketOptions): WebS
   const { registry, bus, bundleExists, identify, allowedOrigins, logger } = options;
   const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   const open = new Map<WebSocket, { request: IncomingMessage; access: string }>();
+  /** How many pings in a row each socket has left unanswered. */
+  const missed = new Map<WebSocket, number>();
+
+  // A machine that loses power or its network closes nothing, and the connection would look
+  // open for hours. Such a socket would keep what it holds, such as the one place of a
+  // graphic that takes a single instance. So every socket is asked regularly whether it is
+  // still there. Browsers answer a ping by themselves.
+  const heartbeat = setInterval(() => {
+    for (const ws of open.keys()) {
+      const unanswered = missed.get(ws) ?? 0;
+      if (unanswered >= MISSED_PINGS) {
+        // No close handshake with someone who is not there: the socket is dropped.
+        ws.terminate();
+        continue;
+      }
+      missed.set(ws, unanswered + 1);
+      ws.ping();
+    }
+  }, options.heartbeatMs ?? HEARTBEAT_MS);
+  heartbeat.unref();
 
   server.on('upgrade', (request, socket, head) => {
     // Without a listener, a connection reset during the upgrade would be an uncaught exception.
@@ -108,6 +138,7 @@ export function attachWebSocket(server: Server, options: WebSocketOptions): WebS
         bus,
         timers: { setTimeout, clearTimeout },
         bundleExists,
+        graphics: options.graphics,
         send: (msg) => ws.send(encodeMessage(msg)),
         onError: (error) => logger.error(`Failed to handle a message: ${errorMessage(error)}`),
       });
@@ -115,8 +146,10 @@ export function attachWebSocket(server: Server, options: WebSocketOptions): WebS
       // The protocol is JSON text. A binary frame is passed on as text and fails to decode.
       // `receive` never throws, so one bad message cannot take the server down.
       ws.on('message', (data) => session.receive(data.toString()));
+      ws.on('pong', () => missed.set(ws, 0));
       ws.on('close', () => {
         open.delete(ws);
+        missed.delete(ws);
         session.close();
       });
       ws.on('error', (error) => logger.warn(`Socket error: ${errorMessage(error)}`));
@@ -132,6 +165,7 @@ export function attachWebSocket(server: Server, options: WebSocketOptions): WebS
       }
     },
     close() {
+      clearInterval(heartbeat);
       for (const ws of sockets.clients) ws.terminate();
       sockets.close();
     },

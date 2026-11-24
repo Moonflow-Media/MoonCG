@@ -62,17 +62,18 @@ System permissions:
 | `system:bundles.manage`  | Enabling, disabling and reloading bundles; the replicant `system:bundles` |
 | `system:users.manage`    | Users, roles and grants, within what the holder holds (see below)         |
 | `system:tokens.manage`   | Creating, listing and revoking API tokens                                 |
-| `system:settings.manage` | Reserved                                                                  |
-| `system:logs.view`       | Reserved                                                                  |
+| `system:settings.manage` | Reading and changing the configuration of bundles; the settings page      |
+| `system:logs.view`       | The log page and `GET /api/v1/logs`                                       |
 
 Two things need only that you are signed in, with whatever grants: loading the SDK
 (`/sdk/mooncg.js`) and opening the WebSocket. Both are what every bundle page does first, also
 a graphic opened with a token that holds a single bundle permission. What a socket may do is
 checked per replicant and per message.
 
-**Bundle resources without a permission.** A panel, graphic, replicant, message or HTTP route
-whose manifest entry names no permission, and every other file of a bundle such as a
-stylesheet, is open to whoever holds **at least one permission of that bundle**.
+**Bundle resources without a permission.** A panel, dialog, graphic, replicant, message,
+asset category or HTTP route whose manifest entry names no permission, and every other file of
+a bundle such as a stylesheet, is open to whoever holds **at least one permission of that
+bundle**.
 
 **A bundle you hold nothing of is not there for you.** Its files and routes under
 `/b/<bundle>/` answer 404 with the same body as for a bundle that is not installed, and on a
@@ -93,10 +94,49 @@ command works on the data directory directly and is not limited either: whoever 
 there can read and write the database anyway.
 
 **What you are shown.** `GET /api/v1/bundles` lists only the bundles you hold a permission of
-(all of them if you may manage bundles), and of each only the panels and graphics you may open.
+(all of them if you may manage bundles), and of each only the panels, dialogs and graphics you
+may open and the asset categories you may read, each with whether you may change it.
 The replicant `system:bundles`, which has the state of every bundle, needs
 `system:bundles.manage`. Everyone with the dashboard can follow `system:revision`, a counter
 that moves when a bundle changes, and ask for the list again.
+
+### Bundle settings, assets, dialogs and instances
+
+| What                                                | Needs                                                                            |
+| --------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Reading or writing a bundle's configuration         | `system:settings.manage`                                                         |
+| Opening a dialog, loading its file                  | The dialog's `requires`                                                          |
+| Listing and loading the files of an asset category  | The category's `read`                                                            |
+| Uploading and deleting them                         | The category's `read`, and its `write`; without `write`, `system:bundles.manage` |
+| The replicant `<bundle>:$assets.<category>`         | The category's `read`; nobody can write it                                       |
+| The replicant `<bundle>:$instances.<graphic>`       | The graphic's `requires`; nobody can write it                                    |
+| Reloading or disconnecting a connected graphic page | The graphic's `requires` and `system:bundles.manage`                             |
+| Learning who has a graphic open (`GET …/instances`) | `system:bundles.manage`                                                          |
+
+Where a row names a manifest field that the bundle left out, any permission of the bundle
+does. The one exception is `write` of an asset category: changing the files a graphic shows
+on air is more than using the bundle, so a category that does not say who may takes
+`system:bundles.manage`.
+
+The replicant `$instances` says that a page is connected and since when, not who it acts as:
+whoever may open a graphic need not learn which accounts and tokens exist.
+
+**Why configuration is a system permission and not one of the bundle.** A bundle's
+configuration holds its secrets, and saving it restarts the bundle's extension. Both are
+decisions about the installation, not about the show: whoever may change the score should not
+thereby be able to replace an API key or restart what is on air. A permission per bundle
+would also have to be a name the server reserves inside every bundle's own list of
+permissions, which bundles name freely. So it is the one system permission that was reserved
+for this, `system:settings.manage`, which only `admin` holds by default. It is checked before
+anything about the bundle is looked up: without it the answer is 403 for a bundle that exists
+and for one that does not, so it tells nothing. Nothing else gives access to a configuration,
+not even every permission of the bundle.
+
+`system:settings.manage` includes restarting the extension of a bundle: saving its
+configuration does that. It does not include enabling, disabling or reloading bundles.
+
+Secrets (`"x-secret": true` in the config schema) are not shown to holders of
+`system:settings.manage` either. They can be replaced or removed, never read back.
 
 **When access changes.** HTTP requests see a change at once. An open socket whose user or
 token lost or gained access is closed with code 4401; the SDK reconnects and gets what it may
@@ -286,7 +326,8 @@ A page of another site must not be able to act through your browser.
 2. If such a request is authenticated by a **cookie**, it must also carry JSON
    (`Content-Type: application/json`) or the header `X-MoonCG-CSRF` with any value. A form on
    another site can send neither. This applies to your bundle's own routes as well: send JSON,
-   or add the header to `fetch`.
+   or add the header to `fetch`. An asset upload is the file itself and so never JSON: it
+   needs the header.
 3. Requests with a bearer token are exempt from the second rule: a browser never attaches a
    token by itself.
 
@@ -328,10 +369,24 @@ They load only what this server serves, cannot be framed, and post forms only ba
 Styles written into the page are allowed because these pages carry their styles inline.
 
 A bundle's files are sent with `Content-Security-Policy: frame-ancestors 'self'` and
-`X-Frame-Options: SAMEORIGIN`: the shell frames panels, no other site can frame a panel or a
+`X-Frame-Options: SAMEORIGIN`: the dashboard frames panels, no other site can frame a panel or a
 graphic. OBS loads a graphic as a page of its own, which this does not affect. Bundle content
 gets no further policy; what a bundle's pages load is up to the bundle. Answers of bundle
 routes get only the two headers above, and the handler may set its own.
+
+Uploaded assets are not bundle content: users put them there, and users are not trusted the
+way an installed bundle is. A file under `/b/<bundle>/assets/` is sent with
+
+```
+Content-Security-Policy: sandbox; default-src 'none'; img-src 'self' data:;
+  media-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'
+```
+
+and with a content type from a fixed list that has no page, script or style sheet on it;
+anything else is `application/octet-stream` with `Content-Disposition: attachment`. `sandbox`
+gives a document opened from such a file no origin and no scripts, so an uploaded HTML page or
+SVG cannot act as this server towards whoever opens it. [dashboard.md](dashboard.md#assets)
+has the details.
 When the server listens on anything but loopback without `--secure-cookies`, it logs a warning.
 
 ## Extensions

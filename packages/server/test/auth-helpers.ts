@@ -115,6 +115,7 @@ export async function startAuthServer(
     {
       logger,
       sdkFile: fixture('sdk/mooncg.js'),
+      dashboardDir: fixture('dashboard'),
       storage: memoryStorage(),
       createHost: (services) => new InlineHost(services),
       passwordCost: CHEAP,
@@ -183,7 +184,7 @@ export async function startAuthServer(
     });
 
   /** Opens a socket, says hello for `bundle` and returns a way to ask and to watch it close. */
-  const socket = async (headers: Record<string, string>, bundle = 'board') => {
+  const socket = async (headers: Record<string, string>, bundle = 'board', graphic?: string) => {
     const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws`, { headers });
     const waiting = new Map<number, (msg: ServerMessage) => void>();
     const pushed: ServerMessage[] = [];
@@ -221,7 +222,14 @@ export async function startAuthServer(
       refuse = reject;
     });
     welcomed.catch(() => ws.terminate());
-    ws.send(encodeMessage({ t: 'hello', v: PROTOCOL_VERSION, bundle }));
+    ws.send(
+      encodeMessage({
+        t: 'hello',
+        v: PROTOCOL_VERSION,
+        bundle,
+        ...(graphic === undefined ? {} : { graphic }),
+      }),
+    );
     await bounded(welcomed, 'hello');
     type Ask = ClientMessage extends infer M
       ? M extends { id: number }
