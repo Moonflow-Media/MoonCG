@@ -14,6 +14,7 @@ import { join, relative } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import {
+  BUNDLE_NAME_PATTERN,
   BUNDLES_MANAGE,
   bundlePermission,
   type Json,
@@ -145,6 +146,17 @@ export class AssetStore {
   /** Forgets the categories of a bundle that stopped. The files stay. */
   retract(bundle: string): void {
     this.#categories.delete(bundle);
+  }
+
+  /**
+   * Deletes every file that was uploaded for a bundle, for a bundle that is removed with
+   * its data. Call it once the bundle is stopped.
+   */
+  async purge(bundle: string): Promise<void> {
+    // A name that could leave the folder is nobody's bundle.
+    if (!BUNDLE_NAME_PATTERN.test(bundle)) return;
+    this.#categories.delete(bundle);
+    await rm(join(this.#root, bundle), { recursive: true, force: true, maxRetries: 5 });
   }
 
   /** The asset categories of a running bundle. */

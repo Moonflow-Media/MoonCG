@@ -9,6 +9,16 @@ export type {
 export { InlineHost } from './extension-host/inline-host.js';
 export { WorkerHost } from './extension-host/worker-host.js';
 export { type ResolvePrincipal, resolveLocalAdmin } from './http/identity.js';
+export type { InstallLimits } from './install/files.js';
+export {
+  type BackupInfo,
+  BundleInstaller,
+  type InstallJob,
+  type StagedBundle,
+  type StageSource,
+} from './install/installer.js';
+export type { NpmInstall, NpmRequest } from './install/npm.js';
+export type { BundleSource, PublicSource } from './install/sources.js';
 export { loadConfig, type ServerConfig } from './kernel/config.js';
 export { createLogger, type Logger } from './kernel/logger.js';
 export { type RunningServer, type ServerOptions, startServer } from './server.js';

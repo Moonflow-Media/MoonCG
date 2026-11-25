@@ -23,6 +23,7 @@ scripts can use as well, the REST API under `/api/v1` and the SDK client.
 | Counts in the navigation, state of the connection         | Done                                 |
 | Workspaces with panels, layout stored per user            | Done; arranged with buttons, no drag |
 | Bundle page: state, errors, enable, disable, reload, live | Done; filter by state, key figures   |
+| Installing, updating and removing bundles                 | Done; from a Git address or a ZIP    |
 | Graphics page: URL, connected instances, reload of one    | Done; no preview of a graphic        |
 | Graphics that take a single instance                      | Done; enforced by the server         |
 | Dialogs opened by panels                                  | Done; one dialog at a time           |
@@ -37,7 +38,7 @@ scripts can use as well, the REST API under `/api/v1` and the SDK client.
 | ------------------------------ | -------------------------------------------- | ------------------------ |
 | `/`                            | The first workspace                          | `system:dashboard.view`  |
 | `/w/<workspace>`               | The panels of that workspace                 | `system:dashboard.view`  |
-| `/bundles`                     | Bundles with state and errors                | `system:dashboard.view`  |
+| `/bundles`                     | Bundles with state and errors; installing    | `system:dashboard.view`  |
 | `/graphics`                    | Graphics with their URLs and connected pages | `system:dashboard.view`  |
 | `/assets`                      | The asset categories of each bundle          | `system:dashboard.view`  |
 | `/settings`                    | A form for each bundle that has a config     | `system:settings.manage` |
@@ -96,6 +97,44 @@ A row tells what `GET /api/v1/bundles` tells: for a running bundle how many pane
 graphics it has for you, and for every bundle the bundles it needs (`dependencies`, the names
 from its manifest, without those you are not shown). What a bundle that does not run would
 bring is not in the list, so the page does not claim it.
+
+#### Installing, updating and removing
+
+For holders of `system:bundles.manage` the page has more; nobody else is shown any of it, and
+their browser does not follow the replicant it comes from. [bundles.md](bundles.md) says what
+the server does at each step.
+
+| Where               | What                                                                                        |
+| ------------------- | ------------------------------------------------------------------------------------------- |
+| A row               | The version, and where the bundle was installed from (`from <address> at <ref> (<commit>)`) |
+| A row               | **Update** turns the form below into the update of that bundle; **Remove** asks first       |
+| **Install bundle**  | A Git address with an optional branch, tag or commit, or a ZIP upload                       |
+| **Update `<name>`** | The same form, plus **Fetch from …** for a bundle whose source can be fetched again         |
+| A fetched bundle    | A card with what it declares, and **Install** (or **Update**) and **Discard**               |
+| Below the form      | What is being done right now, by anyone, and how what this page started ended               |
+
+1. **Fetch.** The form sends the address or the archive. The bundle is fetched and checked on
+   the server; the page shows the step it is at.
+2. **Read.** The card lists the source, whether the bundle brings server code, its permissions,
+   capabilities, the bundles and the MoonCG it needs, its npm packages, what it provides and
+   its size. An update says which version it replaces. Nothing is installed yet.
+3. **Decide.** **Install** puts it in place and starts it; **Discard** deletes it. A bundle with
+   npm packages has a checkbox to let their install scripts run, off unless ticked.
+
+The form has a checkbox, off for every fetch, to trust the bundle to run code while it is
+installed. Without it a bundle that brings an `.npmrc` or npm packages from elsewhere than the
+registry is refused when it is fetched. The card says under "Runs code on install" what applies,
+and under "Role grants" which grants the bundle proposes and whether they will be made.
+
+An update that does not start is rolled back by the server; the page then says so, with the
+reason, and the row keeps showing the earlier version as running. **Remove** stops the bundle
+and moves its files to the backups; its settings, assets and stored values are kept. Deleting
+the files, purging the data and installing from a folder of the server are for the command
+line and the API. While something is being done to a bundle, the buttons of its row are held.
+
+The progress comes from the replicant `system:installs` (`{ jobs, staged }`), which the server
+changes with every step, so a second administrator sees the same staged bundle and the same
+job. How a job ended is shown only to the page that started it.
 
 ## Workspaces and layout
 
@@ -486,7 +525,8 @@ deleted with the user.
 | `pnpm test:e2e` | Builds, then runs the smoke test in Chromium with Playwright                      |
 
 The browser tests (`e2e/dashboard.spec.ts`) start the built server once, on a free port with
-a temporary data directory and the `examples` bundles. Each test brings about what it needs
+a temporary data directory and a temporary copy of the `examples` bundles, so that a bundle
+installed by a test never lands in the repository. Each test brings about what it needs
 itself, so one that fails does not hide the others:
 
 1. Setup, a refused and an accepted sign-in (both pages drawn from their stylesheets, with
@@ -505,6 +545,10 @@ itself, so one that fails does not hide the others:
 7. The filter and key figures of the bundle page, "Copied", the keyboard (arrow keys in a
    filter, a visible focus, Escape in a dialog), the dimmed tools of a panel, reduced motion.
 8. A viewer who gets none of the above.
+9. A bundle installed from a ZIP upload (the summary first, then running, its panel in the
+   workspace), updated to a new version, updated to one whose extension fails (rolled back,
+   the earlier version still running and serving), and removed after the question; a viewer
+   sees none of the controls and is refused by every request of the installation API.
 
 It needs Chromium once: `pnpm exec playwright install chromium`.
 

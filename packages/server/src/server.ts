@@ -23,6 +23,9 @@ import { GraphicInstances } from './graphics/instances.js';
 import { type BundleLifecycle, createApp } from './http/app.js';
 import { createIdentify, type ResolvePrincipal } from './http/identity.js';
 import { attachWebSocket } from './http/ws.js';
+import { DEFAULT_INSTALL_LIMITS } from './install/files.js';
+import { BundleInstaller } from './install/installer.js';
+import type { NpmInstall } from './install/npm.js';
 import type { ServerConfig } from './kernel/config.js';
 import { createLifecycle } from './kernel/lifecycle.js';
 import {
@@ -32,6 +35,7 @@ import {
   type Logger,
   recordingLogger,
 } from './kernel/logger.js';
+import { MOONCG_VERSION } from './kernel/version.js';
 import { createPersistence } from './replicants/persistence.js';
 import { openSqliteStorage, type Storage } from './storage/replicant-store.js';
 
@@ -66,6 +70,19 @@ export interface ServerOptions {
    * extension its own thread.
    */
   readonly createHost?: (services: ExtensionServices) => ExtensionHost;
+  /**
+   * Installs the npm dependencies of a bundle that is being installed. Defaults to running
+   * npm. Tests put their own in its place, so that none of them reaches the network.
+   */
+  readonly npmInstall?: NpmInstall;
+  /**
+   * For tests only: lets bundles be installed from `file://` Git addresses, so that a test
+   * can use a repository on its own disk. It exists here alone. No flag, environment
+   * variable or request turns it on.
+   */
+  readonly allowFileGitUrls?: boolean;
+  /** How long a fetched bundle waits for a decision before it is deleted again. */
+  readonly stagingTtlMs?: number;
 }
 
 export interface ServerStats {
@@ -86,6 +103,8 @@ export interface RunningServer {
   /** The bundles as they are now. */
   readonly bundles: readonly BundleRecord[];
   readonly manager: BundleManager;
+  /** Installs, updates and removes bundles. */
+  readonly installer: BundleInstaller;
   readonly host: ExtensionHost;
   /** Accounts, sessions, tokens and roles. */
   readonly auth: Auth;
@@ -225,6 +244,40 @@ export async function startServer(
           ),
       );
     applyDefaults();
+    const installer = new BundleInstaller({
+      dataDir: config.dataDir,
+      bundlesDir: config.bundlesDir,
+      manager,
+      registry,
+      logger,
+      mooncgVersion: MOONCG_VERSION,
+      limits: {
+        ...DEFAULT_INSTALL_LIMITS,
+        maxArchiveBytes: config.bundleMaxArchiveBytes,
+        maxUnpackedBytes: config.bundleMaxUnpackedBytes,
+        maxFiles: config.bundleMaxFiles,
+      },
+      timeoutMs: config.bundleInstallTimeoutMs,
+      backupsKept: config.bundleBackupsKept,
+      stagingTtlMs: options.stagingTtlMs,
+      npmInstall: options.npmInstall,
+      npmRegistry: config.bundleNpmRegistry,
+      roles: { proposed: (name, defaultRoles) => auth.bundleDefaults(name, defaultRoles) },
+      git: { allowFileUrls: options.allowFileGitUrls === true },
+      // What a bundle stored: its configuration, its uploaded files and its replicants,
+      // and what the roles were granted of it.
+      purge: async (name) => {
+        await configs.remove(name);
+        await assets.purge(name);
+        await persistence.flush();
+        await storage.replicants.removeBundle(name);
+        auth.forgetBundle(name);
+      },
+      afterChange: applyDefaults,
+    });
+    // Closed before the bundles are: a job that still runs ends first.
+    lifecycle.add('installer', () => installer.close());
+    await installer.start();
     const change = (action: 'enable' | 'disable' | 'reload') => async (name: string) => {
       const record = await manager[action](name);
       applyDefaults();
@@ -252,6 +305,7 @@ export async function startServer(
         : { resolvePrincipal: options.resolvePrincipal }),
       routes,
       lifecycle: bundleLifecycle,
+      installer,
       instances,
       assets,
       config: configs,
@@ -310,6 +364,7 @@ export async function startServer(
         return manager.list();
       },
       manager,
+      installer,
       host,
       started,
       stats: () => ({

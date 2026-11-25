@@ -14,6 +14,68 @@ initial commit of the repository.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-25
+
+### Added
+
+- Bundles can be installed, updated and removed while the server runs, for holders of
+  `system:bundles.manage`. A bundle is fetched into `<data-dir>/staging/` and checked there;
+  the server tells what it declares (whether it brings an extension, its permissions,
+  capabilities, dependencies, npm packages) before anything is installed, and it is then
+  committed or discarded. See `docs/bundles.md`.
+- Sources: a Git repository (`https://`, `ssh://` or `user@host:path`, with an optional
+  branch, tag or commit; the commit is recorded), a ZIP archive (uploaded, or by a path on
+  the server) and a folder on the server. Archives are refused for entries that leave their
+  folder, links, reserved Windows names, too many entries, too many bytes or a compression
+  ratio no bundle has.
+- npm dependencies of a bundle are installed in staging with `npm ci --omit=dev
+  --ignore-scripts` (`npm install` without a lockfile), with no npm configuration but the
+  server's own. A bundle that would run code while it is installed (install scripts, an
+  `.npmrc` or `.yarnrc` of its own, dependencies or lockfile entries from elsewhere than the
+  registry) is refused unless it is fetched as trusted, per bundle; the summary says which
+  applies. `--bundle-npm-registry` names another registry.
+- Git runs with the machine's configuration switched off where it could run a program (hooks,
+  file system monitor, filters, Git LFS); files are checked out as committed. Git and npm are
+  ended with everything they started when their time is up.
+- The summary of a fetched bundle names the role grants it proposes and whether they will be
+  made. Removing a bundle with its data also takes its role grants away.
+- At most two bundles are fetched at a time and five wait for a decision.
+- A manifest's texts are bounded and may hold no control characters; a bundle cannot be named
+  like a Windows device (`con`, `nul`, `com1`, …).
+- Updates keep the replaced version in `<data-dir>/backups/<bundle>/` and restore it when the
+  new version cannot be put in place or does not start. The newest three backups are kept;
+  a backup can be restored. Settings, assets and persistent replicants stay through an update.
+- Removing a bundle moves it to the backups and keeps what it stored, unless told to delete
+  the files and to purge the data. A bundle that enabled bundles need is not removed unless
+  forced.
+- API under `/api/v1/bundles/-/` (`stage`, `staged`, `staged/<id>/commit`, `jobs`) and
+  `/api/v1/bundles/<name>/` (`update`, `remove`, `backups`, `backups/<id>/restore`). What takes
+  time answers 202 with a job; the read-only replicant `system:installs` publishes jobs and
+  staged bundles.
+- `mooncg bundle list|install|update|remove|enable|disable|reload|backups|restore`, which
+  talks to a running server with an API token (`--token` or `MOONCG_TOKEN`, `--url` or
+  `MOONCG_URL`), shows the summary and asks before it installs (`--yes` to skip).
+- Dashboard: an install form on the bundle page (Git address or ZIP upload), the summary of
+  each fetched bundle with Install and Discard, Update and Remove on each row, progress and
+  errors, and the source of each bundle in its row.
+- The manifest's `engine.mooncg` is checked: a bundle that asks for another MoonCG is refused
+  when it is installed.
+- Server flags `--bundle-max-archive-bytes`, `--bundle-max-unpacked-bytes`,
+  `--bundle-max-files`, `--bundle-backups-kept` and `--bundle-install-timeout-ms`.
+- Bundle states `installing`, `updating` and `removing`, shown while the files of a bundle
+  change.
+
+### Changed
+
+- `GET /api/v1/bundles` is also answered to holders of `system:bundles.manage` who do not hold
+  `system:dashboard.view`, and names the `source` of each bundle to those who manage bundles.
+- `ReplicantStore` has a new method, `removeBundle(bundle)`, which deletes every record of a
+  bundle. A storage backend of your own needs it.
+- `AuthStore.bundleDefaults` has a new method, `forget(bundle)`, for the same reason.
+- `mooncg bundle` does not send the API token over plain `http://` to another machine unless
+  `--insecure` is given, and prints what the server answers without control characters.
+- The browser tests run against a temporary copy of `examples/`.
+
 ## [0.6.0] - 2026-11-24
 
 ### Added

@@ -623,3 +623,59 @@ describe('bundle default roles', () => {
     expect(auth.policy().roles.viewer).toEqual(['bundle:timer:view', 'system:dashboard.view']);
   });
 });
+
+describe('what a bundle proposes for the roles, and forgetting a bundle', () => {
+  const defaults = {
+    operator: ['view', 'operate'],
+    viewer: ['view'],
+    admin: ['view'],
+    custom: ['view'],
+  };
+
+  it('says which grants a bundle would bring, and that a new name gets them', () => {
+    const { auth } = setup();
+    expect(auth.bundleDefaults('scoreboard', defaults)).toEqual({
+      grants: { operator: ['view', 'operate'], viewer: ['view'] },
+      applies: true,
+    });
+    // Asking changes nothing.
+    expect(auth.policy().roles.viewer).toEqual(['system:dashboard.view']);
+  });
+
+  it('says that a name that was seen before gets none', () => {
+    const { auth } = setup();
+    auth.applyBundleDefaults([{ name: 'scoreboard', defaultRoles: defaults }]);
+    expect(auth.bundleDefaults('scoreboard', defaults)).toMatchObject({ applies: false });
+    expect(auth.bundleDefaults('other', {})).toEqual({ grants: {}, applies: true });
+  });
+
+  it('takes the grants of a bundle away again, and lets a new one of that name start over', () => {
+    const { auth } = setup();
+    auth.createRole('crew', ['bundle:scoreboard:view', 'bundle:scoreboard-two:view']);
+    auth.applyBundleDefaults([
+      { name: 'scoreboard', defaultRoles: defaults },
+      { name: 'scoreboard-two', defaultRoles: { viewer: ['view'] } },
+    ]);
+    let changes = 0;
+    auth.onChange(() => changes++);
+
+    auth.forgetBundle('scoreboard');
+
+    const { roles } = auth.policy();
+    expect(roles.operator).toEqual(['system:dashboard.view']);
+    expect(roles.viewer).toEqual(['bundle:scoreboard-two:view', 'system:dashboard.view']);
+    expect(roles.crew).toEqual(['bundle:scoreboard-two:view']);
+    expect(roles.admin).toEqual(['*']);
+    expect(changes).toBeGreaterThan(0);
+    expect(auth.bundleDefaults('scoreboard', defaults).applies).toBe(true);
+    auth.applyBundleDefaults([{ name: 'scoreboard', defaultRoles: defaults }]);
+    expect(auth.policy().roles.viewer).toContain('bundle:scoreboard:view');
+  });
+
+  it('forgets nothing for what is no bundle name', () => {
+    const { auth } = setup();
+    auth.createRole('crew', ['bundle:*:view', 'system:logs.view']);
+    for (const name of ['*', '', 'a:b', '%', 'system']) auth.forgetBundle(name);
+    expect(auth.policy().roles.crew).toEqual(['bundle:*:view', 'system:logs.view']);
+  });
+});

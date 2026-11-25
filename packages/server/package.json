@@ -1,6 +1,6 @@
 {
   "name": "@mooncg/server",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "The MoonCG server: kernel, HTTP, WebSocket transport, extension host.",
   "type": "module",
@@ -31,10 +31,12 @@
     "ajv": "^8.20.0",
     "fastify": "^5.12.8",
     "semver": "^7.8.6",
-    "ws": "^8.23.0"
+    "ws": "^8.23.0",
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "@types/semver": "^7.8.0",
-    "@types/ws": "^8.18.2"
+    "@types/ws": "^8.18.2",
+    "@types/yauzl": "^3.4.0"
   }
 }

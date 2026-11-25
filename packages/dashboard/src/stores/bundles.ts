@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, messageOf } from '../api.js';
 import type { DialogInfo } from '../dialogs.js';
+import type { SourceInfo } from './installs.js';
 
 export interface PanelInfo {
   readonly id: string;
@@ -46,6 +47,8 @@ export interface BundleInfo {
   readonly dialogs?: readonly DialogInfo[] | undefined;
   readonly graphics: readonly GraphicInfo[];
   readonly assets?: readonly AssetCategoryInfo[] | undefined;
+  /** Where the bundle was installed from. Told to those who may manage bundles only. */
+  readonly source?: SourceInfo | undefined;
 }
 
 /** A panel as a workspace shows it: its id is unique across bundles. */
@@ -62,6 +65,8 @@ export type BundleAction = 'enable' | 'disable' | 'reload';
 export const useBundles = defineStore('bundles', () => {
   const list = ref<readonly BundleInfo[]>([]);
   const canManage = ref(false);
+  /** How many earlier versions the server keeps of a bundle. Told to those who manage. */
+  const backupsKept = ref<number>();
   const loaded = ref(false);
   /** Why the last change was refused; empty when it was not. */
   const problem = ref('');
@@ -82,12 +87,14 @@ export const useBundles = defineStore('bundles', () => {
     panels.value.filter((panel) => (panel.workspace ?? DEFAULT_WORKSPACE) === workspace);
 
   async function refresh(): Promise<void> {
-    const answer = await api.request<{ bundles: BundleInfo[]; canManage: boolean }>(
-      'GET',
-      '/api/v1/bundles',
-    );
+    const answer = await api.request<{
+      bundles: BundleInfo[];
+      canManage: boolean;
+      backupsKept?: number;
+    }>('GET', '/api/v1/bundles');
     list.value = answer.bundles;
     canManage.value = answer.canManage;
+    backupsKept.value = answer.backupsKept;
     loaded.value = true;
   }
 
@@ -101,5 +108,16 @@ export const useBundles = defineStore('bundles', () => {
     await refresh().catch(() => {});
   }
 
-  return { list, canManage, loaded, problem, panels, workspaces, panelsOf, refresh, change };
+  return {
+    list,
+    canManage,
+    backupsKept,
+    loaded,
+    problem,
+    panels,
+    workspaces,
+    panelsOf,
+    refresh,
+    change,
+  };
 });

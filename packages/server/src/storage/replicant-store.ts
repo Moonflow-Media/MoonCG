@@ -37,6 +37,8 @@ export interface ReplicantStore {
   load(bundle: string, name: string): Promise<StoredReplicant | undefined>;
   /** Writes all records or none. A record replaces the earlier one of the same replicant. */
   save(records: readonly StoredReplicant[]): Promise<void>;
+  /** Deletes every record of a bundle. For a bundle that is removed with its data. */
+  removeBundle(bundle: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -52,6 +54,12 @@ export class MemoryReplicantStore implements ReplicantStore {
   async save(records: readonly StoredReplicant[]): Promise<void> {
     for (const { bundle, name, rev, value } of records) {
       this.#records.set(`${bundle}\n${name}`, { rev, json: JSON.stringify(value) });
+    }
+  }
+
+  async removeBundle(bundle: string): Promise<void> {
+    for (const key of [...this.#records.keys()]) {
+      if (key.startsWith(`${bundle}\n`)) this.#records.delete(key);
     }
   }
 
@@ -106,6 +114,10 @@ export class SqliteReplicantStore implements ReplicantStore {
       this.#db.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  async removeBundle(bundle: string): Promise<void> {
+    this.#db.run('DELETE FROM replicants WHERE bundle = ?', bundle);
   }
 
   async close(): Promise<void> {

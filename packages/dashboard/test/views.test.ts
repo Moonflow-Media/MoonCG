@@ -217,8 +217,8 @@ describe('the bundles view', () => {
     const { view, calls } = await show(true);
     const actions = (name: string) =>
       view.findAll(`[data-bundle="${name}"] button`).map((button) => button.text());
-    expect(actions('board')).toEqual(['Reload', 'Disable']);
-    expect(actions('broken')).toEqual(['Reload', 'Disable']);
+    expect(actions('board')).toEqual(['Reload', 'Disable', 'Update', 'Remove']);
+    expect(actions('broken')).toEqual(['Reload', 'Disable', 'Update', 'Remove']);
     await view.find('[data-bundle="board"] button').trigger('click');
     await flushPromises();
     expect(calls.some((call) => call.path === '/api/v1/bundles/board/reload')).toBe(true);

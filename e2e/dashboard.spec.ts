@@ -1,9 +1,10 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type Browser, type BrowserContext, expect, type Page, test } from '@playwright/test';
+import { zipOf } from '../packages/server/test/zip-writer.js';
 
 /**
  * The tests that run everything for real: the built server, the built dashboard and the
@@ -26,6 +27,8 @@ const UPLOAD = { 'content-type': 'application/octet-stream', 'x-mooncg-csrf': '1
 
 let server: ChildProcess;
 let dataDir: string;
+/** A copy of the examples: bundles are installed into it, never into the repository. */
+let bundlesDir: string;
 let base: string;
 let setupUrl: string;
 const contexts: BrowserContext[] = [];
@@ -33,6 +36,8 @@ const contexts: BrowserContext[] = [];
 /** Starts the built server on a free port and waits until it has said where it listens. */
 test.beforeAll(async () => {
   dataDir = await mkdtemp(join(tmpdir(), 'mooncg-e2e-'));
+  bundlesDir = await mkdtemp(join(tmpdir(), 'mooncg-e2e-bundles-'));
+  await cp(join(repo, 'examples'), bundlesDir, { recursive: true });
   server = spawn(
     process.execPath,
     [
@@ -40,7 +45,7 @@ test.beforeAll(async () => {
       '--port',
       '0',
       '--bundles-dir',
-      join(repo, 'examples'),
+      bundlesDir,
       '--data-dir',
       dataDir,
     ],
@@ -75,6 +80,7 @@ test.afterAll(async () => {
     await gone;
   }
   await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  await rm(bundlesDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 // Every page of a test is closed with it, so that no graphic of one test is still on air,
@@ -787,4 +793,155 @@ test('a viewer gets none of it: no settings, dialog, upload, delete, reload or d
   expect(outcome).toMatch(/^\d+:\d+ forbidden$/);
   await expect(graphic.locator('#home')).not.toHaveText('9');
   await expect(graphic.locator('#mooncg-duplicate, #mooncg-ended')).toHaveCount(0);
+});
+
+/** The archive of a version of the bundle the test below installs. */
+function tickerZip(version: string, extension = 'export default function start() {}') {
+  return {
+    name: `e2e-ticker-${version}.zip`,
+    mimeType: 'application/zip',
+    buffer: zipOf({
+      'mooncg.json': {
+        manifest: 1,
+        kind: 'bundle',
+        name: 'e2e-ticker',
+        version,
+        title: 'Ticker',
+        extension: 'extension/index.js',
+        permissions: { view: 'See the ticker' },
+        panels: [{ id: 'lines', title: 'Lines', file: 'dashboard/lines.html', workspace: 'Show' }],
+      },
+      'extension/index.js': extension,
+      'dashboard/lines.html': `<!doctype html><title>Lines</title><p id="version">ticker ${version}</p>`,
+    }),
+  };
+}
+
+test('a bundle: installed from a ZIP, updated, rolled back when broken, and removed', async ({
+  browser,
+}) => {
+  const { problems, watch } = watcher();
+  const admin = watch(await asAdmin(browser));
+  const row = admin.locator('[data-bundle="e2e-ticker"]');
+  const form = admin.locator('.install');
+  const staged = admin.locator('[data-staged]');
+  const lines = admin.frameLocator('iframe[title="Lines"]');
+  const fact = (term: string) => staged.locator('.facts > div', { hasText: term }).locator('dd');
+  /** Chooses the ZIP upload in the form and hands it the archive. */
+  const upload = async (archive: ReturnType<typeof tickerZip>) => {
+    await form.getByRole('radio', { name: 'ZIP upload' }).click();
+    await form.locator('input[type="file"]').setInputFiles(archive);
+  };
+
+  // --- Fetched and checked first: the page shows what the bundle declares, and nothing runs.
+  await nav(admin, 'Bundles').click();
+  await expect(form.locator('h2')).toHaveText('Install bundle');
+  await upload(tickerZip('1.0.0'));
+  await expect(staged.locator('h2')).toHaveText('Ticker e2e-ticker 1.0.0');
+  await expect(staged.locator('.badge')).toHaveText('New');
+  await expect(fact('Source')).toHaveText('upload e2e-ticker-1.0.0.zip');
+  await expect(fact('Server code')).toContainText('Yes');
+  await expect(fact('Permissions')).toHaveText('view (See the ticker)');
+  await expect(fact('Runs code on install')).toHaveText('No');
+  await expect(fact('Role grants')).toHaveText('none');
+  await expect(form.locator('input[name="scripts"]')).not.toBeChecked();
+  await expect(fact('Provides')).toContainText('1 panel');
+  await expect(row).toHaveCount(0);
+  expect((await admin.request.get(`${base}/b/e2e-ticker/dashboard/lines.html`)).status()).toBe(404);
+  // The styles of the summary are the design system's: a card, the terms muted.
+  await expect(staged).toHaveCSS('background-color', 'rgb(27, 30, 36)');
+
+  // --- Installed: it runs, and its panel is in the workspace.
+  await staged.getByRole('button', { name: 'Install' }).click();
+  await expect(row.locator('.state')).toHaveText('running');
+  await expect(row.locator('small')).toHaveText('e2e-ticker 1.0.0');
+  await expect(row.locator('.bundle-facts')).toContainText('from upload e2e-ticker-1.0.0.zip');
+  await expect(staged).toHaveCount(0);
+  await expect(form.locator('.done')).toHaveText('Installing e2e-ticker is done.');
+  await nav(admin, 'Show').click();
+  await expect(lines.locator('#version')).toHaveText('ticker 1.0.0');
+
+  // --- Updated: the summary names both versions, and the new one runs.
+  await nav(admin, 'Bundles').click();
+  await row.getByRole('button', { name: 'Update' }).click();
+  await expect(form.locator('h2')).toHaveText('Update e2e-ticker');
+  await upload(tickerZip('1.1.0'));
+  await expect(staged.locator('.badge')).toHaveText('Update of 1.0.0');
+  await staged.getByRole('button', { name: 'Update' }).click();
+  await expect(row.locator('small')).toHaveText('e2e-ticker 1.1.0');
+  await expect(row.locator('.state')).toHaveText('running');
+  await expect(form.locator('.done')).toHaveText('Updating e2e-ticker is done.');
+  await nav(admin, 'Show').click();
+  await expect(lines.locator('#version')).toHaveText('ticker 1.1.0');
+
+  // --- A version that does not start is rolled back: the one before keeps running.
+  await nav(admin, 'Bundles').click();
+  await row.getByRole('button', { name: 'Update' }).click();
+  await upload(
+    tickerZip('2.0.0', 'export default function start() { throw new Error("no good"); }'),
+  );
+  await expect(staged.locator('.badge')).toHaveText('Update of 1.1.0');
+  await staged.getByRole('button', { name: 'Update' }).click();
+  await expect(form.locator('.problem')).toContainText('rolled back');
+  await expect(form.locator('.problem')).toContainText('no good');
+  await expect(row.locator('small')).toHaveText('e2e-ticker 1.1.0');
+  await expect(row.locator('.state')).toHaveText('running');
+  await expect(row.locator('.problem')).toHaveCount(0);
+  await nav(admin, 'Show').click();
+  await expect(lines.locator('#version')).toHaveText('ticker 1.1.0');
+  // What was replaced before is kept; what failed is not.
+  const backups = await admin.request.get(`${base}/api/v1/bundles/e2e-ticker/backups`);
+  expect(((await backups.json()) as { backups: { version: string }[] }).backups).toMatchObject([
+    { version: '1.0.0' },
+  ]);
+
+  // --- A viewer sees none of the controls and is refused by the API.
+  const viewer = await asViewer(browser);
+  await nav(viewer, 'Bundles').click();
+  await expect(viewer.locator('[data-bundle="scoreboard"]')).toContainText('running');
+  await expect(viewer.locator('.install, [data-staged]')).toHaveCount(0);
+  await expect(viewer.locator('[data-bundle] button')).toHaveCount(0);
+  await expect(viewer.locator('[data-bundle="scoreboard"]')).not.toContainText('from ');
+  const refused = [
+    await viewer.request.post(`${base}/api/v1/bundles/-/stage`, {
+      data: { source: { type: 'git', url: 'https://example.org/x.git' } },
+    }),
+    await viewer.request.put(`${base}/api/v1/bundles/-/stage`, {
+      data: tickerZip('9.0.0').buffer,
+      headers: UPLOAD,
+    }),
+    await viewer.request.get(`${base}/api/v1/bundles/-/staged`),
+    await viewer.request.get(`${base}/api/v1/bundles/-/jobs`),
+    await viewer.request.post(`${base}/api/v1/bundles/e2e-ticker/update`, { data: {} }),
+    await viewer.request.post(`${base}/api/v1/bundles/e2e-ticker/remove`, { data: {} }),
+    await viewer.request.post(`${base}/api/v1/bundles/scoreboard/remove`, { data: {} }),
+    await viewer.request.get(`${base}/api/v1/bundles/e2e-ticker/backups`),
+  ];
+  expect(refused.map((answer) => answer.status())).toEqual(refused.map(() => 403));
+  // A bundle the viewer holds nothing of is not there for them.
+  expect((await viewer.request.get(`${base}/b/e2e-ticker/dashboard/lines.html`)).status()).toBe(
+    404,
+  );
+
+  // --- Removed, after a question: gone from the list and from the server.
+  await nav(admin, 'Bundles').click();
+  await expect(row.locator('.state')).toHaveText('running');
+  const questions: string[] = [];
+  admin.once('dialog', (dialog) => {
+    questions.push(dialog.message());
+    void dialog.accept();
+  });
+  await row.getByRole('button', { name: 'Remove' }).click();
+  await expect(row).toHaveCount(0);
+  await expect(form.locator('.done')).toHaveText('Removing e2e-ticker is done.');
+  expect(questions).toHaveLength(1);
+  expect(questions[0]).toMatch(/^Remove "e2e-ticker"\?.*kept/);
+  await expect(admin.locator('[data-bundle="scoreboard"] .state')).toHaveText('running');
+  const gone = await viewer.request.get(`${base}/b/e2e-ticker/dashboard/lines.html`);
+  expect(gone.status()).toBe(404);
+  await nav(admin, 'Show').click();
+  await expect(admin.locator('iframe[title="Lines"]')).toHaveCount(0);
+  await expect(control(admin).locator('body')).toBeVisible();
+
+  expect(problems).toEqual([]);
 });

@@ -50,6 +50,7 @@ function setup(store: ReplicantStore = new MemoryReplicantStore()) {
   const recording: ReplicantStore = {
     load: (bundle, name) => store.load(bundle, name),
     close: () => store.close(),
+    removeBundle: (bundle) => store.removeBundle(bundle),
     async save(records) {
       saves.push(records.map((record) => ({ ...record })));
       await store.save(records);
@@ -183,6 +184,7 @@ describe('write-behind persistence', () => {
     const flaky: ReplicantStore = {
       load: (bundle, name) => memory.load(bundle, name),
       close: () => memory.close(),
+      removeBundle: (bundle) => memory.removeBundle(bundle),
       async save(records) {
         if (failures-- > 0) throw new Error('disk full');
         await memory.save(records);
@@ -223,6 +225,7 @@ describe('restore', () => {
         throw new Error('damaged row');
       },
       save: async () => {},
+      removeBundle: async () => {},
       close: async () => {},
     };
     const { logger, lines } = memoryLogger();

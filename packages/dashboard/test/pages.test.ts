@@ -93,18 +93,18 @@ describe('the bundles page', () => {
   const rows = (view: VueWrapper) =>
     view.findAll('[data-bundle]').map((row) => row.attributes('data-bundle'));
   const radio = (view: VueWrapper, choice: string) =>
-    view.find(`[role="radiogroup"] [role="radio"][data-choice="${choice}"]`);
+    view.find(`.page-head [role="radiogroup"] [role="radio"][data-choice="${choice}"]`);
   const checked = (view: VueWrapper) =>
     view
-      .findAll('[role="radio"]')
+      .findAll('.page-head [role="radio"]')
       .filter((item) => item.attributes('aria-checked') === 'true')
       .map((item) => item.attributes('data-choice'));
   const stat = (view: VueWrapper, state: string) => view.find(`.stat[data-stat="${state}"]`);
 
   it('offers a filter by state, with how many bundles each choice shows', async () => {
     const view = await show();
-    expect(view.find('[role="radiogroup"]').attributes('aria-label')).toBe('Filter');
-    expect(view.findAll('[role="radio"]').map((item) => item.text())).toEqual([
+    expect(view.find('.page-head [role="radiogroup"]').attributes('aria-label')).toBe('Filter');
+    expect(view.findAll('.page-head [role="radio"]').map((item) => item.text())).toEqual([
       'All 5',
       'running 2',
       'failed 1',
@@ -131,7 +131,7 @@ describe('the bundles page', () => {
     const view = await show();
     const tabbable = () =>
       view
-        .findAll('[role="radio"]')
+        .findAll('.page-head [role="radio"]')
         .filter((item) => item.attributes('tabindex') === '0')
         .map((item) => item.attributes('data-choice'));
     expect(tabbable()).toEqual(['all']);

@@ -59,7 +59,7 @@ System permissions:
 | Permission               | Allows                                                                    |
 | ------------------------ | ------------------------------------------------------------------------- |
 | `system:dashboard.view`  | The dashboard page, the bundle list, the replicant `system:revision`      |
-| `system:bundles.manage`  | Enabling, disabling and reloading bundles; the replicant `system:bundles` |
+| `system:bundles.manage`  | Installing, updating, removing, enabling, disabling and reloading bundles |
 | `system:users.manage`    | Users, roles and grants, within what the holder holds (see below)         |
 | `system:tokens.manage`   | Creating, listing and revoking API tokens                                 |
 | `system:settings.manage` | Reading and changing the configuration of bundles; the settings page      |
@@ -101,7 +101,44 @@ listed is not named there either. A bundle that is needed but not installed is n
 holders of `system:bundles.manage`, whatever a grant with a wildcard would cover.
 The replicant `system:bundles`, which has the state of every bundle, needs
 `system:bundles.manage`. Everyone with the dashboard can follow `system:revision`, a counter
-that moves when a bundle changes, and ask for the list again.
+that moves when a bundle changes, and ask for the list again. Where a bundle was installed from
+(`source`) is told to holders of `system:bundles.manage` only, and they get the list also
+without `system:dashboard.view`, as a token for the command line may be.
+
+### Installing, updating and removing bundles
+
+An installed bundle is trusted code: its extension runs on the server, with the rights of the
+server, limited only by its capabilities. Whoever may install a bundle may therefore run code
+on the machine. That is the boundary, and one permission guards all of it:
+
+| What                                                             | Needs                   |
+| ---------------------------------------------------------------- | ----------------------- |
+| Fetching a bundle into staging, committing or discarding it      | `system:bundles.manage` |
+| Updating and removing a bundle, listing and restoring backups    | `system:bundles.manage` |
+| Reading jobs and staged bundles, the replicant `system:installs` | `system:bundles.manage` |
+| Trusting a bundle to run code while it is installed, per bundle  | `system:bundles.manage` |
+
+Without it these requests answer 403 (401 when not signed in) before anything is looked at,
+so they do not tell whether a bundle, a job or a backup exists. The server log records who did
+what.
+
+What a holder supplies is still checked as hostile where the server's own files and processes
+are concerned: an archive cannot write outside its staging folder, a Git address cannot become
+an option or a command, a folder inside the bundles or data folder is refused, and nothing
+passes through a shell. What the permission does include, by its nature: the server fetches
+from any host a Git address names, also one only it can reach, and reads any folder its account
+can read when given a path. [bundles.md](bundles.md) has the details and the limits.
+
+Even a holder is not surprised by a bundle: before it is installed, the summary says whether it
+brings server code, whether installing it runs code (install scripts, its own `.npmrc`,
+dependencies from elsewhere than the registry, all refused unless allowed for that bundle), and
+which role grants it proposes. Git and npm run with the configuration of the machine switched
+off wherever that could run a program.
+
+Grants that name a bundle stay when the bundle is removed, and apply again to a bundle of the
+same name. `defaultRoles` are turned into grants the first time a bundle name is seen; an
+update does not change grants. Removing a bundle with its data (`purgeData`) takes the grants
+of its permissions out of every role and forgets the name; API tokens keep what they hold.
 
 ### Bundle settings, assets, dialogs and instances
 
@@ -330,7 +367,7 @@ A page of another site must not be able to act through your browser.
    (`Content-Type: application/json`) or the header `X-MoonCG-CSRF` with any value. A form on
    another site can send neither. This applies to your bundle's own routes as well: send JSON,
    or add the header to `fetch`. An asset upload is the file itself and so never JSON: it
-   needs the header.
+   needs the header, and so does the upload of a bundle's ZIP archive.
 3. Requests with a bearer token are exempt from the second rule: a browser never attaches a
    token by itself.
 

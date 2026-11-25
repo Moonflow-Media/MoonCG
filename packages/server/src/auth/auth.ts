@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import {
   ANONYMOUS_PRINCIPAL,
   authorize,
+  BUNDLE_NAME_PATTERN,
   effectiveGrants,
   isGrantPattern,
   type Json,
@@ -239,6 +240,21 @@ export interface Auth {
       readonly defaultRoles: Readonly<Record<string, readonly string[]>>;
     }[],
   ): void;
+  /**
+   * What `applyBundleDefaults` would do for a bundle: the roles that would be granted
+   * permissions of it, and whether that happens, which it does only the first time a bundle
+   * of this name is seen. Changes nothing.
+   */
+  bundleDefaults(
+    bundle: string,
+    defaultRoles: Readonly<Record<string, readonly string[]>>,
+  ): { readonly grants: Readonly<Record<string, readonly string[]>>; readonly applies: boolean };
+  /**
+   * Takes every grant of a permission of the bundle from every role, and forgets that the
+   * bundle was seen, so that a bundle of this name starts over. For a bundle that is removed
+   * with its data. Grants with a wildcard in the place of the name stay, and so do tokens.
+   */
+  forgetBundle(bundle: string): void;
   /** A value the user stored under a key, such as a dashboard layout. */
   getPref(userId: string, key: string): Json | undefined;
   /** Stores a value. A user keeps at most `MAX_PREFS` of them. */
@@ -798,6 +814,29 @@ export function createAuth(options: AuthOptions): Auth {
         applied = true;
       }
       if (applied) changed();
+    },
+
+    bundleDefaults(bundle, defaultRoles) {
+      const grants: Record<string, readonly string[]> = {};
+      for (const [role, permissions] of Object.entries(defaultRoles)) {
+        // The same roles `applyBundleDefaults` fills.
+        if (roles.get(role)?.builtin && role !== ADMIN_ROLE) grants[role] = [...permissions];
+      }
+      return { grants, applies: !store.bundleDefaults.applied(bundle) };
+    },
+
+    forgetBundle(bundle) {
+      if (!BUNDLE_NAME_PATTERN.test(bundle)) return;
+      const prefix = `bundle:${bundle}:`;
+      store.transaction(() => {
+        for (const role of roles.list()) {
+          for (const grant of role.grants) {
+            if (grant.startsWith(prefix)) roles.revoke(role.name, grant);
+          }
+        }
+        store.bundleDefaults.forget(bundle);
+      });
+      changed();
     },
 
     getPref(userId, key) {

@@ -26,6 +26,8 @@ import { redactSecrets } from '../auth/secrets.js';
 import type { BundleRecord } from '../bundles/bundles.js';
 import type { BundleConfigs } from '../config/bundle-config.js';
 import type { GraphicInstances } from '../graphics/instances.js';
+import type { BundleInstaller } from '../install/installer.js';
+import type { FetchableSource } from '../install/sources.js';
 import type { LogBuffer } from '../kernel/logger.js';
 import { jsonBody, registerAuthRoutes } from './auth-routes.js';
 import {
@@ -91,6 +93,23 @@ export interface BundleLifecycle {
   restartExtension?(name: string): Promise<BundleRecord>;
 }
 
+/** What the API needs of the installer. */
+export type BundleInstalls = Pick<
+  BundleInstaller,
+  | 'stage'
+  | 'staged'
+  | 'commit'
+  | 'discard'
+  | 'update'
+  | 'remove'
+  | 'backups'
+  | 'restore'
+  | 'jobs'
+  | 'job'
+  | 'sources'
+  | 'limits'
+>;
+
 export interface AppOptions {
   /** The bundles as they are now. A function, because bundles change while the server runs. */
   readonly bundles: readonly BundleRecord[] | (() => readonly BundleRecord[]);
@@ -118,6 +137,8 @@ export interface AppOptions {
   readonly routes?: RouteTable | undefined;
   /** Without it the lifecycle API answers 404. */
   readonly lifecycle?: BundleLifecycle | undefined;
+  /** Installs, updates and removes bundles. Without it that part of the API answers 404. */
+  readonly installer?: BundleInstalls | undefined;
   /** The connected graphic pages. Without it no instance can be reloaded. */
   readonly instances?: Pick<GraphicInstances, 'get' | 'reload' | 'disconnect' | 'of'> | undefined;
   /** The files uploaded for each bundle. Without it there are no assets. */
@@ -148,6 +169,30 @@ export const DASHBOARD_ROUTES = [
   '/logs',
 ] as const;
 const LIFECYCLE_ACTIONS = ['enable', 'disable', 'reload'] as const;
+/**
+ * The path segment under `/api/v1/bundles` that everything about installing lives below. A
+ * dash is not the name of a bundle, so no bundle can ever be in its way.
+ */
+const INSTALLS = '/api/v1/bundles/-';
+
+/**
+ * A source as a JSON request names it: something the server fetches itself. An upload is
+ * not among them; it is the body of a `PUT`. Only the known fields are taken over, so that
+ * nothing a request adds reaches the installer.
+ */
+function fetchableSource(value: unknown): FetchableSource {
+  const given =
+    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  const { type, url, ref, path } = given;
+  if (type === 'git' && typeof url === 'string' && (ref === undefined || typeof ref === 'string')) {
+    return { type, url, ...(ref === undefined ? {} : { ref }) };
+  }
+  if ((type === 'path' || type === 'zip') && typeof path === 'string') return { type, path };
+  throw new MoonCGError(
+    'invalid',
+    '"source" must be { type: "git", url, ref? }, { type: "path", path } or { type: "zip", path }',
+  );
+}
 
 /** Headers a bundle route may not set: they describe the connection, which the server owns. */
 const CONNECTION_HEADERS = new Set([
@@ -294,11 +339,6 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     }
     return fail(reply, 500, 'internal', 'The request could not be completed');
   };
-  const requireDashboard = {
-    preHandler: async (request: FastifyRequest, reply: FastifyReply) => {
-      if (!can(request, DASHBOARD_VIEW)) return deny(request, reply, DASHBOARD_VIEW);
-    },
-  };
   const secure = (request: FastifyRequest) => secureCookies(request.headers, options);
   /** One of the server's own pages: never framed, and loading only what this server serves. */
   const builtIn = (reply: FastifyReply) =>
@@ -431,15 +471,30 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     return reply.type(CONTENT_TYPES['.js'] as string).send(script);
   });
 
-  app.get('/api/v1/bundles', requireDashboard, (request) => {
+  // The list is for whoever may open the dashboard, and for whoever manages bundles without
+  // it, such as the command line with a token that holds nothing else.
+  const requireListing = {
+    preHandler: async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!can(request, DASHBOARD_VIEW) && !can(request, BUNDLES_MANAGE)) {
+        return deny(request, reply, DASHBOARD_VIEW);
+      }
+    },
+  };
+  app.get('/api/v1/bundles', requireListing, async (request) => {
     const usable = (item: { requires?: string | undefined }, bundle: string) =>
       can(request, bundlePermission(bundle, item.requires));
     const canManage = can(request, BUNDLES_MANAGE);
     // A bundle shows only to those who may manage bundles or hold a permission of it.
     const shown = (name: string) => canManage || can(request, bundlePermission(name, undefined));
     const installed = new Set(bundles().map(({ name }) => name));
+    // Where a bundle came from is for those who could fetch it again.
+    const sources = canManage ? await options.installer?.sources().catch(() => undefined) : {};
     return {
       canManage,
+      // How many earlier versions are kept, so that a question about removing can be true.
+      ...(canManage && options.installer
+        ? { backupsKept: options.installer.limits.backupsKept }
+        : {}),
       bundles: bundles()
         .filter(({ name }) => shown(name))
         .map((record) => {
@@ -447,6 +502,7 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
           const served = record.state === 'running' ? manifest : undefined;
           return {
             ...describeBundle(record),
+            ...(sources?.[name] === undefined ? {} : { source: sources[name] }),
             // The bundles this one needs, by the manifest, so also while it does not run. A
             // bundle the caller is not shown is not named here either, and one that is not
             // installed only to those who may manage bundles: a grant with a wildcard
@@ -499,12 +555,133 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     '/api/v1/bundles/:name/:action',
     async (request, reply) => {
       const { name, action } = request.params;
+      if (options.installer && (action === 'update' || action === 'remove')) {
+        if (!can(request, BUNDLES_MANAGE)) return deny(request, reply, BUNDLES_MANAGE);
+        try {
+          const body = jsonBody(request);
+          const by = actor(request);
+          const job =
+            action === 'remove'
+              ? options.installer.remove(name, {
+                  force: body.force === true,
+                  deleteFiles: body.deleteFiles === true,
+                  purgeData: body.purgeData === true,
+                  by,
+                })
+              : await options.installer.update(name, {
+                  source: body.source === undefined ? undefined : fetchableSource(body.source),
+                  scripts: body.scripts === true,
+                  by,
+                });
+          return reply.code(202).send({ job });
+        } catch (error) {
+          return failWith(reply, error);
+        }
+      }
       const change = LIFECYCLE_ACTIONS.find((candidate) => candidate === action);
       // Only what can be a bundle name gets as far as the bundle manager.
       if (!lifecycle || !change || !BUNDLE_NAME_PATTERN.test(name)) return notFound(reply);
       if (!can(request, BUNDLES_MANAGE)) return deny(request, reply, BUNDLES_MANAGE);
       try {
         return { bundle: describeBundle(await lifecycle[change](name)) };
+      } catch (error) {
+        return failWith(reply, error);
+      }
+    },
+  );
+
+  // Installing, updating and removing bundles. A bundle is code that runs on the server, so
+  // all of it is for whoever may manage bundles and nobody else, and that is asked first:
+  // without the permission nothing is told, not even whether something exists. Whatever
+  // takes time answers 202 with a job; `GET .../jobs/<id>` and the replicant
+  // `system:installs` say where it stands.
+  const { installer } = options;
+  /** Who a change is logged as: the name of the user or token, or else the principal. */
+  const actor = (request: FastifyRequest) => {
+    const identity = identityOf(request);
+    const described = auth?.describe(identity);
+    if (described?.name == null) return identity.principal.id;
+    return described.kind === 'token' ? `${described.name} (token)` : described.name;
+  };
+  const installs = {
+    preHandler: async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!can(request, BUNDLES_MANAGE)) return deny(request, reply, BUNDLES_MANAGE);
+      if (!installer) return notFound(reply);
+    },
+  };
+  /** The name of a bundle an update is staged for, from a request that may name one. */
+  const targetOf = (value: unknown) => {
+    if (value === undefined || value === '') return undefined;
+    if (typeof value !== 'string') throw new MoonCGError('invalid', '"target" must be a bundle');
+    return value;
+  };
+
+  app.post(`${INSTALLS}/stage`, installs, async (request, reply) => {
+    try {
+      const body = jsonBody(request);
+      const job = await installer?.stage({
+        source: fetchableSource(body.source),
+        target: targetOf(body.target),
+        // Nothing but a plain `true` trusts a bundle to run code while it is installed.
+        scripts: body.scripts === true,
+        by: actor(request),
+      });
+      return reply.code(202).send({ job });
+    } catch (error) {
+      return failWith(reply, error);
+    }
+  });
+
+  app.get(`${INSTALLS}/staged`, installs, async () => ({ staged: installer?.staged() ?? [] }));
+
+  app.post<{ Params: { id: string } }>(
+    `${INSTALLS}/staged/:id/commit`,
+    installs,
+    async (request, reply) => {
+      try {
+        const { scripts } = jsonBody(request);
+        // Nothing but a plain `true` lets the scripts of npm packages run.
+        const job = installer?.commit(request.params.id, {
+          scripts: scripts === true,
+          by: actor(request),
+        });
+        return reply.code(202).send({ job });
+      } catch (error) {
+        return failWith(reply, error);
+      }
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    `${INSTALLS}/staged/:id`,
+    installs,
+    async (request, reply) => {
+      const discarded = await installer?.discard(request.params.id, actor(request));
+      return discarded ? reply.code(204).send() : notFound(reply);
+    },
+  );
+
+  app.get(`${INSTALLS}/jobs`, installs, async () => ({ jobs: installer?.jobs() ?? [] }));
+
+  app.get<{ Params: { id: string } }>(`${INSTALLS}/jobs/:id`, installs, async (request, reply) => {
+    const job = installer?.job(request.params.id);
+    return job ? { job } : notFound(reply);
+  });
+
+  app.get<{ Params: { name: string } }>(
+    '/api/v1/bundles/:name/backups',
+    installs,
+    async (request) => ({ backups: (await installer?.backups(request.params.name)) ?? [] }),
+  );
+
+  app.post<{ Params: { name: string; id: string } }>(
+    '/api/v1/bundles/:name/backups/:id/restore',
+    installs,
+    async (request, reply) => {
+      try {
+        const { name, id } = request.params;
+        const job = await installer?.restore(name, id, actor(request));
+        return reply.code(202).send({ job });
       } catch (error) {
         return failWith(reply, error);
       }
@@ -649,6 +826,36 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   await app.register(async (uploads) => {
     uploads.removeAllContentTypeParsers();
     uploads.addContentTypeParser('*', (_request, _payload, done) => done(null));
+    // A ZIP archive of a bundle, as the body of the request. It is written to staging as it
+    // arrives and counted against the limit there. `filename` is what it is remembered as,
+    // `target` the installed bundle it is the update of, and `scripts=true` trusts it to
+    // run code while it is installed.
+    uploads.put<{ Querystring: { filename?: string; target?: string; scripts?: string } }>(
+      `${INSTALLS}/stage`,
+      installs,
+      async (request, reply) => {
+        const length = request.headers['content-length'];
+        try {
+          const job = await installer?.stage({
+            source: {
+              type: 'upload',
+              body: request.raw,
+              length: length === undefined ? undefined : Number(length),
+              filename:
+                typeof request.query.filename === 'string' ? request.query.filename : undefined,
+            },
+            target: targetOf(request.query.target),
+            scripts: request.query.scripts === 'true',
+            by: actor(request),
+          });
+          return reply.code(202).send({ job });
+        } catch (error) {
+          // What is left of a refused upload is not waited for.
+          reply.header('connection', 'close');
+          return failWith(reply, error);
+        }
+      },
+    );
     uploads.put<{ Params: AssetParams }>(
       '/api/v1/bundles/:name/assets/:category/:file',
       async (request, reply) => {

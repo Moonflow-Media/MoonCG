@@ -55,6 +55,7 @@ function flakyStore(failures: number) {
   const store: ReplicantStore = {
     load: (bundle, name) => memory.load(bundle, name),
     close: () => memory.close(),
+    removeBundle: (bundle) => memory.removeBundle(bundle),
     async save(records) {
       attempts++;
       if (attempts <= failures) throw new Error('disk full');

@@ -42,12 +42,26 @@ function prompt(question: string): Promise<string> {
   });
 }
 
+/** Asks a yes-or-no question on the terminal. Anything but `y` or `yes` is a no. */
+function confirm(question: string): Promise<boolean> {
+  const lines = createInterface({ input: process.stdin, output: process.stderr });
+  return new Promise<boolean>((resolve) => {
+    lines.question(question, (answer) => {
+      lines.close();
+      resolve(/^y(es)?$/i.test(answer.trim()));
+    });
+    lines.once('close', () => resolve(false));
+  });
+}
+
 process.exitCode = await run(process.argv.slice(2), {
   cwd: process.cwd(),
   env: process.env,
   log: (line) => console.log(line),
   error: (line) => console.error(line),
   prompt,
+  // Without a terminal there is nobody to ask: commands that ask then want `--yes`.
+  ...(process.stdin.isTTY ? { confirm } : {}),
 });
 // Asking for a password leaves stdin open; nothing else is left to do.
 process.stdin.pause();

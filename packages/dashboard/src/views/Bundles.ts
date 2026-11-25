@@ -1,5 +1,8 @@
-import { defineComponent, h, onMounted, ref } from 'vue';
+import { defineComponent, h, nextTick, onMounted, ref } from 'vue';
 import { type BundleAction, type BundleInfo, useBundles } from '../stores/bundles.js';
+import { describeSource, useInstalls } from '../stores/installs.js';
+import { sure } from './admin.js';
+import { BundleInstall } from './BundleInstall.js';
 import { counted, dot, pageHead, segmented } from './parts.js';
 
 const LABELS: Record<BundleAction, string> = {
@@ -23,7 +26,25 @@ export const BundlesView = defineComponent({
   name: 'BundlesView',
   setup() {
     const bundles = useBundles();
+    const installs = useInstalls();
     const filter = ref<Filter>('all');
+    /** The bundle the install form is set to update. */
+    const updating = ref<string>();
+    const update = async (name: string) => {
+      updating.value = name;
+      await nextTick();
+      // The form is below the list; whoever pressed the button is taken to it.
+      document.querySelector('.install')?.scrollIntoView?.({ block: 'nearest' });
+    };
+    const remove = (name: string) => {
+      // A server that keeps no backups deletes the files; the question says what happens.
+      const files =
+        bundles.backupsKept === 0 ? 'its files are deleted' : 'its files are moved to the backups';
+      const question =
+        `Remove "${name}"? It is stopped and ${files}. ` +
+        'Its settings, uploaded assets and stored values are kept.';
+      if (sure(question)) void installs.remove(name);
+    };
     onMounted(() => void bundles.refresh());
     const actions = (bundle: BundleInfo): BundleAction[] =>
       bundle.state === 'disabled' ? ['enable'] : ['reload', 'disable'];
@@ -40,6 +61,7 @@ export const BundlesView = defineComponent({
           )
         : null,
       bundle.dependencies?.length ? h('div', `needs ${bundle.dependencies.join(', ')}`) : null,
+      bundle.source ? h('div', `from ${describeSource(bundle.source)}`) : null,
     ];
 
     const row = (bundle: BundleInfo) =>
@@ -66,17 +88,41 @@ export const BundlesView = defineComponent({
               { class: 'bundle-actions' },
               // No button the server would refuse.
               bundles.canManage
-                ? actions(bundle).map((action) =>
+                ? [
+                    ...actions(bundle).map((action) =>
+                      h(
+                        'button',
+                        {
+                          type: 'button',
+                          class: LOOKS[action],
+                          // Not while it is being updated or removed.
+                          disabled: installs.busy(bundle.name),
+                          onClick: () => bundles.change(bundle.name, action),
+                        },
+                        LABELS[action],
+                      ),
+                    ),
                     h(
                       'button',
                       {
                         type: 'button',
-                        class: LOOKS[action],
-                        onClick: () => bundles.change(bundle.name, action),
+                        class: 'small',
+                        disabled: installs.busy(bundle.name),
+                        onClick: () => update(bundle.name),
                       },
-                      LABELS[action],
+                      'Update',
                     ),
-                  )
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        class: 'small danger',
+                        disabled: installs.busy(bundle.name),
+                        onClick: () => remove(bundle.name),
+                      },
+                      'Remove',
+                    ),
+                  ]
                 : [],
             ),
           ]),
@@ -151,6 +197,15 @@ export const BundlesView = defineComponent({
           ? h('p', { class: 'empty' }, `No bundle is ${filter.value}.`)
           : null,
         shown.length > 0 ? h('section', { class: 'card' }, shown.map(row)) : null,
+        // Installing is for those who manage bundles; nobody else is shown any of it.
+        bundles.canManage
+          ? h(BundleInstall, {
+              target: updating.value,
+              onCancel: () => {
+                updating.value = undefined;
+              },
+            })
+          : null,
       ]);
     };
   },

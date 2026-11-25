@@ -403,6 +403,18 @@ export class BundleConfigs {
     return this.#described(merged, [], prepared);
   }
 
+  /**
+   * Deletes the stored configuration of a bundle, for a bundle that is removed with its
+   * data. Its secrets stay known a while longer, so that a late log line is still scrubbed.
+   */
+  async remove(bundle: string): Promise<void> {
+    const write = (this.#writes.get(bundle) ?? Promise.resolve())
+      .catch(() => {})
+      .then(() => rm(this.#file(bundle), { force: true }));
+    this.#writes.set(bundle, write);
+    await write;
+  }
+
   /** For the API: a schema that cannot be used is a `conflict`, with the reason. */
   async #prepareOrRefuse(bundle: ConfiguredBundle): Promise<Prepared> {
     try {

@@ -12,6 +12,7 @@ import {
   nextBundleState,
   type Replicant,
   type ReplicantRegistry,
+  removalBlockers,
   SYSTEM_BUNDLE,
   type Timers,
 } from '@mooncg/core';
@@ -72,6 +73,36 @@ export interface BundleManagerOptions {
   readonly config?: Pick<BundleConfigs, 'load' | 'scrub'> | undefined;
   /** For the restart delays. Defaults to real time. */
   readonly timers?: Timers | undefined;
+  /**
+   * The "On Air" lock: asked before a bundle is updated or removed. A text answer is the
+   * reason the change is refused with; `undefined` lets it through. Nothing sets it yet:
+   * the lock itself comes with live reload. See `#assertNotOnAir`.
+   */
+  readonly onAirLock?:
+    | ((bundle: string, operation: 'update' | 'remove') => string | undefined)
+    | undefined;
+}
+
+/** Changes the files of an installed bundle, and changes them back. */
+export interface BundleSwap {
+  /** Moves the installed version aside and the new one into its place. */
+  apply(): Promise<void>;
+  /** Takes whatever `apply` put in place away again and moves the earlier version back. */
+  revert(): Promise<void>;
+}
+
+export interface ReplaceResult {
+  /**
+   * `replaced`: the new version is in place. `rolled-back`: it could not be put in place or
+   * did not start, and the earlier version is back as it was. `broken`: the earlier version
+   * could not be brought back or does not start either; the bundle is `failed`.
+   */
+  readonly outcome: 'replaced' | 'rolled-back' | 'broken';
+  readonly record: BundleRecord;
+  /** Why the new version did not make it. */
+  readonly error?: string | undefined;
+  /** Why the earlier version is not back. */
+  readonly rollbackError?: string | undefined;
 }
 
 type Mutable = { -readonly [Key in keyof BundleRecord]: BundleRecord[Key] };
@@ -283,6 +314,184 @@ export class BundleManager {
     });
   }
 
+  /**
+   * Adds a bundle: `place` puts its folder into the bundles folder while the bundle shows
+   * as `installing`, then the bundle is started. `needs` are the bundles it depends on, so
+   * that none of them changes meanwhile. A bundle that cannot be put in place is forgotten
+   * again; one that does not start stays, `failed` with its error.
+   */
+  install(
+    name: string,
+    needs: readonly string[],
+    place: () => Promise<void>,
+  ): Promise<BundleRecord> {
+    if (name === SYSTEM_BUNDLE) {
+      return Promise.reject(
+        new MoonCGError('invalid', `"${SYSTEM_BUNDLE}" is reserved for the server itself`),
+      );
+    }
+    return this.#change(name, [name, ...needs], async () => {
+      if (this.#records.has(name)) {
+        throw new MoonCGError('conflict', `Bundle "${name}" is already installed`);
+      }
+      const dir = join(this.#options.bundlesDir, name);
+      const record: Mutable = { name, dir, manifest: undefined, errors: [], state: 'installing' };
+      this.#records.set(name, record);
+      this.#publish();
+      try {
+        await place();
+      } catch (error) {
+        this.#move(record, 'fail');
+        this.#records.delete(name);
+        this.#publish();
+        throw error;
+      }
+      this.#move(record, 'placed');
+      // A bundle of this name may have been disabled before it was removed.
+      await this.#options.settings?.setDisabled(name, false);
+      return this.#start(record);
+    });
+  }
+
+  /**
+   * Puts another version of a bundle in its place: stops the bundle and the running bundles
+   * that depend on it, lets `swap.apply` change the files while the bundle shows as
+   * `updating`, and starts everything again. If the files cannot be changed or the new
+   * version does not start, `swap.revert` brings the earlier version back and that is
+   * started instead. A disabled bundle is swapped and stays disabled: nothing is started,
+   * so nothing can show that it should be rolled back.
+   */
+  replace(name: string, swap: BundleSwap): Promise<ReplaceResult> {
+    const scope = [name, ...this.#dependencies(name), ...this.#dependents(name)];
+    return this.#change(name, scope, async (): Promise<ReplaceResult> => {
+      const record = this.#known(name);
+      this.#assertNotOnAir(name, 'update');
+      const wasDisabled = record.state === 'disabled';
+      if (!wasDisabled) this.#assertCan(record, 'disable');
+      this.#forgetRestarts(name);
+      const dependents = this.#runningDependents(name);
+      for (const dependent of [...dependents].reverse()) {
+        await this.#disable(this.#known(dependent));
+      }
+      if (!wasDisabled) await this.#disable(record);
+      this.#stranded.set(name, [...new Set([...dependents, ...(this.#stranded.get(name) ?? [])])]);
+
+      /** From `installed`: back to rest for a bundle that was disabled, else started. */
+      const settle = async () => {
+        if (!wasDisabled) return this.#start(record);
+        record.manifest = (await readBundle(this.#options.bundlesDir, name))?.manifest;
+        await this.#disable(record);
+        return record;
+      };
+      /** From `updating`: the earlier version comes back, as far as it can. */
+      const restore = async (error: string): Promise<ReplaceResult> => {
+        try {
+          await swap.revert();
+        } catch (reverting) {
+          const rollbackError = errorMessage(reverting);
+          this.#fail(record, [
+            `The update failed: ${error}`,
+            `The earlier version could not be restored: ${rollbackError}`,
+          ]);
+          this.#failStranded(name, `Not started: bundle "${name}" could not be restored`);
+          return { outcome: 'broken', record, error, rollbackError };
+        }
+        this.#move(record, 'placed');
+        await settle();
+        if (wasDisabled || record.state === 'running') {
+          await this.#startStranded(name, 'was restored');
+          return { outcome: 'rolled-back', record, error };
+        }
+        const rollbackError = record.errors.join('; ');
+        this.#failStranded(name, `Not started: bundle "${name}" failed after it was restored`);
+        return { outcome: 'broken', record, error, rollbackError };
+      };
+
+      this.#move(record, 'update');
+      this.#publish();
+      try {
+        await swap.apply();
+      } catch (applying) {
+        return restore(errorMessage(applying));
+      }
+      this.#move(record, 'placed');
+      await settle();
+      if (wasDisabled || record.state === 'running') {
+        await this.#startStranded(name, 'was updated');
+        return { outcome: 'replaced', record };
+      }
+      // The new version is in place and does not run: out with it.
+      const error = record.errors.join('; ');
+      await this.#disable(record);
+      this.#move(record, 'update');
+      this.#publish();
+      return restore(error);
+    });
+  }
+
+  /**
+   * Takes a bundle away: stops it, lets `erase` remove its folder while the bundle shows as
+   * `removing`, and forgets it. Refused while enabled bundles depend on it, unless `force`
+   * is given; then those are stopped and say why. If the folder cannot be removed the
+   * bundle stays, `failed` with the reason.
+   */
+  remove(
+    name: string,
+    options: { readonly force?: boolean | undefined },
+    erase: () => Promise<void>,
+  ): Promise<void> {
+    return this.#change(name, this.#withDependents(name), async () => {
+      const record = this.#known(name);
+      this.#assertNotOnAir(name, 'remove');
+      const blockers = removalBlockers(
+        name,
+        [...this.#records.values()].map((other) => ({
+          name: other.name,
+          enabled: other.state !== 'disabled',
+          dependencies: Object.keys(other.manifest?.dependencies ?? {}),
+        })),
+        options.force === true,
+      );
+      if (blockers.length > 0) {
+        throw new MoonCGError(
+          'conflict',
+          `Bundle "${name}" is needed by ${blockers.join(', ')}; disable or remove those first, or force the removal`,
+        );
+      }
+      if (record.state !== 'disabled') this.#assertCan(record, 'disable');
+      this.#forgetRestarts(name);
+      for (const dependent of [...this.#runningDependents(name)].reverse()) {
+        await this.#stop(dependent);
+        this.#fail(this.#known(dependent), [`Stopped because bundle "${name}" was removed`]);
+      }
+      this.#stranded.delete(name);
+      if (record.state !== 'disabled') await this.#disable(record);
+      this.#move(record, 'remove');
+      this.#publish();
+      try {
+        await erase();
+      } catch (error) {
+        this.#fail(record, [`Could not be removed: ${errorMessage(error)}`]);
+        throw error;
+      }
+      this.#move(record, 'removed');
+      this.#records.delete(name);
+      await this.#options.settings?.setDisabled(name, false);
+      this.#publish();
+    });
+  }
+
+  /**
+   * THE ON AIR CHECK POINT. Every update and every removal of a bundle passes here before
+   * anything of the bundle is stopped or moved. Today nothing is ever locked. When bundles
+   * can be marked as on air, the lock answers through `onAirLock` with the reason, and the
+   * change is refused as a `conflict`.
+   */
+  #assertNotOnAir(name: string, operation: 'update' | 'remove'): void {
+    const reason = this.#options.onAirLock?.(name, operation);
+    if (reason !== undefined) throw new MoonCGError('conflict', reason);
+  }
+
   /** Resolves once no change of state is running or waiting. */
   async idle(): Promise<void> {
     for (let seen: unknown[] = []; ; ) {
@@ -364,6 +573,11 @@ export class BundleManager {
       record = { ...found, state: 'installed' };
       this.#records.set(name, record);
     }
+    return this.#start(record);
+  }
+
+  /** Brings a bundle that rests to `enabling` and starts it from what is on disk now. */
+  #start(record: Mutable): Promise<Mutable> {
     this.#move(record, 'enable');
     this.#publish();
     return this.#run(record);

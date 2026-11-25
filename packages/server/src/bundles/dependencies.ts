@@ -108,3 +108,86 @@ export function dependentsOf(name: string, bundles: readonly Dependable[]): stri
   const rest = [...found].filter((dependent) => !order.includes(dependent)).sort();
   return [...order.filter((dependent) => found.has(dependent)), ...rest];
 }
+
+/** What the checks before an installation need to know of the bundle that was fetched. */
+export interface InstallCandidate extends Dependable {
+  /** The manifest's `engine.mooncg`: the range of MoonCG versions the bundle runs on. */
+  readonly engine?: string | undefined;
+}
+
+export interface InstallCheck {
+  readonly candidate: InstallCandidate;
+  /** Every bundle that is installed now, usable or not. */
+  readonly installed: readonly Dependable[];
+  /** The names of all bundle folders, also those whose manifest is unusable. */
+  readonly taken?: readonly string[] | undefined;
+  /** The version of this MoonCG. */
+  readonly mooncg: string;
+  /** For an update: the name of the installed bundle the candidate is to replace. */
+  readonly target?: string | undefined;
+}
+
+/** Why a bundle that asks for `range` of MoonCG cannot run on this one, or `undefined`. */
+export function engineProblem(range: string | undefined, mooncg: string): string | undefined {
+  if (range === undefined) return undefined;
+  if (validRange(range) === null) return `engine.mooncg: "${range}" is not a version range`;
+  return satisfies(mooncg, range, { includePrerelease: true })
+    ? undefined
+    : `engine.mooncg: needs MoonCG ${range}, but this is ${mooncg}`;
+}
+
+/**
+ * Everything that speaks against installing a fetched bundle, or against putting it in the
+ * place of the installed bundle `target`: the name, the MoonCG it asks for, the bundles it
+ * needs, and the bundles that need it. Empty when nothing does.
+ */
+export function installProblems(check: InstallCheck): string[] {
+  const { candidate, installed, mooncg, target } = check;
+  const { name, version } = candidate;
+  const current = installed.find((bundle) => bundle.name === name);
+  if (target === undefined) {
+    if (current) {
+      return [
+        `Bundle "${name}" is already installed (version ${current.version}); update it instead`,
+      ];
+    }
+    if (check.taken?.includes(name)) {
+      return [`The bundles folder already has a folder "${name}"; remove it first`];
+    }
+  } else {
+    const known =
+      installed.some((bundle) => bundle.name === target) || check.taken?.includes(target);
+    if (!known) return [`Bundle "${target}" is not installed`];
+    if (name !== target) return [`name: this is bundle "${name}", not "${target}"`];
+  }
+
+  const others = installed.filter((bundle) => bundle.name !== name);
+  const problems: string[] = [];
+  const engine = engineProblem(candidate.engine, mooncg);
+  if (engine !== undefined) problems.push(engine);
+  for (const [dependency, range] of Object.entries(candidate.dependencies)) {
+    const problem =
+      dependency === name
+        ? `dependencies.${dependency}: a bundle cannot depend on itself`
+        : dependencyProblem(
+            dependency,
+            range,
+            others.find((bundle) => bundle.name === dependency),
+          );
+    if (problem !== undefined) problems.push(problem);
+  }
+  if (problems.length === 0) {
+    const cycle = planStart([...others, candidate]).problems.get(name);
+    if (cycle?.includes('cycle')) problems.push(cycle);
+  }
+  for (const other of others) {
+    const range = other.dependencies[name];
+    if (range === undefined || validRange(range) === null) continue;
+    if (!satisfies(version, range, { includePrerelease: true })) {
+      problems.push(
+        `Bundle "${other.name}" needs ${name} ${range}, but this is version ${version}`,
+      );
+    }
+  }
+  return problems;
+}

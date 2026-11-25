@@ -50,10 +50,14 @@ export async function readBundle(
   return isDirectory ? { name, dir, ...(await readManifest(dir, name)) } : undefined;
 }
 
-/** Reads and checks the manifest in a bundle folder. */
+/**
+ * Reads and checks the manifest in a bundle folder. `folder` is the name the folder has in
+ * the bundles directory, which the bundle must be called too; without it, as for a bundle
+ * that is not installed yet, any name of a bundle will do.
+ */
 export async function readManifest(
   dir: string,
-  folder: string,
+  folder?: string,
 ): Promise<Pick<DiscoveredBundle, 'manifest' | 'errors'>> {
   const failed = (...errors: string[]) => ({ manifest: undefined, errors });
   let text: string;
@@ -83,7 +87,7 @@ export async function readManifest(
   if (manifest.kind !== 'bundle') {
     return failed(`kind: Expected a bundle, found a ${manifest.kind}`);
   }
-  if (manifest.name !== folder) {
+  if (folder !== undefined && manifest.name !== folder) {
     return failed(`name: Bundle "${manifest.name}" must live in a folder of the same name`);
   }
   if (manifest.name === SYSTEM_BUNDLE) {

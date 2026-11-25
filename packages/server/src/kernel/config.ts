@@ -1,5 +1,10 @@
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { DEFAULT_BACKUPS_KEPT } from '@mooncg/core';
+import { DEFAULT_INSTALL_LIMITS } from '../install/files.js';
+
+/** How long Git and npm may each take while a bundle is installed, unless configured. */
+export const DEFAULT_BUNDLE_INSTALL_TIMEOUT_MS = 5 * 60_000;
 
 /** The largest asset file unless configured otherwise: 50 MiB. */
 export const DEFAULT_ASSET_MAX_FILE_BYTES = 50 * 1024 * 1024;
@@ -35,6 +40,22 @@ export interface ServerConfig {
   readonly assetQuotaBytes: number;
   /** How many files one asset category of one bundle may hold. */
   readonly assetMaxFiles: number;
+  /** The largest ZIP archive a bundle is installed from, in bytes. */
+  readonly bundleMaxArchiveBytes: number;
+  /** How many bytes the files of a bundle that is installed may take together. */
+  readonly bundleMaxUnpackedBytes: number;
+  /** How many files and folders a bundle that is installed may consist of. */
+  readonly bundleMaxFiles: number;
+  /** How many earlier versions of each bundle are kept in `<data-dir>/backups`. */
+  readonly bundleBackupsKept: number;
+  /** How long fetching with Git, and installing with npm, may each take, in milliseconds. */
+  readonly bundleInstallTimeoutMs: number;
+  /**
+   * The registry the npm packages of bundles are fetched from, as an `https://` address
+   * without credentials. Without it, npm's own. The server does not read anybody's
+   * `.npmrc`, so this is where another registry is named.
+   */
+  readonly bundleNpmRegistry: string | undefined;
   /**
    * Marks the session cookies `Secure`, so browsers send them over HTTPS only. Turn it on
    * whenever people reach the server through HTTPS.
@@ -58,7 +79,9 @@ export interface ConfigSources {
 /**
  * Builds the configuration. Each flag (`--port`, `--host`, `--bundles-dir`, `--data-dir`,
  * `--extension-memory-mb`, `--extension-start-timeout-ms`, `--extension-heartbeat-timeout-ms`,
- * `--max-body-bytes`, `--asset-max-file-bytes`, `--asset-quota-bytes`, `--asset-max-files`, repeatable `--allowed-origin`, and the switches `--secure-cookies` and
+ * `--max-body-bytes`, `--asset-max-file-bytes`, `--asset-quota-bytes`, `--asset-max-files`,
+ * `--bundle-max-archive-bytes`, `--bundle-max-unpacked-bytes`, `--bundle-max-files`,
+ * `--bundle-backups-kept`, `--bundle-install-timeout-ms`, `--bundle-npm-registry`, repeatable `--allowed-origin`, and the switches `--secure-cookies` and
  * `--trust-proxy`) wins over its environment variable: the flag in capitals with `MOONCG_` in
  * front and underscores for dashes, such as `MOONCG_DATA_DIR`, and `MOONCG_ALLOWED_ORIGINS` as
  * a comma-separated list. A switch is on in the environment as `1` or `true`. That wins over
@@ -79,6 +102,12 @@ export function loadConfig({ argv, env, cwd }: ConfigSources): ServerConfig {
       'asset-max-file-bytes': { type: 'string' },
       'asset-quota-bytes': { type: 'string' },
       'asset-max-files': { type: 'string' },
+      'bundle-max-archive-bytes': { type: 'string' },
+      'bundle-max-unpacked-bytes': { type: 'string' },
+      'bundle-max-files': { type: 'string' },
+      'bundle-backups-kept': { type: 'string' },
+      'bundle-install-timeout-ms': { type: 'string' },
+      'bundle-npm-registry': { type: 'string' },
       'allowed-origin': { type: 'string', multiple: true },
       'secure-cookies': { type: 'boolean' },
       'trust-proxy': { type: 'boolean' },
@@ -127,6 +156,39 @@ export function loadConfig({ argv, env, cwd }: ConfigSources): ServerConfig {
       'asset file count',
       values['asset-max-files'] ?? env.MOONCG_ASSET_MAX_FILES ?? '1000',
     ),
+    bundleMaxArchiveBytes: parsePositive(
+      'bundle archive size',
+      values['bundle-max-archive-bytes'] ??
+        env.MOONCG_BUNDLE_MAX_ARCHIVE_BYTES ??
+        String(DEFAULT_INSTALL_LIMITS.maxArchiveBytes),
+    ),
+    bundleMaxUnpackedBytes: parsePositive(
+      'bundle size',
+      values['bundle-max-unpacked-bytes'] ??
+        env.MOONCG_BUNDLE_MAX_UNPACKED_BYTES ??
+        String(DEFAULT_INSTALL_LIMITS.maxUnpackedBytes),
+    ),
+    bundleMaxFiles: parsePositive(
+      'bundle file count',
+      values['bundle-max-files'] ??
+        env.MOONCG_BUNDLE_MAX_FILES ??
+        String(DEFAULT_INSTALL_LIMITS.maxFiles),
+    ),
+    bundleBackupsKept: parseCount(
+      'number of bundle backups',
+      values['bundle-backups-kept'] ??
+        env.MOONCG_BUNDLE_BACKUPS_KEPT ??
+        String(DEFAULT_BACKUPS_KEPT),
+    ),
+    bundleInstallTimeoutMs: parsePositive(
+      'bundle install timeout',
+      values['bundle-install-timeout-ms'] ??
+        env.MOONCG_BUNDLE_INSTALL_TIMEOUT_MS ??
+        String(DEFAULT_BUNDLE_INSTALL_TIMEOUT_MS),
+    ),
+    bundleNpmRegistry: parseRegistry(
+      values['bundle-npm-registry'] ?? env.MOONCG_BUNDLE_NPM_REGISTRY,
+    ),
     secureCookies: values['secure-cookies'] ?? on(env.MOONCG_SECURE_COOKIES),
     trustProxy: values['trust-proxy'] ?? on(env.MOONCG_TRUST_PROXY),
   };
@@ -146,6 +208,26 @@ function parsePositive(what: string, text: string): number {
     throw new Error(`Invalid ${what} "${text}": expected a whole number above 0`);
   }
   return value;
+}
+
+/** A whole number of zero or more. */
+function parseCount(what: string, text: string): number {
+  const value = /^[0-9]+$/.test(text) ? Number(text) : -1;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Invalid ${what} "${text}": expected a whole number of 0 or more`);
+  }
+  return value;
+}
+
+function parseRegistry(text: string | undefined): string | undefined {
+  if (text === undefined || text === '') return undefined;
+  const url = URL.canParse(text) ? new URL(text) : undefined;
+  if (url?.protocol !== 'https:' || url.username !== '' || url.password !== '') {
+    throw new Error(
+      `Invalid npm registry "${url ? url.origin : text}": expected an https:// address without credentials`,
+    );
+  }
+  return text;
 }
 
 function parseOrigin(text: string): string {

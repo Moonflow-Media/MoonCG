@@ -93,7 +93,7 @@ export interface RequestOptions {
   readonly bearer?: string | undefined;
   /** Sent as the JSON body. */
   readonly json?: unknown;
-  readonly body?: string;
+  readonly body?: string | Uint8Array;
   readonly headers?: Record<string, string>;
 }
 
@@ -142,7 +142,7 @@ export async function startAuthServer(
       ...(request.json !== undefined
         ? { body: JSON.stringify(request.json) }
         : request.body !== undefined
-          ? { body: request.body }
+          ? { body: request.body as BodyInit }
           : {}),
     });
     const text = await response.text();

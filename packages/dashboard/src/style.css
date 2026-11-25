@@ -388,6 +388,9 @@ main {
 }
 .state.enabling,
 .state.disabling,
+.state.installing,
+.state.updating,
+.state.removing,
 .state.installed {
   background: var(--state-pending);
 } /* extrapolated */
@@ -992,7 +995,7 @@ button.stat:hover:not(:disabled) {
 }
 .bundle-main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 220px 96px 172px;
+  grid-template-columns: minmax(0, 1fr) 220px 96px minmax(172px, auto);
   align-items: center;
   gap: var(--space-lg);
 }
@@ -1182,6 +1185,40 @@ label.upload.primary:has(input:focus-visible) {
   display: grid;
   gap: var(--space-lg);
   min-width: 0;
+}
+
+/* ----------------------------------------------------- Installing bundles */
+/* Below the list of bundles: the bundles that were fetched, then the form. */
+.card + .column {
+  margin-top: var(--space-lg);
+}
+.install .seg {
+  margin-bottom: var(--space-md);
+}
+.install .card-body > p {
+  margin: var(--space-md) 0 0;
+}
+.install .card-body > p:first-child {
+  margin: 0 0 var(--space-md);
+}
+/* What a fetched bundle declares: a term and what there is to say about it, per line. */
+.facts {
+  display: grid;
+  gap: var(--space-xs);
+  margin: 0 0 var(--space-md);
+}
+.facts > div {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: var(--space-md);
+}
+.facts dt {
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 /* The submit row of a form in a card: at the far end, above a line. */

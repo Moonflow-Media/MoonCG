@@ -1,3 +1,4 @@
+export * from './bundle/operations.js';
 export * from './bundle/state.js';
 export * from './errors.js';
 export * from './http/routes.js';

@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { ScryptParams } from '@mooncg/server/accounts';
 import { type AccountArgs, tokenCommand, UsageError, userCommand } from './accounts-command.js';
+import { bundleCommand } from './bundle-command.js';
 import { writeTypes } from './types-command.js';
 
 const USAGE = `Usage: mooncg <command>
@@ -23,7 +24,31 @@ const USAGE = `Usage: mooncg <command>
       Manage API tokens. A token can hold nothing its owner does not hold.
 
   user and token commands take --data-dir <dir> (default: ./data, or MOONCG_DATA_DIR).
-  They work while a server runs on the same directory.`;
+  They work while a server runs on the same directory.
+
+  bundle list
+  bundle install <git-url|zip|folder> [--ref <branch|tag|commit>] [--scripts] [--yes]
+  bundle update <name> [<git-url|zip|folder>] [--ref <ref>] [--scripts] [--yes]
+  bundle remove <name> [--force] [--delete-files] [--purge-data] [--yes]
+  bundle enable <name>
+  bundle disable <name>
+  bundle reload <name>
+  bundle backups <name>
+  bundle restore <name> <backup> [--yes]
+      Manage the bundles of a running server through its API. install and update fetch
+      the bundle, show what it declares and ask before anything is installed; --yes
+      skips the question. update without a source fetches from where the bundle came
+      from. A ZIP file is uploaded; a folder is read by the server under the same path.
+      --scripts trusts the bundle to run code while it is installed: the install scripts
+      of its npm packages, its .npmrc and dependencies fetched from elsewhere than the
+      registry. Without it a bundle that needs any of that is refused. remove keeps the
+      files as a backup and keeps the bundle's data, unless --delete-files and
+      --purge-data say otherwise; --force removes a bundle others still need.
+
+  bundle commands take --url <url> (default: http://127.0.0.1:9090, or MOONCG_URL) and an
+  API token that holds system:bundles.manage, from MOONCG_TOKEN or --token <token>.
+  Prefer MOONCG_TOKEN: an argument shows in the process list and the shell history. The
+  token is not sent over plain http to another machine unless --insecure is given.`;
 
 /** Where the command line reads from and writes its messages to. */
 export interface CliIo {
@@ -33,11 +58,17 @@ export interface CliIo {
   error(line: string): void;
   /** Asks for a secret without showing it. Absent when there is nobody to ask. */
   prompt?(question: string): Promise<string>;
+  /** Asks a yes-or-no question. Absent when there is nobody to ask. */
+  confirm?(question: string): Promise<boolean>;
+  /** For tests: stands in for `fetch`. */
+  fetch?: typeof fetch;
 }
 
 export interface CliOptions {
   /** The cost of password hashes. Tests lower it. */
   readonly passwordCost?: ScryptParams;
+  /** How often a running job is asked about, in milliseconds. Tests lower it. */
+  readonly pollMs?: number;
 }
 
 /** Runs the command line and returns the process exit code. */
@@ -67,6 +98,35 @@ export async function run(
         out: values.out === undefined ? undefined : resolve(io.cwd, values.out),
       });
       io.log(`Wrote ${file}`);
+      return 0;
+    }
+    if (command === 'bundle') {
+      await bundleCommand(
+        first,
+        positionals.slice(2),
+        {
+          url: values.url ?? env.MOONCG_URL ?? 'http://127.0.0.1:9090',
+          token: values.token ?? env.MOONCG_TOKEN,
+          yes: values.yes ?? false,
+          ref: values.ref,
+          scripts: values.scripts ?? false,
+          force: values.force ?? false,
+          deleteFiles: values['delete-files'] ?? false,
+          purgeData: values['purge-data'] ?? false,
+          insecure: values.insecure ?? false,
+        },
+        {
+          cwd: io.cwd,
+          log: (line) => io.log(line),
+          warn: (line) => io.error(line),
+          fetch: io.fetch,
+          confirm:
+            io.confirm === undefined
+              ? undefined
+              : (question) => io.confirm?.(question) ?? Promise.resolve(false),
+          pollMs: options.pollMs,
+        },
+      );
       return 0;
     }
     if ((command !== 'user' && command !== 'token') || rest.length > 0) return usage();
@@ -105,6 +165,15 @@ function parse(argv: readonly string[]) {
       grant: { type: 'string', multiple: true },
       expires: { type: 'string' },
       'keep-tokens': { type: 'boolean' },
+      url: { type: 'string' },
+      token: { type: 'string' },
+      yes: { type: 'boolean', short: 'y' },
+      ref: { type: 'string' },
+      scripts: { type: 'boolean' },
+      force: { type: 'boolean' },
+      'delete-files': { type: 'boolean' },
+      'purge-data': { type: 'boolean' },
+      insecure: { type: 'boolean' },
     },
   });
 }

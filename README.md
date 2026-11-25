@@ -5,13 +5,15 @@ A **bundle** brings dashboard panels, graphics for OBS or vMix, and an optional 
 extension. Bundles share state through **replicants**: values the server owns and syncs to every
 panel and graphic over a WebSocket.
 
-This repository is at its fifth milestone. It loads bundles from a folder, serves their panels
-and graphics, syncs replicants and messages, runs each bundle's extension in its own worker
-thread, can enable, disable and reload bundles while it runs, and has users, roles, permissions
-and API tokens. Its dashboard has workspaces, pages for bundles, graphics, users, roles, tokens
-and logs, dialogs that panels open, a settings form for each bundle's configuration, and
-uploaded assets. Installing bundles from the dashboard and live reload on file changes come
-later.
+This repository is at milestone 7 of its plan. It loads bundles from a folder, serves their
+panels and graphics, syncs replicants and messages, runs each bundle's extension in its own
+worker thread, can enable, disable and reload bundles while it runs, and has users, roles,
+permissions and API tokens. Its dashboard has workspaces, pages for bundles, graphics, users,
+roles, tokens and logs, dialogs that panels open, a settings form for each bundle's
+configuration, and uploaded assets. Bundles are installed, updated and removed while the server
+runs, from a Git repository, a ZIP archive or a folder, with a rollback when a new version does
+not start: see [docs/bundles.md](docs/bundles.md). Live reload on file changes and a lock for
+bundles that are on air (milestone 6) come later.
 
 ## Run the example
 
@@ -67,6 +69,12 @@ setup. The server listens on loopback unless started with `--host`.
 | `--asset-max-file-bytes`           | `MOONCG_ASSET_MAX_FILE_BYTES`           | `52428800`  | Largest file that can be uploaded as an asset      |
 | `--asset-quota-bytes`              | `MOONCG_ASSET_QUOTA_BYTES`              | `524288000` | What one asset category of a bundle may hold       |
 | `--asset-max-files`                | `MOONCG_ASSET_MAX_FILES`                | `1000`      | How many files one asset category may hold         |
+| `--bundle-max-archive-bytes`       | `MOONCG_BUNDLE_MAX_ARCHIVE_BYTES`       | `104857600` | Largest ZIP archive a bundle is installed from     |
+| `--bundle-max-unpacked-bytes`      | `MOONCG_BUNDLE_MAX_UNPACKED_BYTES`      | `524288000` | Largest bundle that is installed, unpacked         |
+| `--bundle-max-files`               | `MOONCG_BUNDLE_MAX_FILES`               | `50000`     | Most files and folders a bundle may consist of     |
+| `--bundle-backups-kept`            | `MOONCG_BUNDLE_BACKUPS_KEPT`            | `3`         | Earlier versions kept of each bundle               |
+| `--bundle-install-timeout-ms`      | `MOONCG_BUNDLE_INSTALL_TIMEOUT_MS`      | `300000`    | How long Git, and npm, may each take               |
+| `--bundle-npm-registry`            | `MOONCG_BUNDLE_NPM_REGISTRY`            | npm's own   | Registry for the npm packages of bundles (https)   |
 | `--extension-start-timeout-ms`     | `MOONCG_EXTENSION_START_TIMEOUT_MS`     | `10000`     | How long an extension may take to start            |
 | `--extension-heartbeat-timeout-ms` | `MOONCG_EXTENSION_HEARTBEAT_TIMEOUT_MS` | `10000`     | How long a running extension may stay unresponsive |
 | `--secure-cookies`                 | `MOONCG_SECURE_COOKIES`                 | off         | Marks session cookies `Secure` (HTTPS only)        |
@@ -93,7 +101,10 @@ and a bundle shows as `enabling` until its extension has started.
 
 The data directory is created on first start. It holds `mooncg.db`, a SQLite database with the
 persistent replicants, the list of disabled bundles, and the users, roles, tokens and sessions.
-Deleting it resets all of that, and the next start offers the setup again. `data/` is
+Deleting it resets all of that, and the next start offers the setup again. Beside the
+database it holds `config/` and `assets/` of the bundles, `staging/` for bundles that are being
+installed, `backups/` with the earlier versions of updated and removed bundles, and
+`bundle-sources.json`, which remembers where each bundle was installed from. `data/` is
 git-ignored.
 
 To run the built server yourself:
@@ -118,15 +129,15 @@ TypeScript directly, so rebuild after changing sources. Tests need no build.
 
 ## Repository layout
 
-| Path                  | Content                                                                                                                                                         |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/core`       | Pure logic without IO: manifest parser, replicant engine, message bus, route table, bundle state machine, wire protocol, permissions, session handler           |
-| `packages/server`     | Config, logger and lifecycle, bundle manager, schema validation, storage, accounts, worker-thread extension host, HTTP and WebSocket transport                  |
-| `packages/sdk`        | What bundle authors use: `@mooncg/sdk/client` (browser and Node client), `/extension` (extension context), `/vue` and `/react` adapters                         |
-| `docs/`               | `permissions.md` (accounts, roles, tokens, setup), `extensions.md` (the extension API, with notes for NodeCG authors), `dashboard.md` and `folder-structure.md` |
-| `packages/cli`        | The `mooncg` command line: `mooncg types`, `mooncg user` and `mooncg token`                                                                                     |
-| `packages/dashboard`  | The dashboard: a Vue application the server serves at `/`; see [docs/dashboard.md](docs/dashboard.md)                                                           |
-| `examples/scoreboard` | A reference bundle with a panel, a dialog, a graphic, an extension, an asset category and a config schema with a secret                                         |
+| Path                  | Content                                                                                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/core`       | Pure logic without IO: manifest parser, replicant engine, message bus, route table, bundle state machine, wire protocol, permissions, session handler        |
+| `packages/server`     | Config, logger and lifecycle, bundle manager and installer, schema validation, storage, accounts, worker-thread extension host, HTTP and WebSocket transport |
+| `packages/sdk`        | What bundle authors use: `@mooncg/sdk/client` (browser and Node client), `/extension` (extension context), `/vue` and `/react` adapters                      |
+| `docs/`               | `permissions.md` (accounts, roles, tokens, setup), `bundles.md` (installing, updating, removing), `extensions.md`, `dashboard.md` and `folder-structure.md`  |
+| `packages/cli`        | The `mooncg` command line: `mooncg types`, `mooncg user`, `mooncg token` and `mooncg bundle`                                                                 |
+| `packages/dashboard`  | The dashboard: a Vue application the server serves at `/`; see [docs/dashboard.md](docs/dashboard.md)                                                        |
+| `examples/scoreboard` | A reference bundle with a panel, a dialog, a graphic, an extension, an asset category and a config schema with a secret                                      |
 
 ## Writing a bundle
 
@@ -172,8 +183,9 @@ A manifest can declare more, each described in [docs/dashboard.md](docs/dashboar
 
 ### Bundle states
 
-A bundle is `running`, `failed` or `disabled` (and briefly `enabling` or `disabling`). Bundles
-can be changed while the server runs, from the dashboard's bundle page or over HTTP:
+A bundle is `running`, `failed` or `disabled` (and briefly `enabling` or `disabling`; while
+its files change `installing`, `updating` or `removing`). Bundles can be changed while the
+server runs, from the dashboard's bundle page or over HTTP:
 
 ```sh
 curl -X POST http://127.0.0.1:9090/api/v1/bundles/scoreboard/reload
@@ -194,6 +206,34 @@ curl -X POST http://127.0.0.1:9090/api/v1/bundles/scoreboard/enable
 - These calls need the permission `system:bundles.manage`.
 - The states are also a read-only replicant, `system:bundles`, for whoever may manage bundles.
   The dashboard follows `system:revision`, which only counts changes, and asks for the list.
+
+### Installing, updating and removing
+
+```sh
+export MOONCG_TOKEN=mcg_…   # an API token that holds system:bundles.manage
+mooncg bundle install https://example.org/owner/scoreboard.git --ref v1.2.0
+mooncg bundle update scoreboard
+mooncg bundle remove scoreboard
+```
+
+- A bundle comes from a Git repository (`https://`, `ssh://` or `user@host:path`), a ZIP
+  archive or a folder on the server's machine. The dashboard's bundle page takes a Git address
+  or a ZIP upload.
+- It is fetched into `data/staging/` and checked first. What it declares is shown (whether it
+  brings server code, its permissions, capabilities, dependencies and npm packages) before it
+  is installed, and it can be discarded instead.
+- npm packages are installed with `npm ci --omit=dev --ignore-scripts`, with no configuration
+  but the server's. A bundle that would run code while it is installed (install scripts, an
+  `.npmrc` of its own, dependencies from elsewhere than the registry) is refused unless that
+  is allowed for it (`--scripts`).
+- An update keeps the earlier version in `data/backups/` and puts it back if the new one does
+  not start. Settings, assets and persistent replicants stay through an update and, unless
+  asked otherwise, through a removal.
+- `"engine": { "mooncg": ">=0.6.0" }` in the manifest says which MoonCG a bundle runs on; a
+  bundle that asks for another is refused.
+
+[docs/bundles.md](docs/bundles.md) has the sources, the limits, the rollback, the API and what
+is kept.
 
 `dependencies` in the manifest (`{ "team-data": "^2.0.0" }`) decide the start order. A bundle
 whose dependency is missing, has the wrong version, is not running, or is part of a cycle is

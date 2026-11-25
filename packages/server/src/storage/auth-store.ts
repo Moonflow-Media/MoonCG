@@ -182,6 +182,8 @@ export interface BundleDefaultsRepository {
   /** Whether the bundle's `defaultRoles` were turned into grants already. */
   applied(bundle: string): boolean;
   markApplied(bundle: string): void;
+  /** Forgets that the bundle was seen, so that its defaults apply again. */
+  forget(bundle: string): void;
 }
 
 /** Everything about accounts and permissions the server keeps. All of it is synchronous. */
@@ -395,6 +397,7 @@ export function sqlAuthStore(db: Db): AuthStore {
         db.all('SELECT 1 FROM bundle_defaults WHERE bundle = ?', bundle).length > 0,
       markApplied: (bundle) =>
         db.run('INSERT OR IGNORE INTO bundle_defaults (bundle) VALUES (?)', bundle),
+      forget: (bundle) => db.run('DELETE FROM bundle_defaults WHERE bundle = ?', bundle),
     },
     prefs: {
       get: (userId, key) =>
