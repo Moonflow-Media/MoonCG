@@ -284,13 +284,69 @@ describe('extension-only connection features', () => {
     await tick();
 
     expect(route).toMatchObject({ method: 'GET', pattern: '/teams/:id', permission: 'view' });
-    expect(handler).toHaveBeenCalledExactlyOnceWith(request);
+    expect(handler).toHaveBeenCalledExactlyOnceWith(request, undefined);
     expect(socket().last('call.ok')).toEqual({
       t: 'call.ok',
       call: 9,
       data: { status: 200, headers: {}, body: 'eA==' },
     });
     expect(socket().last('call.err')).toMatchObject({ call: 10, code: 'not_found' });
+  });
+
+  it('keeps a handler of the old connection away from a call of the new one with the same id', async () => {
+    const { connection, socket } = extensionConnection();
+    const request: HttpRequestData = {
+      method: 'POST',
+      path: '/upload',
+      params: {},
+      query: {},
+      headers: {},
+      sender: { principal: 'tester', kind: 'user', bundle: 'demo' },
+      body: null,
+      stream: true,
+    };
+    const finish: (() => void)[] = [];
+    const bodies: (ReadableStream<Uint8Array> | undefined)[] = [];
+    const registering = connection.route(
+      'POST',
+      '/upload',
+      async (_request, body) => {
+        bodies.push(body);
+        await new Promise<void>((resolve) => finish.push(resolve));
+        return { status: 204, headers: {}, body: null };
+      },
+      undefined,
+      { stream: true },
+    );
+    await tick();
+    const route = socket().last('http.route');
+    socket().receive({ t: 'ok', id: route.id });
+    await registering;
+
+    socket().receive({ t: 'http.call', call: 1, route: route.id, request });
+    await tick();
+    const old = socket();
+    old.close();
+    await tick();
+    socket().welcome();
+    socket().receive({ t: 'http.call', call: 1, route: route.id, request });
+    await tick();
+    expect(socket()).not.toBe(old);
+
+    // The handler of the old connection finishes now.
+    finish[0]?.();
+    await tick();
+    expect(socket().sent.filter((msg) => msg.t === 'http.cancel' || msg.t === 'call.ok')).toEqual(
+      [],
+    );
+    // The body of the new call still arrives.
+    socket().receive({ t: 'http.data', call: 1, data: 'AQID' });
+    socket().receive({ t: 'http.end', call: 1 });
+    const reader = bodies[1]?.getReader();
+    expect((await reader?.read())?.value).toEqual(new Uint8Array([1, 2, 3]));
+    finish[1]?.();
+    await tick();
+    expect(socket().last('call.ok')).toMatchObject({ call: 1, data: { status: 204 } });
   });
 
   it('rejects a registration the server refuses', async () => {

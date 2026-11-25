@@ -16,7 +16,41 @@ import type { PatchOp } from '../replicant/patch.js';
 export const MAX_FRAME_BYTES = 1024 * 1024;
 
 /** Sent in `hello` and `welcome`. Bump on any incompatible change to the messages below. */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
+
+/** The largest piece of a streamed HTTP body one `http.data` message carries, 64 KiB. */
+export const MAX_STREAM_CHUNK_BYTES = 64 * 1024;
+
+/**
+ * How many pieces of a streamed HTTP body may be on their way before the receiver asks for
+ * more with `http.pull`, one per piece it has taken. This is the backpressure: neither side
+ * holds more than this many pieces of a body that the other has not read.
+ */
+export const STREAM_WINDOW = 4;
+
+/** Messages about the streamed body of one HTTP call. Both sides send them. */
+export type StreamMessage =
+  /** A piece of the body, base64-encoded, at most `MAX_STREAM_CHUNK_BYTES` long. */
+  | { readonly t: 'http.data'; readonly call: number; readonly data: string }
+  /** The body is complete. */
+  | { readonly t: 'http.end'; readonly call: number }
+  /** The receiver took one piece: one more may be sent. */
+  | { readonly t: 'http.pull'; readonly call: number }
+  /** The receiver wants no more of the body. The sender stops. */
+  | { readonly t: 'http.cancel'; readonly call: number }
+  /** The sender cannot complete the body. What was received of it is incomplete. */
+  | { readonly t: 'http.abort'; readonly call: number; readonly message: string };
+
+/** How many changed stylesheets one `css` message names at most. */
+export const MAX_CSS_FILES = 100;
+
+/**
+ * Whether files can be named in one `css` message: at least one, at most `MAX_CSS_FILES`, and
+ * each a safe path inside a bundle of at most 500 characters. Others are a reason to reload.
+ */
+export function fitsCssMessage(files: readonly unknown[]): files is readonly string[] {
+  return files.length > 0 && files.length <= MAX_CSS_FILES && files.every(isFile);
+}
 
 /**
  * `name` is a replicant or message name, either bare (the session's own bundle) or
@@ -80,6 +114,13 @@ export type ExtensionMessage =
       readonly pattern: string;
       /** A permission name from the bundle manifest. */
       readonly permission?: string;
+      /** The request body follows the call as a stream instead of inside it. */
+      readonly stream?: true;
+      /**
+       * How many bytes a streamed request body may have: `null` for no limit. Without it the
+       * server's limit holds.
+       */
+      readonly maxBytes?: number | null;
     }
   /**
    * Ask whether a principal holds a permission of the own bundle, by the permission's name in
@@ -98,7 +139,8 @@ export type ExtensionMessage =
       readonly call: number;
       readonly code: ErrorCode;
       readonly message: string;
-    };
+    }
+  | StreamMessage;
 
 /** A revision is only comparable within one epoch, the lifetime of one replicant instance. */
 export interface KnownState {
@@ -117,6 +159,12 @@ export type ServerMessage =
    * to the pages of a bundle whose files changed while the server watches them.
    */
   | { readonly t: 'reload' }
+  /**
+   * To a page: these stylesheets of your bundle changed (files inside the bundle, such as
+   * `dashboard/control.css`). Load them again in place; a page that does not link one of
+   * them loads itself again instead. Sent while the server watches the bundle's files.
+   */
+  | { readonly t: 'css'; readonly files: readonly string[] }
   /**
    * To a graphic page: you are no longer the instance of your graphic. `replaced` when the
    * same principal opened it again, `disconnected` when an operator took the place away.
@@ -170,6 +218,7 @@ export type ServerMessage =
       readonly route: number;
       readonly request: HttpRequestData;
     }
+  | StreamMessage
   | ErrorMessage;
 
 export interface ErrorMessage {
@@ -236,9 +285,20 @@ export function decodeClientMessage(text: string): Decoded<ClientMessage> {
       case 'http.route': {
         if (!isId(m.id) || !isMethod(m.method)) return null;
         if (typeof m.pattern !== 'string' || !isRoutePattern(m.pattern)) return null;
-        const route = { t: 'http.route', id: m.id, method: m.method, pattern: m.pattern } as const;
-        if (m.permission === undefined) return route;
-        return isName(m.permission) ? { ...route, permission: m.permission } : null;
+        if (m.permission !== undefined && !isName(m.permission)) return null;
+        if (m.stream !== undefined && m.stream !== true) return null;
+        if (m.maxBytes !== undefined && m.maxBytes !== null && !isId(m.maxBytes)) return null;
+        // A limit only means something for a body that is streamed.
+        if (m.maxBytes !== undefined && m.stream !== true) return null;
+        return {
+          t: 'http.route',
+          id: m.id,
+          method: m.method,
+          pattern: m.pattern,
+          ...(m.permission === undefined ? {} : { permission: m.permission as string }),
+          ...(m.stream === true ? { stream: true as const } : {}),
+          ...(m.maxBytes === undefined ? {} : { maxBytes: m.maxBytes as number | null }),
+        };
       }
       case 'perm.check':
         return isId(m.id) && isName(m.principal) && isName(m.permission)
@@ -251,9 +311,39 @@ export function decodeClientMessage(text: string): Decoded<ClientMessage> {
           ? { t: 'call.err', call: m.call, code: m.code, message: m.message }
           : null;
       default:
-        return null;
+        return readStreamMessage(m);
     }
   });
+}
+
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+
+/** How many bytes a base64 text of a length that is a multiple of four decodes to. */
+const decodedLength = (text: string) =>
+  (text.length / 4) * 3 - (text.endsWith('==') ? 2 : text.endsWith('=') ? 1 : 0);
+
+function readStreamMessage(m: Record<string, unknown>): StreamMessage | null {
+  if (!isId(m.call)) return null;
+  switch (m.t) {
+    case 'http.data':
+      return typeof m.data === 'string' &&
+        m.data.length > 0 &&
+        m.data.length % 4 === 0 &&
+        decodedLength(m.data) <= MAX_STREAM_CHUNK_BYTES &&
+        BASE64.test(m.data)
+        ? { t: 'http.data', call: m.call, data: m.data }
+        : null;
+    case 'http.end':
+    case 'http.pull':
+    case 'http.cancel':
+      return { t: m.t, call: m.call };
+    case 'http.abort':
+      return typeof m.message === 'string'
+        ? { t: 'http.abort', call: m.call, message: m.message.slice(0, 1000) }
+        : null;
+    default:
+      return null;
+  }
 }
 
 /** Decodes and validates what the server sent. */
@@ -264,6 +354,10 @@ export function decodeServerMessage(text: string): Decoded<ServerMessage> {
         return isRev(m.v) ? { t: 'welcome', v: m.v } : null;
       case 'reload':
         return { t: 'reload' };
+      case 'css':
+        return Array.isArray(m.files) && fitsCssMessage(m.files)
+          ? { t: 'css', files: [...m.files] }
+          : null;
       case 'graphic.end': {
         const reason = GRAPHIC_END_REASONS.find((known) => known === m.reason);
         return reason ? { t: 'graphic.end', reason } : null;
@@ -311,7 +405,7 @@ export function decodeServerMessage(text: string): Decoded<ServerMessage> {
         if (m.id === undefined) return { t: 'err', code: m.code, message: m.message };
         return isId(m.id) ? { t: 'err', id: m.id, code: m.code, message: m.message } : null;
       default:
-        return null;
+        return readStreamMessage(m);
     }
   });
 }
@@ -396,14 +490,19 @@ function isHttpRequest(value: unknown): value is HttpRequestData {
     isStringRecord(value.query) &&
     isStringRecord(value.headers) &&
     (value.body === null || typeof value.body === 'string') &&
+    (value.stream === undefined || (value.stream === true && value.body === null)) &&
     isSender(value.sender)
   );
 }
 
 /** An HTTP header name is a token: no spaces, colons or control characters. */
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-/** A header value has no line breaks or other control characters, which could forge headers. */
-const HEADER_VALUE = /^[\t\x20-\x7e\x80-\uffff]*$/;
+/**
+ * A header value has no line breaks or other control characters, which could forge headers,
+ * and only Latin-1 characters: exactly what Node's `setHeader` takes (tab, 0x20 to 0x7e and
+ * 0x80 to 0xff). Anything else would only fail once the answer is being sent.
+ */
+const HEADER_VALUE = /^[\t\x20-\x7e\x80-\xff]*$/;
 
 /**
  * Whether a value an extension answered an HTTP call with is a usable response: a final
@@ -413,6 +512,7 @@ export function isHttpResponse(value: unknown): value is {
   status: number;
   headers: Record<string, string>;
   body: string | null;
+  stream?: true;
 } {
   return (
     isPlainObject(value) &&
@@ -423,7 +523,8 @@ export function isHttpResponse(value: unknown): value is {
     Object.entries(value.headers).every(
       ([name, header]) => HEADER_NAME.test(name) && HEADER_VALUE.test(header),
     ) &&
-    (value.body === null || typeof value.body === 'string')
+    (value.body === null || typeof value.body === 'string') &&
+    (value.stream === undefined || (value.stream === true && value.body === null))
   );
 }
 

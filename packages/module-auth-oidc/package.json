@@ -1,6 +1,6 @@
 {
   "name": "@mooncg/module-auth-oidc",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": true,
   "description": "The MoonCG module for external logins: OpenID Connect, Twitch and Discord.",
   "type": "module",

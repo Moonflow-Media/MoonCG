@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
+import { Readable } from 'node:stream';
 import {
   authorize,
   BUNDLE_NAME_PATTERN,
@@ -16,6 +17,7 @@ import {
   MoonCGError,
   normalizeRoutePath,
   type Policy,
+  type RouteAnswer,
   type RouteTable,
   SETTINGS_MANAGE,
 } from '@mooncg/core';
@@ -36,6 +38,7 @@ import type { LogBuffer } from '../kernel/logger.js';
 import { localPasswordProvider } from '../modules/auth-local.js';
 import { ProviderRegistry } from '../modules/providers.js';
 import { jsonBody, registerAuthRoutes } from './auth-routes.js';
+import { readWhole, requestBody, type UploadPace } from './bodies.js';
 import {
   createIdentify,
   credentialsOf,
@@ -70,6 +73,23 @@ export { ASSET_CSP } from './shared.js';
 
 /** The largest request body a bundle route accepts, unless configured otherwise. */
 export const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+
+/**
+ * The largest streamed request body any bundle route accepts, whatever the route asks for,
+ * also with `maxBodyBytes: null`: 1 GiB. That is a few minutes of video at a high bitrate,
+ * enough for the uploads a show needs, and it keeps a route without a limit from filling the
+ * disk of the extension that stores what arrives. An operator raises it on purpose.
+ */
+export const DEFAULT_MAX_STREAM_BODY_BYTES = 1024 ** 3;
+
+/**
+ * How long a streamed answer may wait for its client to take the next piece before it is cut
+ * off and the extension's source is stopped. Waiting for the extension does not count.
+ */
+export const DEFAULT_STREAM_DRAIN_TIMEOUT_MS = 30_000;
+
+/** How long a connection that is closed early still takes what the client sends. */
+const LINGER_MS = 2_000;
 
 /**
  * A state-changing request authenticated by a cookie must either carry JSON or this header.
@@ -169,6 +189,15 @@ export interface AppOptions {
   /** The configuration of each bundle. Without it the configuration API answers 404. */
   readonly config?: Pick<BundleConfigs, 'describe' | 'write' | 'scrub'> | undefined;
   readonly maxBodyBytes?: number | undefined;
+  /**
+   * The largest streamed request body a bundle route accepts, in bytes, whatever the route
+   * itself allows. `DEFAULT_MAX_STREAM_BODY_BYTES` without it.
+   */
+  readonly maxStreamBodyBytes?: number | undefined;
+  /** How fast a client must send a request body to a bundle route. For tests. */
+  readonly uploadPace?: UploadPace | undefined;
+  /** See `DEFAULT_STREAM_DRAIN_TIMEOUT_MS`. For tests. */
+  readonly streamDrainTimeoutMs?: number | undefined;
   /** Origins besides the server's own whose pages may send state-changing requests. */
   readonly allowedOrigins?: readonly string[] | undefined;
   /** Marks session cookies `Secure` on every request. */
@@ -1336,16 +1365,83 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     if (options.modules) registerModuleRoutes(app, context, options.modules);
   }
 
+  /**
+   * Answers without waiting for what is left of the request body: the connection is closed
+   * after the answer, so that no further request follows on it. Until the client has had a
+   * moment to read the answer, what it still sends is thrown away (a socket closed with
+   * unread data would be reset, and the client might never see the answer); then the request
+   * is destroyed. Nothing changes for a request that has no body to begin with.
+   */
+  const closeAfter = (request: FastifyRequest, reply: FastifyReply, announced = true) => {
+    if (!announced || reply.getHeader('connection') === 'close') return;
+    reply.header('connection', 'close');
+    reply.raw.once('finish', () => {
+      request.raw.resume();
+      setTimeout(() => request.raw.destroy(), LINGER_MS).unref();
+    });
+  };
+  /** Whether a request says it has a body. */
+  const hasBody = (request: FastifyRequest) => {
+    const length = Number(request.headers['content-length']);
+    return (
+      (Number.isFinite(length) && length > 0) || request.headers['transfer-encoding'] !== undefined
+    );
+  };
+
+  /**
+   * Hands a streamed answer to the reply. A client that takes no piece for the drain timeout
+   * is cut off. However the reply ends, the pieces are stopped, so that the extension's
+   * source is told and its place among the streams is free again.
+   */
+  const sendPieces = (reply: FastifyReply, pieces: AsyncIterable<Uint8Array>) => {
+    const iterator = pieces[Symbol.asyncIterator]();
+    const drainMs = options.streamDrainTimeoutMs ?? DEFAULT_STREAM_DRAIN_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const watched: AsyncIterableIterator<Uint8Array> = {
+      [Symbol.asyncIterator]: () => watched,
+      next: async () => {
+        clearTimeout(timer);
+        const next = await iterator.next();
+        // From here on it is up to the client to take the piece.
+        if (!next.done) {
+          timer = setTimeout(() => reply.raw.destroy(), drainMs);
+          timer.unref?.();
+        }
+        return next;
+      },
+      return: async () => {
+        clearTimeout(timer);
+        await iterator.return?.();
+        return { done: true, value: undefined };
+      },
+    };
+    const stream = Readable.from(watched, { objectMode: false });
+    reply.raw.once('close', () => {
+      clearTimeout(timer);
+      // Destroying the stream returns the iterator, if it is not over yet.
+      stream.destroy();
+    });
+    return reply.send(stream);
+  };
+
   /** Dispatches to the routes bundle extensions registered. They come and go at run time. */
   const dispatch = async (
     request: FastifyRequest<{ Params: { bundle: string } }>,
     reply: FastifyReply,
   ) => {
     const { bundle } = request.params;
+    // Whatever is refused before the route is known leaves its body unread.
+    const early = () => closeAfter(request, reply, hasBody(request));
     // Nothing about a bundle's routes is told to someone who is not signed in, and nothing
     // about a bundle to someone who holds none of its permissions: for them it is not there.
-    if (anonymous(request)) return unauthenticated(reply);
-    if (!can(request, bundlePermission(bundle, undefined))) return notFound(reply);
+    if (anonymous(request)) {
+      early();
+      return unauthenticated(reply);
+    }
+    if (!can(request, bundlePermission(bundle, undefined))) {
+      early();
+      return notFound(reply);
+    }
     // The path below `/b/<bundle>/api`, still percent-encoded: the first four parts of the
     // raw path are '', 'b', the bundle (however it was written) and 'api'.
     const rawPath = request.raw.url?.split('?')[0] ?? '';
@@ -1354,6 +1450,7 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     const method = request.method === 'HEAD' ? 'GET' : request.method;
     const match = running(bundle) && routes?.match(bundle, method, path);
     if (!match) {
+      early();
       // A path that exists under another method says which methods it takes.
       const others = (running(bundle) ? (routes?.methods(bundle, path) ?? []) : []).filter(
         (other) => can(request, other.permission),
@@ -1366,33 +1463,97 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
       return fail(reply, 405, 'bad_request', `${request.method} is not allowed for this path`);
     }
     const { route, params } = match;
-    if (!can(request, route.permission)) return deny(request, reply, route.permission);
+    if (!can(request, route.permission)) {
+      early();
+      return deny(request, reply, route.permission);
+    }
     const { principal } = identityOf(request);
+    // A streamed body has the route's own limit, and never more than the operator allows for
+    // any streamed body; every other body has the server's limit.
+    const serverLimit = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+    const streamCap = options.maxStreamBodyBytes ?? DEFAULT_MAX_STREAM_BODY_BYTES;
+    const routeLimit =
+      route.stream && route.maxBodyBytes !== undefined ? route.maxBodyBytes : serverLimit;
+    const limit = route.stream ? Math.min(routeLimit ?? streamCap, streamCap) : routeLimit;
+    const declared = Number(request.headers['content-length']);
+    const tooLarge = () => {
+      closeAfter(request, reply);
+      return fail(reply, 413, 'bad_request', 'The request body is too large');
+    };
+    if (limit !== null && Number.isFinite(declared) && declared > limit) return tooLarge();
+    const body = requestBody(request.raw, limit, options.uploadPace);
+    /** Answers an error; with the body not read to its end, on a connection that closes. */
+    const failed = (error: unknown) => {
+      if (body.overLimit) return tooLarge();
+      if (!body.complete) closeAfter(request, reply);
+      if (body.tooSlow) return fail(reply, 408, 'timeout', 'The request body arrived too slowly');
+      return failWith(reply, error);
+    };
+    // The client going away ends the call: the extension is told to stop.
+    const abort = new AbortController();
+    reply.raw.on('close', () => {
+      if (!reply.raw.writableFinished) abort.abort();
+    });
+    let buffered: Buffer | null = null;
+    if (!route.stream) {
+      try {
+        buffered = await readWhole(body.pieces);
+      } catch (error) {
+        return abort.signal.aborted ? reply : failed(error);
+      }
+    }
+    let response: RouteAnswer;
     try {
-      const response = await route.invoke({
-        method: method as HttpMethod,
-        path,
-        params,
-        query: flatten(request.query as Record<string, unknown>, new Set([TOKEN_PARAMETER])),
-        headers: flatten(request.headers, CREDENTIAL_HEADERS),
-        body: Buffer.isBuffer(request.body) ? request.body.toString('base64') : null,
-        sender: { principal: principal.id, kind: principal.kind ?? 'user', bundle },
-      });
+      response = await route.invoke(
+        {
+          method: method as HttpMethod,
+          path,
+          params,
+          query: flatten(request.query as Record<string, unknown>, new Set([TOKEN_PARAMETER])),
+          headers: flatten(request.headers, CREDENTIAL_HEADERS),
+          body: buffered === null ? null : buffered.toString('base64'),
+          sender: { principal: principal.id, kind: principal.kind ?? 'user', bundle },
+        },
+        { body: route.stream ? body.pieces : undefined, signal: abort.signal },
+      );
+    } catch (error) {
+      return abort.signal.aborted ? reply : failed(error);
+    }
+    const { pieces } = response;
+    try {
+      if (route.stream && !body.complete) closeAfter(request, reply);
       reply.code(response.status);
       for (const [name, value] of Object.entries(response.headers)) {
         // How the answer travels is the server's business, not the handler's.
         if (!CONNECTION_HEADERS.has(name.toLowerCase())) reply.header(name, value);
       }
+      if (pieces) {
+        // An answer that has no body by its nature: the pieces are not wanted.
+        if (request.method === 'HEAD' || response.status === 204 || response.status === 304) {
+          await pieces[Symbol.asyncIterator]().return?.();
+          return reply.send();
+        }
+        // Read only as fast as the client takes it; a client that goes away stops it.
+        return sendPieces(reply, pieces);
+      }
       return reply.send(response.body === null ? undefined : Buffer.from(response.body, 'base64'));
     } catch (error) {
-      return failWith(reply, error);
+      // Whatever failed before the reply owned the pieces: they are stopped here, so that the
+      // extension's source and its place among the streams are released.
+      await pieces?.[Symbol.asyncIterator]().return?.();
+      throw error;
     }
   };
   // HEAD comes with GET. OPTIONS is taken so that it is answered like any other method
-  // without a route: 405 with the methods the path does take.
+  // without a route: 405 with the methods the path does take. The body is not read before
+  // the route is known: one that streams takes it as it arrives.
   const methods = [...HTTP_METHODS, 'OPTIONS' as const];
-  app.route({ method: methods, url: '/b/:bundle/api', handler: dispatch });
-  app.route({ method: methods, url: '/b/:bundle/api/*', handler: dispatch });
+  await app.register(async (bundleApi) => {
+    bundleApi.removeAllContentTypeParsers();
+    bundleApi.addContentTypeParser('*', (_request, _payload, done) => done(null));
+    bundleApi.route({ method: methods, url: '/b/:bundle/api', handler: dispatch });
+    bundleApi.route({ method: methods, url: '/b/:bundle/api/*', handler: dispatch });
+  });
 
   app.get<{ Params: { bundle: string; area: string; '*': string } }>(
     '/b/:bundle/:area/*',

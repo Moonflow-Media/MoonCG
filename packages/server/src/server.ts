@@ -588,6 +588,7 @@ export async function startServer(
       assets,
       config: configs,
       maxBodyBytes: config.maxBodyBytes,
+      maxStreamBodyBytes: config.maxStreamBodyBytes,
       allowedOrigins: config.allowedOrigins,
       secureCookies: config.secureCookies,
       trustProxy: config.trustProxy,

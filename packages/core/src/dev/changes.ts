@@ -1,3 +1,5 @@
+import { fitsCssMessage } from '../protocol/protocol.js';
+
 /**
  * What a changed file of a bundle belongs to. `extension` is everything the bundle's extension
  * runs (`extension/` and `shared/`), `other` everything that calls for nothing.
@@ -79,6 +81,18 @@ export interface ReloadPlan {
    * only marks them, and a person decides when each is reloaded.
    */
   readonly graphics: 'reload' | 'mark-out-of-date' | 'none';
+  /**
+   * Stylesheets the panel and dialog pages load again in place, without a reload of the
+   * page. Present only when nothing of `dashboard/` changed but stylesheets.
+   */
+  readonly panelStyles?: readonly string[];
+  /** The same for graphic pages, in dev mode only, instead of `graphics: 'reload'`. */
+  readonly graphicStyles?: readonly string[];
+}
+
+/** Whether a file is a stylesheet, which a page can load again without reloading itself. */
+export function isStylesheet(path: string): boolean {
+  return /\.css$/i.test(path);
 }
 
 /** The plan for a set of areas. See `planReload`. */
@@ -109,13 +123,33 @@ export function planForAreas(areas: Iterable<ChangeArea>, options: ReloadOptions
  * reload; whoever watches the disk only collects paths and carries the plan out.
  */
 export function planReload(paths: readonly string[], options: ReloadOptions): ReloadPlan {
-  return planForAreas(
-    paths.map((path) => changeArea(path, options.schemaFiles)),
-    options,
-  );
+  const normalized = paths.map((path) => path.split('\\').join('/'));
+  const areas = normalized.map((path) => changeArea(path, options.schemaFiles));
+  const plan = planForAreas(areas, options);
+  /**
+   * The changed files of an area when every one of them is a stylesheet and they fit into one
+   * `css` message, else `undefined`: the pages are reloaded instead.
+   */
+  const onlyStyles = (area: ChangeArea) => {
+    const files = normalized.filter((_path, index) => areas[index] === area);
+    return files.every(isStylesheet) && fitsCssMessage(files) ? files : undefined;
+  };
+  const panelStyles = plan.panels ? onlyStyles('dashboard') : undefined;
+  const graphicStyles = plan.graphics === 'reload' ? onlyStyles('graphics') : undefined;
+  return {
+    ...plan,
+    ...(panelStyles ? { panels: false, panelStyles } : {}),
+    ...(graphicStyles ? { graphics: 'none', graphicStyles } : {}),
+  };
 }
 
 /** Whether a plan asks for nothing. */
 export function isIdlePlan(plan: ReloadPlan): boolean {
-  return plan.bundle === 'none' && !plan.panels && plan.graphics === 'none';
+  return (
+    plan.bundle === 'none' &&
+    !plan.panels &&
+    plan.graphics === 'none' &&
+    !plan.panelStyles?.length &&
+    !plan.graphicStyles?.length
+  );
 }

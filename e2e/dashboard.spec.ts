@@ -979,7 +979,14 @@ test('live reload: a changed panel reloads, a graphic is only marked, pages outl
   // --- A panel file changes on disk: the panel in the dashboard loads itself again.
   await nav(admin, 'Show').click();
   await expect(control(admin).locator('#home')).toHaveText('Home +1');
-  await writeFile(file('dashboard/control.html'), controlHtml.replace('Home +1', 'Home plus one'));
+  // The new version links a stylesheet of its own, for the swap below.
+  await writeFile(file('dashboard/swap.css'), 'body { outline: 3px solid rgb(255, 0, 0); }\n');
+  await writeFile(
+    file('dashboard/control.html'),
+    controlHtml
+      .replace('Home +1', 'Home plus one')
+      .replace('</head>', '<link rel="stylesheet" href="swap.css" /></head>'),
+  );
   await expect(control(admin).locator('#home')).toHaveText('Home plus one');
 
   // --- Two pages on their own, as in OBS or a second window: the panel and the graphic.
@@ -1009,6 +1016,14 @@ test('live reload: a changed panel reloads, a graphic is only marked, pages outl
   }).toPass({ timeout: 15_000 });
   expect(await kept(panel)).toBe(true);
   expect(await kept(graphic)).toBe(true);
+
+  // --- Only a stylesheet changes: the panel loads it again in place, without a reload.
+  const outline = () => panel.evaluate(() => getComputedStyle(document.body).outlineColor);
+  await expect.poll(outline).toBe('rgb(255, 0, 0)');
+  await writeFile(file('dashboard/swap.css'), 'body { outline: 3px solid rgb(0, 128, 0); }\n');
+  await expect.poll(outline, { timeout: 10_000 }).toBe('rgb(0, 128, 0)');
+  expect(await kept(panel)).toBe(true);
+  await expect(panel.locator('link[rel="stylesheet"]')).toHaveAttribute('href', /mooncg-css=/);
 
   // --- A graphic file changes: outside dev mode nothing reloads what may be on air. The
   // graphics page marks the page as out of date, and reloads it when asked to.

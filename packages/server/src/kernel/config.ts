@@ -55,6 +55,11 @@ export interface ServerConfig {
   readonly extensionHeartbeatTimeoutMs: number;
   /** The largest request body a bundle's HTTP route accepts, in bytes. */
   readonly maxBodyBytes: number;
+  /**
+   * The largest streamed request body any bundle route accepts, in bytes, whatever the route
+   * asks for, also a route without a limit of its own.
+   */
+  readonly maxStreamBodyBytes: number;
   /** The largest file that can be uploaded as an asset, in bytes. */
   readonly assetMaxFileBytes: number;
   /** How many bytes the files of one asset category of one bundle may take together. */
@@ -153,6 +158,7 @@ const FLAGS = {
   'extension-start-timeout-ms': { type: 'string' },
   'extension-heartbeat-timeout-ms': { type: 'string' },
   'max-body-bytes': { type: 'string' },
+  'max-stream-body-bytes': { type: 'string' },
   'asset-max-file-bytes': { type: 'string' },
   'asset-quota-bytes': { type: 'string' },
   'asset-max-files': { type: 'string' },
@@ -223,6 +229,7 @@ interface FileValues {
   readonly registryAllowPrivate?: readonly string[];
   readonly registryAllowPrivateHttp?: boolean;
   readonly watch?: boolean;
+  readonly maxStreamBodyBytes?: string;
 }
 
 /** Checks the content of a configuration file. Every complaint names the file. */
@@ -245,6 +252,7 @@ function fileValues(file: ConfigFile | undefined): FileValues {
     'registryAllowPrivate',
     'registryAllowPrivateHttp',
     'watch',
+    'maxStreamBodyBytes',
   ];
   for (const key of Object.keys(values)) {
     if (key === 'dev') {
@@ -262,7 +270,13 @@ function fileValues(file: ConfigFile | undefined): FileValues {
     return resolve(file.dir, value);
   };
   const { port, host, allowedOrigins, watch, publicUrl, registryIndexes } = values;
-  const { registryAllowPrivate, registryAllowPrivateHttp } = values;
+  const { registryAllowPrivate, registryAllowPrivateHttp, maxStreamBodyBytes } = values;
+  if (
+    maxStreamBodyBytes !== undefined &&
+    (!Number.isSafeInteger(maxStreamBodyBytes) || (maxStreamBodyBytes as number) < 1)
+  ) {
+    throw wrong('"maxStreamBodyBytes" must be a whole number of bytes above 0');
+  }
   if (
     registryAllowPrivate !== undefined &&
     (!Array.isArray(registryAllowPrivate) ||
@@ -328,6 +342,7 @@ function fileValues(file: ConfigFile | undefined): FileValues {
       : { registryAllowPrivate: registryAllowPrivate as string[] }),
     ...(registryAllowPrivateHttp === undefined ? {} : { registryAllowPrivateHttp }),
     ...(watch === undefined ? {} : { watch }),
+    ...(maxStreamBodyBytes === undefined ? {} : { maxStreamBodyBytes: String(maxStreamBodyBytes) }),
   };
 }
 
@@ -335,13 +350,13 @@ function fileValues(file: ConfigFile | undefined): FileValues {
  * Builds the configuration from four places, the earlier one winning: command line flags,
  * environment variables, the configuration file (`port`, `host`, `dataDir`, `bundlesDir`,
  * `modulesDir`, `publicUrl`, `allowedOrigins`, `registryIndexes`, `registryAllowPrivate`,
- * `registryAllowPrivateHttp`, `watch`; see `readConfigFile`) and the defaults. `--dev` turns dev mode
+ * `registryAllowPrivateHttp`, `watch`, `maxStreamBodyBytes`; see `readConfigFile`) and the defaults. `--dev` turns dev mode
  * on and exists as a flag only; `--watch` (`MOONCG_WATCH`) turns on the watcher alone, and
  * `--no-watch` (`MOONCG_WATCH=0`) turns it off whatever the later places say.
  *
  * Each flag (`--port`, `--host`, `--bundles-dir`, `--data-dir`, `--modules-dir`, `--public-url`,
  * `--extension-memory-mb`, `--extension-start-timeout-ms`, `--extension-heartbeat-timeout-ms`,
- * `--max-body-bytes`, `--asset-max-file-bytes`, `--asset-quota-bytes`, `--asset-max-files`,
+ * `--max-body-bytes`, `--max-stream-body-bytes`, `--asset-max-file-bytes`, `--asset-quota-bytes`, `--asset-max-files`,
  * `--bundle-max-archive-bytes`, `--bundle-max-unpacked-bytes`, `--bundle-max-files`,
  * `--bundle-backups-kept`, `--bundle-install-timeout-ms`, `--bundle-npm-registry`, `--registry-refresh-ms`,
  * repeatable `--allowed-origin`, `--registry-index` (`MOONCG_REGISTRY_INDEXES`, a
@@ -421,6 +436,13 @@ export function loadConfig({ argv, env, cwd, file }: ConfigSources): ServerConfi
     maxBodyBytes: parsePositive(
       'body size',
       values['max-body-bytes'] ?? env.MOONCG_MAX_BODY_BYTES ?? String(1024 * 1024),
+    ),
+    maxStreamBodyBytes: parsePositive(
+      'streamed body size',
+      values['max-stream-body-bytes'] ??
+        env.MOONCG_MAX_STREAM_BODY_BYTES ??
+        fromFile.maxStreamBodyBytes ??
+        String(1024 ** 3),
     ),
     assetMaxFileBytes: parsePositive(
       'asset file size',

@@ -157,6 +157,31 @@ describe('createBundleContext', () => {
     expect(JSON.parse(text(response.body) as string)).toEqual({ text: '{"é":1}', json: { é: 1 } });
   });
 
+  it('fails text() and json() alike on a route that streams, as a mistake of the handler', async () => {
+    const { context, routes, lines } = setup();
+    await context.http.post('/json', (request) => ({ body: request.json() as never }), {
+      stream: true,
+    });
+    await context.http.post('/text', (request) => ({ body: request.text() }), { stream: true });
+    for (const path of ['/json', '/text']) {
+      const match = routes.match('demo', 'POST', path);
+      const answer = match?.route.invoke(
+        {
+          method: 'POST',
+          path,
+          params: {},
+          query: {},
+          headers: {},
+          sender: { principal: 'tester', kind: 'user', bundle: 'demo' },
+          body: null,
+        },
+        { body: (async function* () {})() },
+      );
+      await expect(answer).rejects.toMatchObject({ code: 'internal' });
+    }
+    expect(lines.filter((line) => line.includes('request.stream'))).toHaveLength(2);
+  });
+
   it('answers text, bytes and nothing at all with fitting content types', async () => {
     const { context, call } = setup();
     await context.http.get('/text', () => ({ body: 'héllo' }));
@@ -253,6 +278,7 @@ describe('createBundleContext', () => {
       handlers: 0,
       routes: 0,
       calls: 0,
+      streams: 0,
     });
   });
 });

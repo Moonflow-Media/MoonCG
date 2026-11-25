@@ -10,6 +10,7 @@ export { grantsCover, MoonCGError, PROTOCOL_VERSION } from '@mooncg/core';
 export {
   bundleFromPath,
   type ClientOptions,
+  type ClientReplicantOptions,
   type ConnectionStatus,
   createClient,
   graphicFromPath,
@@ -20,6 +21,7 @@ export {
   type ReplicantMap,
   type RequestOptions,
   type SocketLike,
+  swapStylesheets,
 } from './client.js';
 export {
   createDialogs,

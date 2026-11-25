@@ -1,9 +1,12 @@
 import {
+  bundlePermission,
   type ChangeArea,
   changeArea,
   isIgnoredPath,
   type Manifest,
   planForAreas,
+  planReload,
+  type Stylesheet,
   type Timers,
 } from '@mooncg/core';
 import type { BundleManager, BundleWatch } from '../bundles/manager.js';
@@ -40,7 +43,7 @@ export interface BundleWatchersOptions {
     BundleManager,
     'get' | 'reloadIfValid' | 'restartExtension' | 'enable' | 'notePending'
   >;
-  readonly pages: Pick<ConnectedPages, 'reload'>;
+  readonly pages: Pick<ConnectedPages, 'reload' | 'restyle'>;
   readonly instances: Pick<GraphicInstances, 'markOutOfDate'>;
   readonly logger: Logger;
   /** Whether the server runs in dev mode. Only then is a graphic reloaded by a change. */
@@ -65,6 +68,22 @@ interface Watched {
 }
 
 /** The schema files a manifest names, relative to the bundle. */
+/**
+ * The changed stylesheets with the permission the server checks before it sends each: that of
+ * the page entry a file is, or any permission of the bundle, as `/b/<bundle>/<area>/*` does.
+ */
+function stylesheets(
+  bundle: string,
+  manifest: Manifest | undefined,
+  files: readonly string[],
+): Stylesheet[] {
+  const entries = manifest ? [...manifest.panels, ...manifest.dialogs, ...manifest.graphics] : [];
+  return files.map((file) => ({
+    file,
+    permission: bundlePermission(bundle, entries.find((entry) => entry.file === file)?.requires),
+  }));
+}
+
 function schemaFiles(manifest: Manifest | undefined): string[] {
   if (!manifest) return [];
   const replicants = Object.values(manifest.replicants).flatMap(({ schema }) => schema ?? []);
@@ -192,7 +211,7 @@ export class BundleWatchers implements BundleWatch {
       this.#wait(name, watched, areas, what);
       return;
     }
-    this.#start(name, areas, what);
+    this.#start(name, areas, what, paths);
   }
 
   /** Notes changes that are not acted on while the installation is on air. */
@@ -204,17 +223,31 @@ export class BundleWatchers implements BundleWatch {
       .info(`${what}; MoonCG is on air, so nothing is reloaded until On Air is switched off`);
   }
 
-  #start(name: string, areas: readonly ChangeArea[], what: string): void {
-    const work = this.#carryOut(name, areas, what).finally(() => this.#working.delete(work));
+  /**
+   * `paths` are the files that changed, when they are known. Changes that waited for On Air
+   * to end are known by their areas only, and then reload the pages even for a stylesheet.
+   */
+  #start(name: string, areas: readonly ChangeArea[], what: string, paths?: string[]): void {
+    const work = this.#carryOut(name, areas, what, paths).finally(() => this.#working.delete(work));
     this.#working.add(work);
   }
 
-  async #carryOut(name: string, areas: readonly ChangeArea[], what: string): Promise<void> {
+  async #carryOut(
+    name: string,
+    areas: readonly ChangeArea[],
+    what: string,
+    paths: string[] | undefined,
+  ): Promise<void> {
     const { manager, pages, instances, dev } = this.#options;
     const log = this.#options.logger.child(`bundle:${name}`);
     const record = manager.get(name);
     if (!record) return;
-    const plan = planForAreas(areas, { dev, devUrl: record.manifest?.dev !== undefined });
+    const options = {
+      dev,
+      devUrl: record.manifest?.dev !== undefined,
+      schemaFiles: schemaFiles(record.manifest),
+    };
+    const plan = paths ? planReload(paths, options) : planForAreas(areas, options);
     try {
       if (plan.bundle === 'reload') {
         log.info(`${what}: reloading the bundle`);
@@ -240,6 +273,26 @@ export class BundleWatchers implements BundleWatch {
     if (plan.panels) {
       const told = pages.reload(name, 'panels');
       log.info(`${what}: reloaded ${told} panel ${told === 1 ? 'page' : 'pages'}`);
+    }
+    if (plan.panelStyles?.length) {
+      const told = pages.restyle(
+        name,
+        'panels',
+        stylesheets(name, record.manifest, plan.panelStyles),
+      );
+      log.info(
+        `${what}: swapped the stylesheets of ${told} panel ${told === 1 ? 'page' : 'pages'}`,
+      );
+    }
+    if (plan.graphicStyles?.length) {
+      const told = pages.restyle(
+        name,
+        'graphics',
+        stylesheets(name, record.manifest, plan.graphicStyles),
+      );
+      log.info(
+        `${what}: swapped the stylesheets of ${told} graphic ${told === 1 ? 'page' : 'pages'}`,
+      );
     }
     if (plan.graphics === 'reload') {
       const told = pages.reload(name, 'graphics');

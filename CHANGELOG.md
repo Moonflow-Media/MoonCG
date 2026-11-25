@@ -14,6 +14,62 @@ initial commit of the repository.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-25
+
+Wire protocol version 7.
+
+### Added
+
+- Optimistic replicant updates: `mc.replicant(name, { optimistic: true })` shows the client's
+  own `set` and `update` at once. Writes wait in order and go to the server one at a time; one
+  the server refuses is taken back and the writes after it are applied again on top of the
+  server's value (subscribers see the result once, never the value without them); an `update`
+  runs its recipe again after a `conflict` as before; a write whose answer is lost with the
+  connection rejects with `disconnected` and is shown as the server has it once the client is
+  back. A `set` that follows a `set` still waiting to be sent replaces it (both promises
+  settle with its answer), and at most 1000 writes wait per replicant; more reject with
+  `unavailable`. Replicants without the option behave as before. Works with the Vue and React
+  hooks and in extensions. See the README.
+- CSS hot swap: when only `.css` files of a bundle's `dashboard/` (or, in dev mode,
+  `graphics/`) changed, the watcher sends the new server message `css` with the files instead
+  of `reload`, and the SDK loads the matching `<link rel="stylesheet">` again with a
+  cache-busting parameter; a page that links none of them, or pulls one in with `@import`,
+  reloads as before. Each page is named only the stylesheets it may fetch; more than 100
+  changed stylesheets, or a name the message cannot carry, reload the pages.
+  `createClient({ restyle })` and `swapStylesheets()` for pages that want to do it themselves.
+  Graphics outside dev mode are still only marked out of date. See `docs/development.md`.
+- Streamed bodies for extension HTTP routes: `ctx.http.post(path, handler, { stream: true,
+  maxBodyBytes })` hands the handler `request.stream` (a `ReadableStream`) while the upload
+  arrives, and any route may answer with a `ReadableStream` or async iterable body. Pieces of
+  at most 64 KiB travel in the new messages `http.data`, `http.end`, `http.pull`,
+  `http.cancel` and `http.abort`, with at most four on their way per direction, so the server
+  reads an upload only as fast as the handler does and the extension produces a download only
+  as fast as the client takes it. The server's body limit still holds unless the route sets
+  its own (`null` for none); a client that goes away stops the extension's side, and an
+  extension that crashes cuts the download off. At most 16 calls per extension stream a body
+  at a time (more answer 503), and they do not count against its 100 waiting requests. A
+  client that sends less than 16 KiB of its upload in 10 seconds of waiting gets 408; one that
+  takes nothing of a streamed answer for 30 seconds is cut off. A request answered before its
+  body was read (an error, 401, 403, 404, 405, 408, 413) closes its connection. Routes that do
+  not stream work as before; the server no longer reads their body before it knows the route.
+  The resource ledger counts `streams`: the HTTP calls whose request or answer streams. See
+  `docs/extensions.md`.
+- `--max-stream-body-bytes` (`MOONCG_MAX_STREAM_BODY_BYTES`, `maxStreamBodyBytes` in the
+  configuration file), 1 GiB by default: the largest streamed request body any bundle route
+  accepts, whatever the route allows, also with `maxBodyBytes: null`.
+
+### Changed
+
+- **Breaking:** wire protocol version 7 for the `css` message and the messages of streamed
+  HTTP bodies. A page or extension that brings its own copy of `@mooncg/sdk` must rebuild with
+  this version: the server refuses the `hello` of protocol 6. Pages that load
+  `/sdk/mooncg.js` need nothing.
+- An HTTP route of a bundle that does not stream gets `body: null` (`request.body` is
+  `undefined`) for an empty body, also one sent as `Transfer-Encoding: chunked`. Before, such a
+  body could arrive as an empty one.
+- Header values of a route's answer must be Latin-1 without control characters, what Node
+  can send; an answer with others fails with 500 instead of breaking while it is sent.
+
 ## [0.12.0] - 2026-11-25
 
 ### Added

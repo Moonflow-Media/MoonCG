@@ -62,6 +62,24 @@ Open points closed after milestone 9 (in `[Unreleased]` of the changelog):
   `https://` on this machine.
 - Module hooks `registry.registerSource` and `dashboard.registerPage`.
 
+## After 0.12.0 (released in 0.13.0)
+
+Deferred features taken up after 0.12.0 (in `[Unreleased]` of the changelog, wire protocol
+version 7):
+
+- Optimistic replicant updates: `mc.replicant(name, { optimistic: true })` shows the client's
+  writes at once, keeps them in order, takes back what the server refuses and applies the
+  remaining writes again on top of the server's value. Without the option nothing changed.
+- Streamed request and response bodies for extension HTTP routes (`{ stream: true }`,
+  `request.stream`, a `ReadableStream` or async iterable as the answer), with backpressure,
+  the server's body limit unless the route sets its own, an operator cap for every streamed
+  body (`--max-stream-body-bytes`), at most 16 streaming calls per extension, a pace for
+  uploads (408) and a drain timeout for answers, and cancellation when the client goes away
+  or the extension stops.
+- CSS hot swap: a change to nothing but stylesheets of `dashboard/` (and, in dev mode,
+  `graphics/`) loads them again in the open pages without a reload. Graphics outside dev mode
+  are still only marked out of date.
+
 ## Not possible to verify here
 
 - Signing in with real Twitch, Discord or OpenID Connect providers; only a mock provider is tested.
@@ -82,15 +100,15 @@ Open points closed after milestone 9 (in `[Unreleased]` of the changelog):
 
 Planned, but not part of milestones 0–9:
 
-- Optimistic replicant updates on the client.
-- Streaming request and response bodies for extension HTTP routes.
-- CSS hot swap without a page reload.
 - Sound cues.
 - Storage adapters other than SQLite, and `storage.registerAdapter` for modules (see
   [modules.md](modules.md#what-is-not-there-yet) for why it is left out).
-- Sandboxing bundles; installed bundles are trusted code.
+- Sandboxing bundles. It conflicts with the trust model: installed bundles are trusted code
+  that runs with the rights of the server, and a worker thread is isolation against
+  accidents, not a sandbox.
 - Translations of the dashboard.
 - Signed registry indexes and archives.
 - MoonCG publish to npm.
 - A public registry with a catalog of bundles and modules, and a way to publish them.
 - Detailed documentation of the MoonCG like https://www.nodecg.dev/ just better.
+- Standalone Registry Server, with its own configuration, database and catalog page, and a way to publish bundles and modules to it.

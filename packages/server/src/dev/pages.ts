@@ -1,4 +1,4 @@
-import type { BundlePages, ConnectedPage } from '@mooncg/core';
+import type { BundlePages, ConnectedPage, Stylesheet } from '@mooncg/core';
 
 /**
  * The connected pages of every bundle: panels, dialogs and graphics. A page is listed when
@@ -35,6 +35,25 @@ export class ConnectedPages implements BundlePages {
         told++;
       } catch {
         // A socket that is closing cannot be told; its page is on its way out anyway.
+      }
+    }
+    return told;
+  }
+
+  /**
+   * Tells the panel and dialog pages of a bundle, or its graphic pages, that these
+   * stylesheets changed, so that they load them again in place. Each page is named only the
+   * ones its principal may fetch. Answers how many pages were told.
+   */
+  restyle(bundle: string, kind: 'panels' | 'graphics', styles: readonly Stylesheet[]): number {
+    let told = 0;
+    for (const page of [...(this.#pages.get(bundle) ?? [])]) {
+      if (page.graphic !== (kind === 'graphics')) continue;
+      try {
+        page.restyle(styles);
+        told++;
+      } catch {
+        // As above: a closing socket's page is on its way out anyway.
       }
     }
     return told;

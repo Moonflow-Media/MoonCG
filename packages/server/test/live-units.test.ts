@@ -108,9 +108,25 @@ describe('ConnectedPages', () => {
     const pages = new ConnectedPages();
     const reloaded: string[] = [];
     const join = (bundle: string, name: string, graphic: boolean) =>
-      pages.join(bundle, { graphic, reload: () => void reloaded.push(name) });
+      pages.join(bundle, {
+        graphic,
+        reload: () => void reloaded.push(name),
+        restyle: (styles) =>
+          void reloaded.push(`${name} ${styles.map((style) => style.file).join(' ')}`),
+      });
     return { pages, reloaded, join };
   }
+
+  it('tells the panels of one bundle which stylesheets changed', () => {
+    const { pages, reloaded, join } = setup();
+    join('board', 'panel', false);
+    join('board', 'overlay', true);
+    join('other', 'other panel', false);
+    const style = (file: string) => ({ file, permission: 'bundle:board:?' });
+    expect(pages.restyle('board', 'panels', [style('dashboard/a.css')])).toBe(1);
+    expect(pages.restyle('board', 'graphics', [style('graphics/b.css')])).toBe(1);
+    expect(reloaded).toEqual(['panel dashboard/a.css', 'overlay graphics/b.css']);
+  });
 
   it('reloads the panels of one bundle and nothing else', () => {
     const { pages, reloaded, join } = setup();
@@ -150,6 +166,9 @@ describe('ConnectedPages', () => {
     pages.join('board', {
       graphic: false,
       reload: () => {
+        throw new Error('socket is gone');
+      },
+      restyle: () => {
         throw new Error('socket is gone');
       },
     });

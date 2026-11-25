@@ -113,6 +113,13 @@ function setup(options: SetupOptions = {}) {
         calls.push(`pages ${kind} ${bundle}`);
         return 1;
       },
+      restyle: (bundle, kind, styles) => {
+        const files = styles.map(({ file, permission }) =>
+          permission === `bundle:${bundle}:?` ? file : `${file}(${permission})`,
+        );
+        calls.push(`styles ${kind} ${bundle} ${files.join(' ')}`);
+        return 1;
+      },
     },
     instances: {
       markOutOfDate: (bundle) => {
@@ -194,6 +201,45 @@ describe('BundleWatchers', () => {
     change('board', 'graphics/overlay.html');
     await settle();
     expect(calls).toEqual(['pages graphics board']);
+  });
+
+  it('swaps the stylesheets of panels when only CSS changed', async () => {
+    const { change, settle, calls, lines } = setup({ dev: false });
+    change('board', 'dashboard/control.css', 'dashboard\\theme.css');
+    await settle();
+    expect(calls).toEqual(['styles panels board dashboard/control.css dashboard/theme.css']);
+    expect(lines.join('\n')).toContain('stylesheets');
+  });
+
+  it('names the permission a stylesheet that is a page entry of the manifest takes', async () => {
+    const { change, settle, calls } = setup({
+      dev: false,
+      manifests: {
+        styled: manifest('styled', {
+          panels: [{ id: 'raw', title: 'Raw', file: 'dashboard/raw.css', requires: 'admin' }],
+          permissions: { admin: 'Admin' },
+        }),
+      },
+    });
+    change('styled', 'dashboard/raw.css', 'dashboard/theme.css');
+    await settle();
+    expect(calls).toEqual([
+      'styles panels styled dashboard/raw.css(bundle:styled:admin) dashboard/theme.css',
+    ]);
+  });
+
+  it('swaps the stylesheets of graphics when only CSS changed, in dev mode', async () => {
+    const { change, settle, calls } = setup({ dev: true });
+    change('board', 'graphics/overlay.css');
+    await settle();
+    expect(calls).toEqual(['styles graphics board graphics/overlay.css']);
+  });
+
+  it('marks graphics out of date for CSS outside dev mode', async () => {
+    const { change, settle, calls } = setup({ dev: false });
+    change('board', 'graphics/overlay.css');
+    await settle();
+    expect(calls).toEqual(['out-of-date board']);
   });
 
   it('only marks graphics as out of date outside dev mode', async () => {

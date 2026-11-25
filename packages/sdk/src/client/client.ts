@@ -12,17 +12,25 @@ import {
   isSafeRelativePath,
   type Json,
   jsonProblem,
+  MAX_PENDING_WRITES,
+  MAX_UPDATE_RETRIES,
   MoonCGError,
+  opForWrite,
+  type PendingWrite,
   PROTOCOL_VERSION,
   qualifyReplicantName,
+  type Recipe,
   type ReplicantHandle,
   type ReplicantMeta,
   type ReplicantOp,
+  type RouteAnswer,
+  rebaseWrites,
   type Sender,
   type ServerMessage,
   updateWithRetry,
 } from '@mooncg/core';
 import { createDialogs, type Dialogs } from './dialogs.js';
+import { IncomingBodies, OutgoingBodies } from './http-streams.js';
 
 /** The part of the WebSocket API the client uses. Browser and Node 22 `WebSocket` both fit. */
 export interface SocketLike {
@@ -77,6 +85,13 @@ export interface ClientOptions {
    * reloading the page.
    */
   reloadPage?: () => void;
+  /**
+   * What the page does when stylesheets of its bundle changed while the server watches its
+   * files (`files` inside the bundle, such as `dashboard/control.css`). By default the
+   * stylesheet links of the page that point at them are loaded again in place, and a page
+   * that links none of them reloads itself with `reloadPage`.
+   */
+  restyle?: (files: readonly string[]) => void;
 }
 
 /**
@@ -85,6 +100,18 @@ export interface ClientOptions {
  */
 // biome-ignore lint/suspicious/noEmptyInterface: filled in by declaration merging
 export interface ReplicantMap {}
+
+/** How this client keeps its copy of a replicant. */
+export interface ClientReplicantOptions {
+  /**
+   * Shows writes at once instead of after the server confirmed them. Writes wait in order and
+   * are sent one at a time; a write the server refuses is taken back, and the writes after it
+   * are applied again on top of the server's value. The option holds for the replicant in this
+   * client from the first time it is asked for: every handle of the name writes the same way.
+   * See docs/bundles.md.
+   */
+  readonly optimistic?: boolean;
+}
 
 /** What a message listener or request handler is told besides the data. */
 export interface MessageMeta {
@@ -104,8 +131,11 @@ export interface Messaging {
    * `name` is a replicant of this client's bundle, or `other-bundle:name`. A name listed in
    * `ReplicantMap` gets its type from there; any other name takes the type as `T`.
    */
-  replicant<K extends keyof ReplicantMap>(name: K): ReplicantHandle<ReplicantMap[K]>;
-  replicant<T = unknown>(name: string): ReplicantHandle<T>;
+  replicant<K extends keyof ReplicantMap>(
+    name: K,
+    options?: ClientReplicantOptions,
+  ): ReplicantHandle<ReplicantMap[K]>;
+  replicant<T = unknown>(name: string, options?: ClientReplicantOptions): ReplicantHandle<T>;
   /** Sends a message to everyone listening to it. Resolves when the server took it. */
   send(name: string, data?: Json): Promise<void>;
   /** Listens to a message. Resolves, once the server agreed, with the function that stops it. */
@@ -147,7 +177,22 @@ export interface MoonCGClient extends Messaging {
 }
 
 export type RequestHandler = (data: Json, meta: MessageMeta) => Json | Promise<Json>;
-export type RouteHandler = (request: HttpRequestData) => Promise<HttpResponseData>;
+/**
+ * Handles a call of an HTTP route. `body` is the request body as a stream, for a route
+ * registered with `stream`. An answer with `stream` sends its body piece by piece.
+ */
+export type RouteHandler = (
+  request: HttpRequestData,
+  body: ReadableStream<Uint8Array> | undefined,
+) => Promise<HttpResponseData | RouteAnswer>;
+
+/** How an HTTP route takes its request body. */
+export interface RouteStreaming {
+  /** The request body arrives as a stream instead of whole. */
+  readonly stream?: boolean;
+  /** How many bytes a streamed body may have, `null` for no limit. The server's by default. */
+  readonly maxBytes?: number | null;
+}
 
 /**
  * A client with the parts only a bundle's extension may use. The server refuses them to
@@ -162,6 +207,7 @@ export interface Connection extends MoonCGClient {
     pattern: string,
     handler: RouteHandler,
     permission?: string,
+    streaming?: RouteStreaming,
   ): Promise<void>;
   /**
    * Asks the server whether a principal holds a permission of the own bundle, named as in
@@ -194,6 +240,79 @@ export function graphicFromPath(pathname: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** The query parameter that makes the browser load a changed stylesheet again. */
+const CSS_PARAMETER = 'mooncg-css';
+
+/**
+ * Loads the stylesheets of a bundle again whose files changed, by giving every
+ * `<link rel="stylesheet">` that points at one of them a new cache-busting query parameter.
+ * Answers `false`, and changes nothing, when one of the files is linked nowhere on the page,
+ * or is pulled in with `@import` by a stylesheet of the page that can be read: an imported
+ * file keeps its address, so only a reload of the page is sure to show it.
+ */
+export function swapStylesheets(
+  bundle: string,
+  files: readonly string[],
+  stamp: number = Date.now(),
+): boolean {
+  if (typeof document === 'undefined') return false;
+  const wanted = new Set(files.map((file) => `/b/${bundle}/${file}`));
+  /** The path of a same-origin address that is one of the changed files, else `undefined`. */
+  const changed = (href: string, base: string) => {
+    try {
+      const url = new URL(href, base);
+      const path = decodeURIComponent(url.pathname);
+      return url.origin === location.origin && wanted.has(path) ? { url, path } : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  if (importsAny(document.styleSheets, changed)) return false;
+  const matches: { link: HTMLLinkElement; url: URL }[] = [];
+  const found = new Set<string>();
+  for (const link of document.querySelectorAll<HTMLLinkElement>('link[rel~="stylesheet"][href]')) {
+    const match = changed(link.href, document.baseURI);
+    if (!match) continue;
+    matches.push({ link, url: match.url });
+    found.add(match.path);
+  }
+  if (found.size < wanted.size) return false;
+  for (const { link, url } of matches) {
+    url.searchParams.set(CSS_PARAMETER, String(stamp));
+    link.href = url.href;
+  }
+  return true;
+}
+
+/**
+ * Whether one of the stylesheets, or one they import, imports a file `changed` accepts. A
+ * stylesheet of another origin cannot be read and is skipped; it would not import one of the
+ * bundle's files without that being visible elsewhere either. Imports deeper than a few levels
+ * are not followed.
+ */
+function importsAny(
+  sheets: Iterable<CSSStyleSheet>,
+  changed: (href: string, base: string) => unknown,
+  depth = 0,
+): boolean {
+  if (depth > 4) return false;
+  for (const sheet of sheets) {
+    let rules: CSSRuleList;
+    try {
+      rules = sheet.cssRules;
+    } catch {
+      continue;
+    }
+    for (const rule of Array.from(rules) as Partial<CSSImportRule>[]) {
+      // An `@import` rule, told by its shape: it has an address and the sheet it brings in.
+      if (typeof rule.href !== 'string' || !('styleSheet' in rule)) continue;
+      if (changed(rule.href, sheet.href ?? document.baseURI)) return true;
+      if (rule.styleSheet && importsAny([rule.styleSheet], changed, depth + 1)) return true;
+    }
+  }
+  return false;
 }
 
 const DUPLICATE_NOTICE_ID = 'mooncg-duplicate';
@@ -296,7 +415,40 @@ interface ReplicantState {
   readonly errorListeners: Set<() => void>;
   /** The local copy cannot be trusted; only a full snapshot puts it right. */
   resync: boolean;
+  /** Asked the server for the replicant and waits for the answer. */
+  subscribing: boolean;
+  /** Writes are shown before the server confirms them. */
+  optimistic: boolean;
+  /**
+   * Optimistic only: the value the server confirmed, at `rev`. `value` is this value with
+   * `writes` applied on top.
+   */
+  server: Json | undefined;
+  /** Optimistic only: the writes the server has not confirmed yet, oldest first. */
+  readonly writes: QueuedWrite[];
+  /**
+   * Optimistic only: the request id of the first write while the server has it and has not
+   * answered, `UNCERTAIN` when that answer was lost with the connection, `undefined` when no
+   * write is out.
+   */
+  inFlight: number | undefined;
 }
+
+interface QueuedWrite {
+  /** Replaced by a later `set` while it waits; see `enqueue`. */
+  write: PendingWrite;
+  readonly done: Deferred;
+  /** How often the server refused it with `conflict` so far. */
+  conflicts: number;
+}
+
+/** `inFlight` of a write whose answer was lost: it may or may not have taken effect. */
+const UNCERTAIN = 0;
+
+const asError = (error: unknown): MoonCGError =>
+  error instanceof MoonCGError
+    ? error
+    : new MoonCGError('bad_request', error instanceof Error ? error.message : String(error));
 
 interface TopicState {
   readonly listeners: Set<MessageListener>;
@@ -349,6 +501,11 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
     options.onEnded ??
     ((reason: GraphicEndReason) => showNotice(ENDED_NOTICE_ID, ENDED_TEXT[reason]));
   const reloadPage = options.reloadPage ?? (() => page?.reload());
+  const restyle =
+    options.restyle ??
+    ((files: readonly string[]) => {
+      if (!swapStylesheets(bundle, files)) reloadPage();
+    });
   const report =
     options.onError ??
     ((message: string, error: unknown) => console.error(`MoonCG: ${message}`, error));
@@ -359,10 +516,16 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
   /** Requests waiting for the server's answer, by request id. */
   const pending = new Map<number, Deferred<unknown>>();
   const topics = new Map<string, TopicState>();
+  /** Optimistic writes the server has and has not answered, by request id. */
+  const writesOut = new Map<number, ReplicantState>();
   const handlers = new Map<string, RequestHandler>();
   const routes = new Map<number, RouteHandler>();
   let socket: SocketLike | undefined;
   let connected = false;
+  /** Counts the connections that ended; calls of an earlier one are not answered on a later. */
+  let generation = 0;
+  const incoming = new IncomingBodies((msg) => send(msg));
+  const outgoing = new OutgoingBodies((msg) => send(msg));
   /** Set once the client is down for good: closed by the caller or refused by the server. */
   let stopError: MoonCGError | undefined;
   let nextId = 1;
@@ -399,7 +562,10 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
     connected = false;
     clearTimeout(reconnectTimer);
     ready.reject(error);
-    for (const state of replicants.values()) state.ready.reject(error);
+    for (const state of replicants.values()) {
+      state.ready.reject(error);
+      failWrites(state, error);
+    }
     for (const waiting of pending.values()) waiting.reject(error);
     pending.clear();
     pendingSubs.clear();
@@ -429,6 +595,7 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
   const subscribe = (name: string, state: ReplicantState) => {
     const id = nextId++;
     pendingSubs.set(id, state);
+    state.subscribing = true;
     // A `ready` that was rejected cannot resolve; whoever asks from now on gets one that can.
     if (state.ready.rejected) state.ready = defer();
     // Telling the server what is already here lets it send only the missed patches. Not when
@@ -471,11 +638,189 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
     }
   };
 
+  /**
+   * Optimistic: works out what to show, the server's value with the pending writes applied,
+   * and tells the subscribers if that is another value than shown. Writes that no longer fit
+   * are dropped and rejected; not the one in flight, which the server answers.
+   */
+  const reproject = (state: ReplicantState) => {
+    if (state.server === undefined) return;
+    const { value, failed } = rebaseWrites(
+      state.server,
+      state.writes.map((queued) => queued.write),
+    );
+    for (const { index, error } of [...failed].reverse()) {
+      if (index === 0 && state.inFlight !== undefined) continue;
+      const [dropped] = state.writes.splice(index, 1);
+      dropped?.done.reject(asError(error));
+    }
+    show(state, value);
+  };
+
+  /** Optimistic: sends the first write, unless one is out or the local copy is not in step. */
+  const pump = (state: ReplicantState) => {
+    while (
+      state.optimistic &&
+      connected &&
+      state.loaded &&
+      state.inFlight === undefined &&
+      !state.subscribing &&
+      !state.resync &&
+      state.error === undefined
+    ) {
+      const head = state.writes[0];
+      if (!head) return;
+      let op: ReplicantOp | undefined;
+      try {
+        // Worked out now, on the server's value: every write before it has been answered.
+        op = opForWrite(head.write, state.server as Json, state.rev);
+      } catch (error) {
+        state.writes.shift();
+        head.done.reject(asError(error));
+        reproject(state);
+        continue;
+      }
+      if (op === undefined) {
+        state.writes.shift();
+        head.done.resolve();
+        continue;
+      }
+      const id = nextId++;
+      state.inFlight = id;
+      writesOut.set(id, state);
+      send({ t: 'rep.op', id, name: state.handle.name, ...op });
+    }
+  };
+
+  /** Optimistic: the server committed the first write as revision `rev`. */
+  const confirmWrite = (state: ReplicantState, rev: number) => {
+    state.inFlight = undefined;
+    state.writes.shift()?.done.resolve();
+    if (state.resync) return;
+    // The commit itself came as a patch just before; without it the copy is out of step.
+    if (state.rev < rev) {
+      resync(state.handle.name, state);
+      return;
+    }
+    reproject(state);
+    pump(state);
+  };
+
+  /** Optimistic: the server refused the first write. A recipe is run again after a conflict. */
+  const refuseWrite = (state: ReplicantState, error: MoonCGError) => {
+    state.inFlight = undefined;
+    const head = state.writes[0];
+    if (
+      head &&
+      error.code === 'conflict' &&
+      head.write.kind === 'update' &&
+      head.conflicts < MAX_UPDATE_RETRIES
+    ) {
+      head.conflicts++;
+    } else {
+      state.writes.shift();
+      head?.done.reject(error);
+    }
+    if (state.resync) return;
+    reproject(state);
+    pump(state);
+  };
+
+  /**
+   * Optimistic: the local copy is in step again, so a write whose answer was lost is let go.
+   * While the server still has a write it will answer, the new value may or may not hold that
+   * write already: like a patch, it is shown together with the answer, never before, so that
+   * the write is not applied twice.
+   */
+  const inStep = (state: ReplicantState) => {
+    state.subscribing = false;
+    if (state.inFlight === UNCERTAIN) {
+      state.inFlight = undefined;
+      state.writes.shift();
+    }
+    if (state.inFlight !== undefined) return;
+    reproject(state);
+    pump(state);
+  };
+
+  /** Rejects every pending write; shown is the server's value again. */
+  const failWrites = (state: ReplicantState, error: MoonCGError) => {
+    if (state.writes.length === 0) return;
+    for (const [id, owner] of writesOut) if (owner === state) writesOut.delete(id);
+    state.inFlight = undefined;
+    for (const queued of state.writes.splice(0)) queued.done.reject(error);
+    reproject(state);
+  };
+
+  /**
+   * Optimistic: queues a write, shows it at once and sends it when its turn comes. A `set`
+   * that follows a `set` still waiting to be sent takes its place: only the last one is sent,
+   * and both promises settle with its answer. What is shown is worked out from the value shown
+   * so far, without running the waiting writes again.
+   */
+  const enqueue = (state: ReplicantState, write: PendingWrite): Promise<void> => {
+    if (write.kind === 'set') {
+      const problem = jsonProblem(write.value);
+      if (problem !== null) {
+        return Promise.reject(new MoonCGError('bad_request', `Not a JSON value: ${problem}`));
+      }
+    }
+    if (stopError) return Promise.reject(stopError);
+    const last = state.writes.at(-1);
+    const lastIsOut = state.writes.length === 1 && state.inFlight !== undefined;
+    if (write.kind === 'set' && last?.write.kind === 'set' && !lastIsOut) {
+      last.write = write;
+      show(state, deepFreeze(write.value));
+      return last.done.promise;
+    }
+    if (state.writes.length >= MAX_PENDING_WRITES) {
+      return Promise.reject(
+        new MoonCGError('unavailable', 'Too many writes are waiting for the server'),
+      );
+    }
+    if (state.server === undefined || !state.loaded) {
+      const done = defer();
+      state.writes.push({ write, done, conflicts: 0 });
+      reproject(state);
+      pump(state);
+      return done.promise;
+    }
+    const { value, failed } = rebaseWrites(state.value as Json, [write]);
+    // A write that does not fit what is shown is refused at once, as `reproject` would.
+    if (failed[0]) return Promise.reject(asError(failed[0].error));
+    const done = defer();
+    state.writes.push({ write, done, conflicts: 0 });
+    show(state, value);
+    pump(state);
+    return done.promise;
+  };
+
+  /** Optimistic: shows a value, and tells the subscribers if it is another one. */
+  const show = (state: ReplicantState, value: Json) => {
+    if (state.loaded && JSON.stringify(value) === JSON.stringify(state.value)) return;
+    state.value = value;
+    state.loaded = true;
+    notify(state);
+  };
+
   const submit = (name: string, op: ReplicantOp): Promise<void> =>
     ask((id) => ({ t: 'rep.op', id, name, ...op }));
 
+  /**
+   * Sends only while the connection a call came on is still the current one. Call ids start
+   * over with every connection: an answer that comes late must not answer another call.
+   */
+  const replyTo = () => {
+    const at = generation;
+    return {
+      send: (msg: ClientMessage) => at === generation && send(msg),
+      current: () => at === generation,
+    };
+  };
+
   /** Runs an extension's handler for a call from the server and sends back the outcome. */
   const answer = (call: number, what: string, run: (() => unknown) | undefined) => {
+    const { send } = replyTo();
     if (!run) {
       send({ t: 'call.err', call, code: 'not_found', message: `Nothing handles ${what}` });
       return;
@@ -497,6 +842,51 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
         }
         report(`the handler of ${what} failed`, error);
         send({ t: 'call.err', call, code: 'internal', message: `The handler of ${what} failed` });
+      });
+  };
+
+  /**
+   * Runs a route's handler and sends back the answer; a streamed answer's body follows it.
+   * Whatever the handler did not read of a streamed request body is not wanted afterwards.
+   */
+  const answerRoute = (
+    call: number,
+    run: (() => Promise<HttpResponseData | RouteAnswer>) | undefined,
+  ) => {
+    const { send, current } = replyTo();
+    if (!run) {
+      send({ t: 'call.err', call, code: 'not_found', message: 'Nothing handles the route' });
+      return;
+    }
+    Promise.resolve()
+      .then(run)
+      .then(async (result) => {
+        const { status, headers } = result;
+        const pieces = 'pieces' in result ? result.pieces : undefined;
+        if (pieces !== undefined && !current()) {
+          // Nobody waits for it any more.
+          await pieces[Symbol.asyncIterator]().return?.();
+          return;
+        }
+        if (pieces === undefined) {
+          send({ t: 'call.ok', call, data: { status, headers, body: result.body } });
+          return;
+        }
+        send({ t: 'call.ok', call, data: { status, headers, body: null, stream: true } });
+        return outgoing.start(call, pieces, (error) =>
+          report('the body of the answer of a route failed', error),
+        );
+      })
+      .catch((error) => {
+        if (error instanceof MoonCGError && error.code !== 'disconnected') {
+          send({ t: 'call.err', call, code: error.code, message: error.message });
+          return;
+        }
+        report('the handler of the route failed', error);
+        send({ t: 'call.err', call, code: 'internal', message: 'The handler of the route failed' });
+      })
+      .finally(() => {
+        if (current()) incoming.drop(call);
       });
   };
 
@@ -527,6 +917,16 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
         const state = replicants.get(msg.name);
         if (!state) return;
         pendingSubs.delete(msg.id);
+        if (state.optimistic) {
+          state.server = deepFreeze(msg.value);
+          state.epoch = msg.epoch;
+          state.rev = msg.rev;
+          state.resync = false;
+          setError(state, undefined);
+          inStep(state);
+          state.ready.resolve();
+          return;
+        }
         // A snapshot with the value already held (after a server restart, say) keeps the
         // object and tells nobody, so nothing re-renders for a change that is none.
         const sameValue = state.loaded && JSON.stringify(state.value) === JSON.stringify(msg.value);
@@ -551,15 +951,25 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
           resync(msg.name, state);
           return;
         }
+        let next: Json;
         try {
-          state.value = deepFreeze(applyPatches(state.value as Json, msg.patches));
+          const current = state.optimistic ? state.server : state.value;
+          next = deepFreeze(applyPatches(current as Json, msg.patches));
         } catch {
           // The local copy no longer matches the server's: start over from a snapshot.
           resync(msg.name, state);
           return;
         }
         state.rev = msg.rev;
-        notify(state);
+        if (!state.optimistic) {
+          state.value = next;
+          notify(state);
+          return;
+        }
+        state.server = next;
+        // While a write is out this may be that very write, which is shown already: what to
+        // show is worked out once the server has answered it.
+        if (state.inFlight === undefined) reproject(state);
         return;
       }
       case 'rep.gone': {
@@ -568,6 +978,7 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
         const error = new MoonCGError('not_found', msg.message);
         setError(state, error);
         state.ready.reject(error);
+        failWrites(state, error);
         return;
       }
       case 'rep.back': {
@@ -592,6 +1003,9 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
         return;
       case 'reload':
         reloadPage();
+        return;
+      case 'css':
+        restyle(msg.files);
         return;
       case 'graphic.end': {
         // Not asked for again: two pages of one account would take the place from each
@@ -618,14 +1032,40 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
       }
       case 'http.call': {
         const handler = routes.get(msg.route);
-        answer(msg.call, 'the route', handler && (() => handler(msg.request)));
+        const body = handler && msg.request.stream ? incoming.open(msg.call) : undefined;
+        answerRoute(msg.call, handler && (() => handler(msg.request, body)));
         return;
       }
-      case 'ack':
+      case 'http.data':
+        incoming.data(msg.call, msg.data);
+        return;
+      case 'http.end':
+        incoming.end(msg.call);
+        return;
+      case 'http.abort':
+        incoming.abort(msg.call, msg.message);
+        return;
+      case 'http.pull':
+        outgoing.pulled(msg.call);
+        return;
+      case 'http.cancel':
+        outgoing.cancelled(msg.call);
+        return;
+      case 'ack': {
+        const writer = writesOut.get(msg.id);
+        if (writer) {
+          writesOut.delete(msg.id);
+          confirmWrite(writer, msg.rev);
+          return;
+        }
         // Answers an op, or a subscription that was brought up to date with patches.
+        const subscribed = pendingSubs.get(msg.id);
         pendingSubs.delete(msg.id);
+        if (subscribed?.optimistic) inStep(subscribed);
+        else if (subscribed) subscribed.subscribing = false;
         settle(msg.id, undefined);
         return;
+      }
       case 'ok':
         settle(msg.id, undefined);
         return;
@@ -653,11 +1093,19 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
           } else stop(error);
           return;
         }
+        const writer = writesOut.get(msg.id);
+        if (writer) {
+          writesOut.delete(msg.id);
+          refuseWrite(writer, error);
+          return;
+        }
         const refused = pendingSubs.get(msg.id);
         if (refused) {
+          refused.subscribing = false;
           setError(refused, error);
           refused.ready.reject(error);
           pendingSubs.delete(msg.id);
+          failWrites(refused, error);
         }
         pending.get(msg.id)?.reject(error);
         pending.delete(msg.id);
@@ -686,6 +1134,17 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
       const dropped = new MoonCGError('disconnected', 'The connection to the server was lost');
       for (const waiting of pending.values()) waiting.reject(dropped);
       pending.clear();
+      // An optimistic write that is out may or may not have taken effect. Its caller learns
+      // that it was cut off; it stays shown until the copy is in step again.
+      for (const state of writesOut.values()) {
+        state.writes[0]?.done.reject(dropped);
+        state.inFlight = UNCERTAIN;
+      }
+      writesOut.clear();
+      for (const state of replicants.values()) state.subscribing = false;
+      generation++;
+      incoming.closeAll(dropped);
+      outgoing.closeAll();
       if (stopError) return;
       setStatus('reconnecting');
       const delay = duplicate
@@ -710,8 +1169,13 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
     });
   };
 
-  const createState = (name: string): ReplicantState => {
+  const createState = (name: string, optimistic: boolean): ReplicantState => {
     const state: ReplicantState = {
+      subscribing: false,
+      optimistic,
+      server: undefined,
+      writes: [],
+      inFlight: undefined,
       ready: defer(),
       listeners: new Set(),
       loaded: false,
@@ -748,11 +1212,15 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
         async set(next) {
           await state.ready.promise;
           if (state.error) throw state.error;
+          if (state.optimistic) return enqueue(state, { kind: 'set', value: next as Json });
           await submit(name, { patches: [{ op: 'replace', path: '', value: next as Json }] });
         },
         async update(recipe) {
           await state.ready.promise;
           if (state.error) throw state.error;
+          if (state.optimistic) {
+            return enqueue(state, { kind: 'update', recipe: recipe as Recipe<unknown> });
+          }
           await updateWithRetry(
             () => ({ value: state.value, rev: state.rev }),
             (op) => submit(name, op),
@@ -779,11 +1247,17 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
       };
     },
     dialogs: createDialogs(),
-    replicant(name: string) {
+    replicant(name: string, replicantOptions: ClientReplicantOptions = {}) {
       const qualified = qualifyReplicantName(name, bundle);
+      const optimistic = replicantOptions.optimistic === true;
       let state = replicants.get(qualified);
+      if (state && optimistic && !state.optimistic) {
+        // From now on the copy keeps the server's value apart from what it shows.
+        state.optimistic = true;
+        state.server = state.loaded ? state.value : undefined;
+      }
       if (!state) {
-        state = createState(qualified);
+        state = createState(qualified, optimistic);
         replicants.set(qualified, state);
         if (stopError) state.ready.reject(stopError);
         else if (connected) subscribe(qualified, state);
@@ -845,14 +1319,22 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
         ask((id) => ({ t: 'msg.unhandle', id, name: qualified })).catch(() => {});
       };
     },
-    async route(method, pattern, handler, permission) {
+    async route(method, pattern, handler, permission, streaming = {}) {
       await ready.promise;
       let route = 0;
       await ask((id) => {
         route = id;
-        return permission === undefined
-          ? { t: 'http.route', id, method, pattern }
-          : { t: 'http.route', id, method, pattern, permission };
+        return {
+          t: 'http.route',
+          id,
+          method,
+          pattern,
+          ...(permission === undefined ? {} : { permission }),
+          ...(streaming.stream ? { stream: true as const } : {}),
+          ...(streaming.stream && streaming.maxBytes !== undefined
+            ? { maxBytes: streaming.maxBytes }
+            : {}),
+        };
       });
       routes.set(route, handler);
     },

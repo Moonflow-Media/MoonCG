@@ -21,6 +21,7 @@ describe('loadConfig', () => {
       extensionStartTimeoutMs: 10000,
       extensionHeartbeatTimeoutMs: 10000,
       maxBodyBytes: 1048576,
+      maxStreamBodyBytes: 1024 ** 3,
       assetMaxFileBytes: 52428800,
       assetQuotaBytes: 524288000,
       assetMaxFiles: 1000,
@@ -55,6 +56,7 @@ describe('loadConfig', () => {
       extensionStartTimeoutMs: 10000,
       extensionHeartbeatTimeoutMs: 10000,
       maxBodyBytes: 1048576,
+      maxStreamBodyBytes: 1024 ** 3,
       assetMaxFileBytes: 52428800,
       assetQuotaBytes: 524288000,
       assetMaxFiles: 1000,
@@ -90,6 +92,7 @@ describe('loadConfig', () => {
       extensionStartTimeoutMs: 10000,
       extensionHeartbeatTimeoutMs: 10000,
       maxBodyBytes: 1048576,
+      maxStreamBodyBytes: 1024 ** 3,
       assetMaxFileBytes: 52428800,
       assetQuotaBytes: 524288000,
       assetMaxFiles: 1000,
@@ -108,6 +111,18 @@ describe('loadConfig', () => {
       dev: false,
       watch: false,
     });
+  });
+
+  it('takes the limit of streamed bodies from flags, the environment and the file', () => {
+    const file = { values: { maxStreamBodyBytes: 5000 }, dir: cwd, path: resolve(cwd, 'm.json') };
+    expect(loadConfig({ argv: [], env: {}, cwd, file }).maxStreamBodyBytes).toBe(5000);
+    const env = { MOONCG_MAX_STREAM_BODY_BYTES: '4000' };
+    expect(loadConfig({ argv: [], env, cwd, file }).maxStreamBodyBytes).toBe(4000);
+    const argv = ['--max-stream-body-bytes', '3000'];
+    expect(loadConfig({ argv, env, cwd, file }).maxStreamBodyBytes).toBe(3000);
+    const wrong = { values: { maxStreamBodyBytes: -1 }, dir: cwd, path: resolve(cwd, 'm.json') };
+    expect(() => loadConfig({ argv: [], env: {}, cwd, file: wrong })).toThrow(/maxStreamBodyBytes/);
+    expect(() => loadConfig({ argv: ['--max-stream-body-bytes', 'lots'], env: {}, cwd })).toThrow();
   });
 
   it('takes the limits for assets from flags and the environment', () => {

@@ -494,6 +494,8 @@ describe('the session as a resource ledger', () => {
       handlers: 1,
       routes: 2,
       calls: 1,
+      // Only calls whose bodies stream count as streams.
+      streams: 0,
     });
 
     session.close();
@@ -505,6 +507,7 @@ describe('the session as a resource ledger', () => {
       handlers: 0,
       routes: 0,
       calls: 0,
+      streams: 0,
     });
     expect(routes.count()).toBe(0);
     expect(rejected).toHaveBeenCalledWith(expect.objectContaining({ code: 'unavailable' }));

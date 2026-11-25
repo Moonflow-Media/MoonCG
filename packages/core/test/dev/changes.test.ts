@@ -6,6 +6,7 @@ import {
   planForAreas,
   planReload,
 } from '../../src/dev/changes.js';
+import { MAX_CSS_FILES } from '../../src/protocol/protocol.js';
 
 describe('isIgnoredPath', () => {
   it.each([
@@ -102,7 +103,64 @@ describe('planReload', () => {
       panels: true,
       graphics: 'none',
     });
-    expect(planReload(['dashboard/control.css'], production).panels).toBe(true);
+    expect(planReload(['dashboard/control.js'], production).panels).toBe(true);
+  });
+
+  it('swaps stylesheets of panels in place when only CSS changed, in and out of dev mode', () => {
+    for (const options of [dev, production]) {
+      expect(planReload(['dashboard/control.css', 'dashboard/theme/dark.CSS'], options)).toEqual({
+        bundle: 'none',
+        panels: false,
+        graphics: 'none',
+        panelStyles: ['dashboard/control.css', 'dashboard/theme/dark.CSS'],
+      });
+    }
+  });
+
+  it('reloads instead when the changed stylesheets do not fit into a css message', () => {
+    const many = Array.from({ length: MAX_CSS_FILES + 1 }, (_, index) => `dashboard/${index}.css`);
+    expect(planReload(many, dev)).toEqual({ bundle: 'none', panels: true, graphics: 'none' });
+    expect(planReload(['graphics/a:b.css'], dev)).toEqual({
+      bundle: 'none',
+      panels: false,
+      graphics: 'reload',
+    });
+    const long = `dashboard/${'x'.repeat(500)}.css`;
+    expect(planReload([long], dev).panels).toBe(true);
+    expect(planReload(many.slice(1), dev).panelStyles).toHaveLength(MAX_CSS_FILES);
+  });
+
+  it('reloads the panels when CSS changed together with anything else of the dashboard', () => {
+    expect(planReload(['dashboard/control.css', 'dashboard/control.html'], dev)).toEqual({
+      bundle: 'none',
+      panels: true,
+      graphics: 'none',
+    });
+  });
+
+  it('swaps stylesheets of graphics in place in dev mode only', () => {
+    expect(planReload(['graphics/overlay.css'], dev)).toEqual({
+      bundle: 'none',
+      panels: false,
+      graphics: 'none',
+      graphicStyles: ['graphics/overlay.css'],
+    });
+    // Outside dev mode a graphic may be on air, and a new stylesheet can break it as well as
+    // any other file: it is marked out of date like before.
+    expect(planReload(['graphics/overlay.css'], production)).toEqual({
+      bundle: 'none',
+      panels: false,
+      graphics: 'mark-out-of-date',
+    });
+    expect(isIdlePlan(planReload(['graphics/overlay.css'], dev))).toBe(false);
+  });
+
+  it('leaves stylesheets to the development server of a bundle that names one', () => {
+    expect(planReload(['dashboard/a.css', 'graphics/b.css'], { dev: true, devUrl: true })).toEqual({
+      bundle: 'none',
+      panels: false,
+      graphics: 'none',
+    });
   });
 
   it('reloads graphics in dev mode', () => {

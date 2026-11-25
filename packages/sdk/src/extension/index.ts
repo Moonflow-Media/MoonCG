@@ -6,9 +6,11 @@ import {
   type Json,
   jsonProblem,
   MoonCGError,
+  type RouteAnswer,
   type Sender,
 } from '@mooncg/core';
 import type {
+  ClientReplicantOptions,
   Connection,
   MessageListener,
   Messaging,
@@ -19,6 +21,7 @@ import type {
 export type { ErrorCode, Json, ReplicantHandle, ReplicantMeta, Sender } from '@mooncg/core';
 export { MoonCGError } from '@mooncg/core';
 export type {
+  ClientReplicantOptions,
   Connection,
   MessageListener,
   MessageMeta,
@@ -49,22 +52,38 @@ export interface HttpRequest {
    * `ctx.permissions.check`. The server has already checked the route's own permission.
    */
   readonly sender: Sender;
-  /** The whole body, or `undefined` without one. */
+  /** The whole body, or `undefined` without one, and always for a route that streams. */
   readonly body: Uint8Array | undefined;
-  /** The body as UTF-8 text. */
+  /**
+   * The body as it arrives, for a route registered with `{ stream: true }`; `undefined` for
+   * every other route. It is also an async iterable: `for await (const piece of stream)`.
+   * The server sends only a few pieces ahead of what is read. It fails when the client goes
+   * away. What the handler has not read when it answers is thrown away.
+   */
+  readonly stream: ReadableStream<Uint8Array> | undefined;
+  /**
+   * The body as UTF-8 text. Throws for a route that streams: that is a mistake of the
+   * handler, and the request fails with status 500.
+   */
   text(): string;
-  /** The body parsed as JSON. Fails the request with status 400 if it is not JSON. */
+  /**
+   * The body parsed as JSON. Fails the request with status 400 if it is not JSON. Throws like
+   * `text()` for a route that streams.
+   */
   json(): unknown;
 }
 
 /**
  * What a route answers. `body` decides the content type unless `headers` sets one: a string
- * is sent as text, a `Uint8Array` as bytes, anything else as JSON. `status` defaults to 200.
+ * is sent as text, a `Uint8Array` as bytes, a `ReadableStream` or async iterable of
+ * `Uint8Array` pieces as bytes that are sent as they come, anything else as JSON. `status`
+ * defaults to 200. A streamed body is read only as fast as the client takes it, and stopped
+ * (`cancel()` or `return()`) when the client goes away.
  */
 export interface HttpResponse {
   readonly status?: number;
   readonly headers?: Readonly<Record<string, string>>;
-  readonly body?: Json | Uint8Array;
+  readonly body?: Json | Uint8Array | ReadableStream<Uint8Array> | AsyncIterable<Uint8Array>;
 }
 
 export type HttpHandler = (request: HttpRequest) => HttpResponse | Promise<HttpResponse>;
@@ -75,6 +94,16 @@ export interface RouteOptions {
    * is open to whoever holds any permission of the bundle.
    */
   readonly permission?: string;
+  /**
+   * Hands the request body to the handler as `request.stream` while it arrives, instead of
+   * reading all of it first. Needed for bodies larger than the server's limit.
+   */
+  readonly stream?: boolean;
+  /**
+   * With `stream`: how many bytes the body may have, or `null` for no limit. Without it the
+   * server's limit (`maxBodyBytes`, 1 MiB by default) holds, as for every other route.
+   */
+  readonly maxBodyBytes?: number | null;
 }
 
 type RegisterRoute = (path: string, handler: HttpHandler, options?: RouteOptions) => Promise<void>;
@@ -155,15 +184,22 @@ export function createBundleContext(options: BundleContextOptions): {
       connection.route(
         method,
         path,
-        async (request) => toResponseData(await handler(toRequest(request))),
+        async (request, body) => toResponseData(await handler(toRequest(request, body))),
         routeOptions.permission,
+        {
+          stream: routeOptions.stream === true,
+          ...(routeOptions.maxBodyBytes === undefined
+            ? {}
+            : { maxBytes: routeOptions.maxBodyBytes }),
+        },
       );
 
   const context: BundleContext = {
     bundle,
     log,
     config: Object.freeze({ ...options.config }),
-    replicant: ((name: string) => connection.replicant(name)) as BundleContext['replicant'],
+    replicant: ((name: string, replicantOptions?: ClientReplicantOptions) =>
+      connection.replicant(name, replicantOptions)) as BundleContext['replicant'],
     send: (name: string, data?: Json) => connection.send(name, data),
     on: (name: string, listener: MessageListener) => connection.on(name, listener),
     request: (name, data, requestOptions) => connection.request(name, data, requestOptions),
@@ -261,9 +297,19 @@ export function createLoopback(): Loopback {
 
 const CONTENT_TYPE = 'content-type';
 
-function toRequest(data: HttpRequestData): HttpRequest {
+function toRequest(
+  data: HttpRequestData,
+  stream: ReadableStream<Uint8Array> | undefined,
+): HttpRequest {
   const body = data.body === null ? undefined : fromBase64(data.body);
-  const text = () => new TextDecoder().decode(body);
+  /** A mistake in the handler, not in the request: the call fails with status 500. */
+  const streamed = () => {
+    if (stream) throw new Error('The body of this route is a stream: read request.stream');
+  };
+  const text = () => {
+    streamed();
+    return new TextDecoder().decode(body);
+  };
   return {
     method: data.method,
     path: data.path,
@@ -272,8 +318,10 @@ function toRequest(data: HttpRequestData): HttpRequest {
     headers: data.headers,
     sender: data.sender,
     body,
+    stream,
     text,
     json() {
+      streamed();
       try {
         return JSON.parse(text());
       } catch {
@@ -283,8 +331,20 @@ function toRequest(data: HttpRequestData): HttpRequest {
   };
 }
 
+/** Whether a body is a stream of pieces rather than one value. */
+function isStreamBody(
+  body: unknown,
+): body is ReadableStream<Uint8Array> | AsyncIterable<Uint8Array> {
+  return (
+    typeof body === 'object' &&
+    body !== null &&
+    !(body instanceof Uint8Array) &&
+    (body instanceof ReadableStream || Symbol.asyncIterator in body)
+  );
+}
+
 /** Checks what a route handler returned and puts it into the form that travels. */
-function toResponseData(response: HttpResponse | undefined | null): HttpResponseData {
+function toResponseData(response: HttpResponse | undefined | null): HttpResponseData | RouteAnswer {
   if (response === undefined || response === null) return { status: 200, headers: {}, body: null };
   const unusable = (what: string) =>
     new Error(`A route handler must return { status?, headers?, body? }: ${what}`);
@@ -300,6 +360,10 @@ function toResponseData(response: HttpResponse | undefined | null): HttpResponse
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(response.headers ?? {})) {
     headers[name.toLowerCase()] = String(value);
+  }
+  if (isStreamBody(body)) {
+    headers[CONTENT_TYPE] ??= 'application/octet-stream';
+    return { status, headers, body: null, pieces: body as AsyncIterable<Uint8Array> };
   }
   let bytes: Uint8Array | undefined;
   let contentType: string | undefined;

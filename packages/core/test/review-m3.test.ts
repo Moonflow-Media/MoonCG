@@ -193,6 +193,7 @@ describe('a closed session', () => {
       handlers: 0,
       routes: 0,
       calls: 0,
+      streams: 0,
     });
   });
 });

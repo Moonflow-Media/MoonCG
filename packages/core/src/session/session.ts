@@ -1,5 +1,11 @@
 import { type ErrorCode, MoonCGError, type Timers } from '../errors.js';
-import type { HttpRequestData, HttpResponseData, RouteTable } from '../http/routes.js';
+import type {
+  HttpRequestData,
+  HttpResponseData,
+  RouteAnswer,
+  RouteCall,
+  RouteTable,
+} from '../http/routes.js';
 import type { Json } from '../json.js';
 import { MAX_REQUEST_TIMEOUT_MS, type MessageBus, type Sender } from '../messages/bus.js';
 import { NAMESPACE_SEPARATOR } from '../names.js';
@@ -23,12 +29,14 @@ import {
   isHttpResponse,
   PROTOCOL_VERSION,
   type ServerMessage,
+  type StreamMessage,
 } from '../protocol/protocol.js';
 import {
   qualifyReplicantName,
   type ReplicantEntry,
   type ReplicantRegistry,
 } from '../replicant/registry.js';
+import { HttpExchange } from './http-exchange.js';
 
 /** How long a bundle's HTTP route handler may take to answer. */
 export const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
@@ -38,6 +46,14 @@ export const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
  * `unavailable`, so a connection that stopped answering cannot pile up work on the server.
  */
 export const MAX_PENDING_CALLS = 100;
+
+/**
+ * How many HTTP calls to one connection may stream a body at a time, an upload or an answer.
+ * Further ones fail as `unavailable`. A streamed upload lasts as long as its client takes to
+ * send it, so these calls do not take places of `MAX_PENDING_CALLS`: slow uploads cannot
+ * keep the connection from answering anything else.
+ */
+export const MAX_STREAMED_BODIES = 16;
 
 /**
  * How many names one connection may wait for at a time: replicants and topics it asked for
@@ -52,6 +68,19 @@ export interface ConnectedPage {
   readonly graphic: boolean;
   /** Tells the page to load itself again. */
   reload(): void;
+  /**
+   * Tells the page that these stylesheets of its bundle changed. Only the ones its principal
+   * may fetch are named to it; when that is none of them, it is told nothing.
+   */
+  restyle(styles: readonly Stylesheet[]): void;
+}
+
+/** A file of a bundle that a page may load as a stylesheet, and what it takes to fetch it. */
+export interface Stylesheet {
+  /** The file inside the bundle, such as `dashboard/control.css`. */
+  readonly file: string;
+  /** The permission the server checks before it sends the file. */
+  readonly permission: string;
 }
 
 /** Where the connected pages of each bundle are listed, so that they can be told to reload. */
@@ -130,6 +159,11 @@ export interface SessionStats {
   readonly routes: number;
   /** Calls to the connection that it has not answered yet. */
   readonly calls: number;
+  /**
+   * HTTP calls to the connection whose request or answer streams, until both bodies are
+   * over. At most `MAX_STREAMED_BODIES`.
+   */
+  readonly streams: number;
 }
 
 export interface Session {
@@ -155,6 +189,15 @@ interface PendingCall {
   reject(error: MoonCGError): void;
 }
 
+const STREAM_TYPES: readonly string[] = [
+  'http.data',
+  'http.end',
+  'http.pull',
+  'http.cancel',
+  'http.abort',
+];
+const isStreamMessage = (msg: ClientMessage): msg is StreamMessage => STREAM_TYPES.includes(msg.t);
+
 /**
  * The server side of one connection, independent of the transport: a page's socket or a
  * bundle's extension. It learns its bundle from `hello`, checks `authorize()` on everything
@@ -167,6 +210,15 @@ export function createSession(options: SessionOptions): Session {
   const handlers = new Map<string, () => void>();
   const registered: (() => void)[] = [];
   const calls = new Map<number, PendingCall>();
+  /** The calls of `calls` that do not count against `MAX_PENDING_CALLS`: streamed uploads. */
+  const uncounted = new Set<number>();
+  /** HTTP calls, by call id, until they are answered and both bodies are over. */
+  const exchanges = new Map<number, HttpExchange>();
+  const streaming = () => {
+    let count = 0;
+    for (const exchange of exchanges.values()) if (exchange.streamed) count++;
+    return count;
+  };
   let nextCall = 1;
   let bundle: string | undefined;
   /** Takes this connection out of the instances of its graphic, if it is one. */
@@ -307,30 +359,36 @@ export function createSession(options: SessionOptions): Session {
   /**
    * Sends a call to the client and settles when it answers, fails, times out or closes.
    * `onAbandon` lets the caller say that it no longer waits, which forgets the call at once.
+   * `onSent` learns the call's id once it is sent, with `touch`, which starts the timeout
+   * anew, and `abandon`, which fails the call with an error. A call that is not `counted`
+   * takes none of the `MAX_PENDING_CALLS` places; its caller limits such calls itself.
    */
   const call = <T>(
     message: (call: number) => ServerMessage,
     timeoutMs: number,
     accept: (data: Json) => T | undefined,
     onAbandon?: (listener: () => void) => void,
+    onSent?: (id: number, touch: () => void, abandon: (error: MoonCGError) => void) => void,
+    counted = true,
   ): Promise<T> =>
     new Promise<T>((resolve, reject) => {
-      if (closed || calls.size >= MAX_PENDING_CALLS) {
+      if (closed || (counted && calls.size - uncounted.size >= MAX_PENDING_CALLS)) {
         reject(new MoonCGError('unavailable', 'The extension has too many unanswered calls'));
         return;
       }
       const id = nextCall++;
+      if (!counted) uncounted.add(id);
       const settle = (finish: () => void) => {
         if (!calls.delete(id)) return;
+        uncounted.delete(id);
         timers?.clearTimeout(timer);
         finish();
       };
       onAbandon?.(() => settle(() => {}));
       const rejectWith = (error: MoonCGError) => settle(() => reject(error));
-      const timer = timers?.setTimeout(
-        () => rejectWith(new MoonCGError('timeout', 'The extension did not answer in time')),
-        timeoutMs,
-      );
+      const expire = () =>
+        rejectWith(new MoonCGError('timeout', 'The extension did not answer in time'));
+      let timer = timers?.setTimeout(expire, timeoutMs);
       calls.set(id, {
         reject: rejectWith,
         resolve(data) {
@@ -341,7 +399,148 @@ export function createSession(options: SessionOptions): Session {
         },
       });
       send(message(id));
+      onSent?.(
+        id,
+        () => {
+          if (!calls.has(id)) return;
+          timers?.clearTimeout(timer);
+          timer = timers?.setTimeout(expire, timeoutMs);
+        },
+        rejectWith,
+      );
     });
+
+  /**
+   * Calls an extension's route. A streamed request body is sent as the extension takes it,
+   * and the timeout counts from the last piece it took; a streamed answer is handed on as
+   * `stream`. When the client goes away (`signal`) the extension is told to stop.
+   */
+  const invokeRoute = (
+    routeId: number,
+    httpRequest: HttpRequestData,
+    timeoutMs: number,
+    routeCall: RouteCall = {},
+  ): Promise<RouteAnswer> => {
+    const { body, signal } = routeCall;
+    if (signal?.aborted) {
+      return Promise.reject(new MoonCGError('unavailable', 'The client went away'));
+    }
+    const tooMany = () =>
+      new MoonCGError('unavailable', 'The extension has too many streamed bodies under way');
+    if (body && streaming() >= MAX_STREAMED_BODIES) return Promise.reject(tooMany());
+    let exchange: HttpExchange | undefined;
+    let leave: (() => void) | undefined;
+    /** Set when the answer would stream but there is no place for another stream. */
+    let refused: MoonCGError | undefined;
+    const answer = call<HttpResponseData>(
+      (callId) => ({
+        t: 'http.call',
+        call: callId,
+        route: routeId,
+        request: body ? { ...httpRequest, body: null, stream: true } : httpRequest,
+      }),
+      timeoutMs,
+      (data) => {
+        if (!isHttpResponse(data)) return undefined;
+        if (data.stream === true && exchange && !exchange.streamed) {
+          if (streaming() >= MAX_STREAMED_BODIES) {
+            // None of its pieces are wanted, nor anything else of the call.
+            refused = tooMany();
+            send({ t: 'http.cancel', call: exchange.call });
+            exchange.close(refused);
+            return data;
+          }
+          exchange.streamed = true;
+        }
+        // Said at once: the first pieces of the answer may come before anyone reads it.
+        exchange?.settled(data.stream === true);
+        return data;
+      },
+      undefined,
+      (callId, touch, abandon) => {
+        const opened = new HttpExchange(callId, send, () => {
+          exchanges.delete(callId);
+          leave?.();
+        });
+        opened.streamed = body !== undefined;
+        exchange = opened;
+        exchanges.set(callId, opened);
+        if (signal) {
+          const onAbort = () => {
+            const gone = new MoonCGError('unavailable', 'The client went away');
+            abandon(gone);
+            opened.close(gone);
+          };
+          signal.addEventListener('abort', onAbort);
+          leave = () => signal.removeEventListener('abort', onAbort);
+        }
+        if (body) {
+          opened.sendBody(body, touch).catch((error: unknown) => {
+            const broken =
+              error instanceof MoonCGError
+                ? error
+                : new MoonCGError('unavailable', 'The request body broke off');
+            abandon(broken);
+            opened.close(broken, false);
+          });
+        }
+      },
+      body === undefined,
+    );
+    return answer.then(
+      (data) => {
+        if (refused) throw refused;
+        const settled = exchange;
+        if (!settled) return { status: data.status, headers: data.headers, body: data.body };
+        if (data.stream !== true) {
+          settled.settled(false);
+          return { status: data.status, headers: data.headers, body: data.body };
+        }
+        return {
+          status: data.status,
+          headers: data.headers,
+          body: null,
+          pieces: settled.response(),
+        };
+      },
+      (error: unknown) => {
+        exchange?.close(
+          error instanceof MoonCGError ? error : new MoonCGError('internal', String(error)),
+        );
+        throw error;
+      },
+    );
+  };
+
+  /** A message about a streamed body from the extension. */
+  const streamMessage = (msg: StreamMessage) => {
+    if (!extension) {
+      fail('forbidden', 'Only a bundle extension streams HTTP bodies');
+      return;
+    }
+    const exchange = exchanges.get(msg.call);
+    if (!exchange) {
+      // Over already, as after the client went away: whoever still sends is told to stop.
+      if (msg.t === 'http.data') send({ t: 'http.cancel', call: msg.call });
+      return;
+    }
+    switch (msg.t) {
+      case 'http.pull':
+        exchange.pulled();
+        return;
+      case 'http.cancel':
+        exchange.cancelled();
+        return;
+      case 'http.data':
+        exchange.data(msg.data);
+        return;
+      case 'http.end':
+        exchange.end();
+        return;
+      case 'http.abort':
+        exchange.aborted(msg.message);
+    }
+  };
 
   const messages = (
     request: Extract<ClientMessage, { t: `msg.${string}` }>,
@@ -426,7 +625,7 @@ export function createSession(options: SessionOptions): Session {
   };
 
   const route = (request: Extract<ClientMessage, { t: 'http.route' }>, ownBundle: string) => {
-    const { id, method, pattern, permission } = request;
+    const { id, method, pattern, permission, stream, maxBytes } = request;
     if (!extension || !routes || !hasCapability(extension.capabilities, HTTP_ROUTES_CAPABILITY)) {
       fail(
         'forbidden',
@@ -445,11 +644,14 @@ export function createSession(options: SessionOptions): Session {
         method,
         pattern,
         permission: bundlePermission(ownBundle, permission),
-        invoke: (httpRequest: HttpRequestData) =>
-          call<HttpResponseData>(
-            (callId) => ({ t: 'http.call', call: callId, route: id, request: httpRequest }),
+        stream: stream === true,
+        maxBodyBytes: maxBytes,
+        invoke: (httpRequest, routeCall) =>
+          invokeRoute(
+            id,
+            httpRequest,
             extension.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
-            (answer) => (isHttpResponse(answer) ? answer : undefined),
+            stream === true ? routeCall : { signal: routeCall?.signal },
           ),
       }),
     );
@@ -469,12 +671,17 @@ export function createSession(options: SessionOptions): Session {
     }
   };
 
-  const answer = (msg: Extract<ClientMessage, { call: number }>) => {
+  const answer = (msg: Extract<ClientMessage, { t: 'call.ok' | 'call.err' }>) => {
     if (!extension) {
       fail('forbidden', 'Only a bundle extension answers calls');
       return;
     }
     const pending = calls.get(msg.call);
+    if (!pending && msg.t === 'call.ok' && isHttpResponse(msg.data) && msg.data.stream === true) {
+      // Nobody waits for this answer any more; its body is not wanted.
+      send({ t: 'http.cancel', call: msg.call });
+      return;
+    }
     if (msg.t === 'call.ok') pending?.resolve(msg.data);
     else pending?.reject(new MoonCGError(msg.code, msg.message));
   };
@@ -521,6 +728,12 @@ export function createSession(options: SessionOptions): Session {
             reload: () => {
               if (!closed) send({ t: 'reload' });
             },
+            restyle: (styles) => {
+              const files = styles
+                .filter((style) => authorize(principal, style.permission, policy))
+                .map((style) => style.file);
+              if (!closed && files.length > 0) send({ t: 'css', files });
+            },
           });
         }
         send({ t: 'welcome', v: PROTOCOL_VERSION });
@@ -532,6 +745,7 @@ export function createSession(options: SessionOptions): Session {
     } else if (msg.t === 'rep.sub') subscribe(msg, bundle);
     else if (msg.t === 'rep.op') applyOp(msg, bundle);
     else if (msg.t === 'call.ok' || msg.t === 'call.err') answer(msg);
+    else if (isStreamMessage(msg)) streamMessage(msg);
     else if (msg.t === 'http.route') route(msg, bundle);
     else if (msg.t === 'perm.check') check(msg, bundle);
     else if (bus) messages(msg, bundle, bus);
@@ -583,6 +797,7 @@ export function createSession(options: SessionOptions): Session {
       registered.length = 0;
       const gone = new MoonCGError('unavailable', 'The extension went away');
       for (const pending of [...calls.values()]) pending.reject(gone);
+      for (const exchange of [...exchanges.values()]) exchange.close(gone, false);
     },
     stats: () => ({
       replicants: replicants.size,
@@ -590,6 +805,7 @@ export function createSession(options: SessionOptions): Session {
       handlers: handlers.size,
       routes: registered.length,
       calls: calls.size,
+      streams: streaming(),
     }),
   };
 }

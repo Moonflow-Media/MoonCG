@@ -60,8 +60,8 @@ const hello = (graphic?: string): ClientMessage =>
     : { t: 'hello', v: PROTOCOL_VERSION, bundle: 'scoreboard', graphic };
 
 describe('the protocol version', () => {
-  it('is version 6', () => {
-    expect(PROTOCOL_VERSION).toBe(6);
+  it('is version 7', () => {
+    expect(PROTOCOL_VERSION).toBe(7);
   });
 
   it('carries the graphic a page is in hello', () => {

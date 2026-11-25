@@ -60,9 +60,9 @@ function setup() {
   return { registry, bus, declare, undeclare, connect };
 }
 
-describe('protocol version 6', () => {
+describe('protocol version 7', () => {
   it('is what hello and welcome carry', () => {
-    expect(PROTOCOL_VERSION).toBe(6);
+    expect(PROTOCOL_VERSION).toBe(7);
   });
 
   it('round-trips rep.back and msg.back', () => {
@@ -306,5 +306,67 @@ describe('the pages of a bundle', () => {
       extension: { capabilities: [], permissions: [] },
     });
     expect(registry.joined).toEqual([]);
+  });
+});
+
+describe('the css message', () => {
+  it('round-trips with the changed files', () => {
+    const msg: ServerMessage = { t: 'css', files: ['dashboard/a.css', 'dashboard/b/c.css'] };
+    expect(decodeServerMessage(encodeMessage(msg))).toEqual({ ok: true, msg });
+  });
+
+  it('refuses files that are not safe paths inside a bundle, or no files at all', () => {
+    expect(decodeServerMessage('{"t":"css","files":["../x.css"]}')).toMatchObject({ ok: false });
+    expect(decodeServerMessage('{"t":"css","files":[]}')).toMatchObject({ ok: false });
+    expect(decodeServerMessage('{"t":"css"}')).toMatchObject({ ok: false });
+  });
+
+  it('is sent to a connected page that is told to swap its stylesheets', () => {
+    const pages: ConnectedPage[] = [];
+    const registry = new ReplicantRegistry();
+    const sent: ServerMessage[] = [];
+    const session = createSession({
+      principal: ALLOW_ALL_PRINCIPAL,
+      policy: ALLOW_ALL_POLICY,
+      registry,
+      bundleExists: () => true,
+      send: (msg) => sent.push(msg),
+      pages: {
+        join: (_bundle, page) => {
+          pages.push(page);
+          return () => {};
+        },
+      },
+    });
+    session.receive(encodeMessage({ t: 'hello', v: PROTOCOL_VERSION, bundle: 'scoreboard' }));
+    const styles = [{ file: 'dashboard/a.css', permission: 'bundle:scoreboard:?' }];
+    pages[0]?.restyle(styles);
+    session.close();
+    pages[0]?.restyle(styles);
+    expect(sent.slice(1)).toEqual([{ t: 'css', files: ['dashboard/a.css'] }]);
+  });
+
+  it('names only the stylesheets the principal of the page may fetch', () => {
+    const pages: ConnectedPage[] = [];
+    const sent: ServerMessage[] = [];
+    const session = createSession({
+      principal: { id: 'user:viewer', roles: ['viewer'] },
+      policy: { roles: { viewer: ['bundle:scoreboard:view'] } },
+      registry: new ReplicantRegistry(),
+      bundleExists: () => true,
+      send: (msg) => sent.push(msg),
+      pages: {
+        join: (_bundle, page) => {
+          pages.push(page);
+          return () => {};
+        },
+      },
+    });
+    session.receive(encodeMessage({ t: 'hello', v: PROTOCOL_VERSION, bundle: 'scoreboard' }));
+    const open = { file: 'dashboard/a.css', permission: 'bundle:scoreboard:?' };
+    const secret = { file: 'dashboard/admin.css', permission: 'bundle:scoreboard:admin' };
+    pages[0]?.restyle([open, secret]);
+    pages[0]?.restyle([secret]);
+    expect(sent.slice(1)).toEqual([{ t: 'css', files: ['dashboard/a.css'] }]);
   });
 });

@@ -97,7 +97,9 @@ describe.each([
       });
       expect(host.stats()).toMatchObject({
         running: 1,
-        ledger: { demo: { replicants: 1, listeners: 1, handlers: 1, routes: 1, calls: 0 } },
+        ledger: {
+          demo: { replicants: 1, listeners: 1, handlers: 1, routes: 1, calls: 0, streams: 0 },
+        },
       });
     },
     TEST_TIMEOUT,

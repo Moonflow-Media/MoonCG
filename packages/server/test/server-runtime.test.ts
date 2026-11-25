@@ -110,7 +110,9 @@ describe('a server with extensions in worker threads', () => {
       await vi.waitFor(() => expect(score.value).toEqual({ home: 0 }), WAIT);
       expect(server.host.stats()).toMatchObject({
         running: 1,
-        ledger: { board: { replicants: 1, listeners: 1, handlers: 1, routes: 1, calls: 0 } },
+        ledger: {
+          board: { replicants: 1, listeners: 1, handlers: 1, routes: 1, calls: 0, streams: 0 },
+        },
       });
     },
     TEST_TIMEOUT,

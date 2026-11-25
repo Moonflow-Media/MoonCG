@@ -92,6 +92,7 @@ never sit behind a proxy or a tunnel, and is never for a show. [docs/development
 | `--allowed-origin`                 | `MOONCG_ALLOWED_ORIGINS`                | none        | Extra origin whose pages may open the WebSocket       |
 | `--extension-memory-mb`            | `MOONCG_EXTENSION_MEMORY_MB`            | `256`       | Heap each bundle extension may use, in MiB            |
 | `--max-body-bytes`                 | `MOONCG_MAX_BODY_BYTES`                 | `1048576`   | Largest request body a bundle HTTP route accepts      |
+| `--max-stream-body-bytes`          | `MOONCG_MAX_STREAM_BODY_BYTES`          | 1 GiB       | Largest streamed body any bundle HTTP route accepts   |
 | `--asset-max-file-bytes`           | `MOONCG_ASSET_MAX_FILE_BYTES`           | `52428800`  | Largest file that can be uploaded as an asset         |
 | `--asset-quota-bytes`              | `MOONCG_ASSET_QUOTA_BYTES`              | `524288000` | What one asset category of a bundle may hold          |
 | `--asset-max-files`                | `MOONCG_ASSET_MAX_FILES`                | `1000`      | How many files one asset category may hold            |
@@ -414,6 +415,43 @@ Two limits of `ready` to know about:
   stays rejected even if a later reconnect could read the replicant. Create a new client then.
 - While the server cannot be reached, `ready` stays pending: the client keeps reconnecting.
 
+#### Optimistic writes
+
+By default a page shows a change once the server has confirmed it, a round trip later. A
+replicant asked for with `{ optimistic: true }` shows its own writes at once:
+
+```js
+const score = mc.replicant('score', { optimistic: true });
+score.update((draft) => {
+  draft.home++;
+}); // score.value has the new home score right away
+```
+
+- The option is per client and replicant: once a client asked for it, every handle of that
+  name in the client writes this way. Other pages, and the server, are not affected.
+- Writes wait in the order they were made and are sent one at a time. `set` and `update`
+  resolve when the server confirmed the write and reject, as without the option, when it
+  refused it. What the page shows is the server's value with the waiting writes applied.
+- A write the server refuses (a schema that rejects the value, a missing permission) is taken
+  back. The writes after it are applied again on top of the server's value, and subscribers
+  are called once with the result: they never see the value without the later writes.
+- After a `conflict`, an `update` runs its recipe again on the newer value and is sent again,
+  up to three more times, as without the option. Recipes may run more than once and also run
+  again whenever the server's value changes while writes wait, so they must have no side
+  effects. `meta.rev` is always the revision the server confirmed.
+- While a write is with the server, changes of others are shown together with its answer, not
+  before: until then the client cannot tell its own change from theirs.
+- If the connection drops while the server has a write, that write rejects with
+  `disconnected`: it may or may not have taken effect. It stays shown until the client is
+  back and in step with the server, and is then shown as the server has it. Writes that had
+  not been sent yet, and writes made while reconnecting, are sent once the client is back.
+- `mc.close()` and a replicant that is removed reject all writes still waiting.
+- A `set` that follows a `set` still waiting to be sent takes its place: only the last one is
+  sent, and the promises of both settle with its answer. At most 1000 writes wait per
+  replicant; further ones reject with `unavailable` until the server has caught up.
+- As without the option, the promise of a refused write rejects: a caller that neither awaits
+  nor catches it gets an unhandled rejection.
+
 Outside a `/b/<bundle>/` page, for example in Node, pass the bundle and URL:
 `createClient({ bundle: 'scoreboard', url: 'ws://127.0.0.1:9090/ws' })`. The bundle must be
 running on the server, or the handshake is refused with `not_found`.
@@ -454,6 +492,9 @@ function Score() {
 
 `useReplicantError(score)` from the same module returns `handle.error` and re-renders only
 when that changes.
+
+Both hooks take the handle as it is, so an optimistic one
+(`mc.replicant('score', { optimistic: true })`) shows its writes at once there too.
 
 ### Typed replicants
 

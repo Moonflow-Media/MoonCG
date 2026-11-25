@@ -1,6 +1,6 @@
 {
   "name": "@mooncg/sdk",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": true,
   "description": "The MoonCG SDK for bundle authors.",
   "type": "module",

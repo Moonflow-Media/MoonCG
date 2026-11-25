@@ -1,6 +1,6 @@
 {
   "name": "@mooncg/dashboard",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": true,
   "description": "The MoonCG dashboard: a Vue application the server serves at /.",
   "type": "module",

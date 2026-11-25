@@ -105,3 +105,31 @@ describe('useReplicant (React)', () => {
     expect(renders).toHaveLength(before);
   });
 });
+
+describe('useReplicant (React) with an optimistic replicant', () => {
+  it('renders a write before the server confirmed it', async () => {
+    const { client, socket } = setup();
+    socket().welcome();
+    const score = client.replicant<Score>('score', { optimistic: true });
+    socket().receive({
+      t: 'rep.snap',
+      id: socket().last('rep.sub').id,
+      name: NAME,
+      rev: 0,
+      value: { home: 0, away: 0 },
+      epoch: 'e1',
+    });
+    await score.ready;
+    const { container } = mount(score);
+
+    await act(async () => {
+      void score.update((draft) => {
+        draft.home = 7;
+      });
+      await tick();
+    });
+
+    expect(container.textContent).toBe('7:0');
+    expect(socket().last('rep.op')).toMatchObject({ baseRev: 0 });
+  });
+});

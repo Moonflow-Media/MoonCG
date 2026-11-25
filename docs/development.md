@@ -68,16 +68,17 @@ or `MOONCG_CONFIG` name another file, which must then exist.
 }
 ```
 
-| Setting          | Flag                    | Environment variable     |
-| ---------------- | ----------------------- | ------------------------ |
-| `port`           | `--port`                | `MOONCG_PORT`            |
-| `host`           | `--host`                | `MOONCG_HOST`            |
-| `bundlesDir`     | `--bundles-dir`         | `MOONCG_BUNDLES_DIR`     |
-| `dataDir`        | `--data-dir`            | `MOONCG_DATA_DIR`        |
-| `modulesDir`     | `--modules-dir`         | `MOONCG_MODULES_DIR`     |
-| `publicUrl`      | `--public-url`          | `MOONCG_PUBLIC_URL`      |
-| `allowedOrigins` | `--allowed-origin`      | `MOONCG_ALLOWED_ORIGINS` |
-| `watch`          | `--watch`, `--no-watch` | `MOONCG_WATCH`           |
+| Setting              | Flag                      | Environment variable           |
+| -------------------- | ------------------------- | ------------------------------ |
+| `port`               | `--port`                  | `MOONCG_PORT`                  |
+| `host`               | `--host`                  | `MOONCG_HOST`                  |
+| `bundlesDir`         | `--bundles-dir`           | `MOONCG_BUNDLES_DIR`           |
+| `dataDir`            | `--data-dir`              | `MOONCG_DATA_DIR`              |
+| `modulesDir`         | `--modules-dir`           | `MOONCG_MODULES_DIR`           |
+| `publicUrl`          | `--public-url`            | `MOONCG_PUBLIC_URL`            |
+| `allowedOrigins`     | `--allowed-origin`        | `MOONCG_ALLOWED_ORIGINS`       |
+| `watch`              | `--watch`, `--no-watch`   | `MOONCG_WATCH`                 |
+| `maxStreamBodyBytes` | `--max-stream-body-bytes` | `MOONCG_MAX_STREAM_BODY_BYTES` |
 
 A flag wins over the environment variable, which wins over the file, which wins over the
 default. That holds for turning `watch` off as well as on: `--no-watch` wins over everything,
@@ -110,7 +111,9 @@ again. Dev mode always turns it on.
 | `schemas/**`, and any schema the manifest names | The bundle is reloaded, if every schema is usable and every default fits |
 | `extension/**`, `shared/**`                     | The bundle's extension is restarted. Its replicants and messages stay    |
 | `dashboard/**`                                  | The bundle's open panel and dialog pages load themselves again           |
+| only `.css` files in `dashboard/`               | The panel and dialog pages load those stylesheets again, without reload  |
 | `graphics/**` in dev mode                       | The bundle's open graphic pages load themselves again                    |
+| only `.css` files in `graphics/`, in dev mode   | The graphic pages load those stylesheets again, without reload           |
 | `graphics/**` outside dev mode                  | Nothing is reloaded. The open pages are marked **out of date**           |
 | anything else                                   | Nothing                                                                  |
 
@@ -122,6 +125,36 @@ again. Dev mode always turns it on.
 - A bundle that failed gets another try when its extension or manifest changes: the fix for a
   bundle that does not start is usually an edit.
 - A disabled bundle is not watched.
+
+### Stylesheets are swapped in place
+
+When nothing but `.css` files changed in `dashboard/` (or, in dev mode, in `graphics/`), the
+server sends the pages of the bundle the message `css` with the changed files instead of
+`reload`. The SDK gives every `<link rel="stylesheet">` of the page that points at one of them
+a new `?mooncg-css=<time>` parameter, so the browser loads it again and the page keeps its
+state: what was typed, where it was scrolled, a running animation.
+
+- A page that does not link one of the changed files with a `<link>` reloads itself as
+  before. That covers a stylesheet pulled in by a script. A changed file that a stylesheet of
+  the page pulls in with `@import` reloads the page too, even when it is also linked: the
+  import keeps its address, so only a reload is sure to show it. Stylesheets of other
+  origins cannot be read and are not looked into.
+- Each page is named only the stylesheets its principal may fetch. Any file but a page entry
+  of the manifest is open to whoever holds a permission of the bundle, which every connected
+  page does; a stylesheet that is itself an entry with `requires` is named only to whoever
+  holds that permission.
+- More than 100 changed stylesheets at once, or a file name the protocol cannot carry (one
+  with a colon, say, or longer than 500 characters), reload the pages instead.
+- A change to `.css` files together with any other file of the same folder reloads the pages.
+- Changes that waited for the On Air lock to end reload the pages, even when only stylesheets
+  changed.
+- A page can handle the message itself: `createClient({ restyle: (files) => … })`.
+  `swapStylesheets(bundle, files)` from `@mooncg/sdk/client` is what the SDK does by default.
+- A bundle with a development server (`dev.url`) leaves stylesheets to it in dev mode, as it
+  does with every other page file.
+- Outside dev mode a changed stylesheet of a graphic is not swapped: the pages are marked
+  **out of date** like for any other file. A stylesheet can move, hide or break a graphic as
+  much as its HTML can, and a graphic may be on air, so a person decides when it changes.
 
 ### An invalid manifest or schema
 
@@ -167,8 +200,9 @@ recover by themselves:
   `reconnecting`. `createClient({ waitForBundle: false })` restores the old behaviour, where
   `ready` rejects with `not_found`.
 
-This needs protocol version 6 on both sides, which pages that load `/sdk/mooncg.js` have by
-themselves. A bundle that brings its own copy of `@mooncg/sdk` must rebuild.
+This needs protocol version 6 or later on both sides, and the swapping of stylesheets
+version 7, which pages that load `/sdk/mooncg.js` have by themselves. A bundle that brings its
+own copy of `@mooncg/sdk` must rebuild.
 
 ### Updating and removing while the watcher is on
 

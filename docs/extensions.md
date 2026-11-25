@@ -227,7 +227,71 @@ await ctx.http.post(
   answers 504; when the bundle stops while a request is under way, 503.
 - Requests that change something (anything but `GET` and `HEAD`) are only accepted from pages
   of this server or of an allowed origin, and from clients that send no `Origin` at all.
-- Responses are not streamed.
+- A body that is not streamed travels in one message to and from the extension, so an answer
+  of that kind can be at most about 750 KiB (1 MiB as base64). Stream larger ones.
+
+#### Streamed bodies
+
+A route can take its request body as it arrives and send its answer piece by piece, so that
+neither the server nor the extension ever holds all of it:
+
+```js
+import { createReadStream, createWriteStream } from 'node:fs';
+import { Readable, Writable } from 'node:stream';
+
+await ctx.http.post(
+  '/recordings/:name',
+  async (request) => {
+    // request.stream is a ReadableStream of Uint8Array pieces, also usable with for await.
+    await request.stream.pipeTo(Writable.toWeb(createWriteStream(`/tmp/${request.params.name}`)));
+    return { status: 201 };
+  },
+  { stream: true, maxBodyBytes: 2 * 1024 ** 3 },
+);
+
+await ctx.http.get('/recordings/:name', (request) => ({
+  headers: { 'content-type': 'video/mp4' },
+  // A ReadableStream or any async iterable of Uint8Array pieces.
+  body: Readable.toWeb(createReadStream(`/tmp/${request.params.name}`)),
+}));
+```
+
+- `{ stream: true }` gives the handler `request.stream` instead of `request.body`.
+  `request.text()` and `request.json()` throw an `Error` then, a mistake of the handler, so
+  the request is answered with 500 and the error is logged. Without the option the route works
+  as before.
+- The server's limit (`--max-body-bytes`, 1 MiB by default) holds for a streamed body too,
+  unless the route sets its own `maxBodyBytes`, larger or smaller, or `null` for no limit of
+  its own. Above every route stands the operator's limit for streamed bodies
+  (`--max-stream-body-bytes`, 1 GiB by default), also for a route with `null`. A body that
+  declares a larger `Content-Length` is refused with 413 before the handler runs; one that
+  turns out larger while it arrives fails `request.stream` and answers 413.
+- Any route can answer with a streamed body. Without a `content-type` header it is sent as
+  `application/octet-stream`.
+- The pieces travel in messages of at most 64 KiB, and at most four of them are on their way
+  before the other side has read one: the server reads the upload only as fast as the
+  handler reads `request.stream`, and pulls from the answer's stream only as fast as the
+  client takes it.
+- When the client goes away, `request.stream` fails and the answer's stream is stopped
+  (`cancel()` on a `ReadableStream`, `return()` on an iterator, so a `finally` runs). When the
+  extension stops or crashes, a download under way is cut off and an upload fails with 503.
+- The 10-second limit counts from the last piece the handler read while the upload arrives,
+  then until the handler answers. A streamed answer has no overall time limit: it lasts as
+  long as the client keeps reading.
+- A client must keep its upload going: one that sends less than 16 KiB in 10 seconds of the
+  server waiting for it (time the handler takes does not count) gets 408, and the handler's
+  `request.stream` fails. A client that takes nothing of a streamed answer for 30 seconds is
+  cut off, and the answer's stream is stopped as when the client goes away.
+- At most 16 calls of one extension stream a body at a time, uploads and answers together.
+  Another streamed upload is refused with 503 at once, and an answer that would stream is
+  stopped and answered with 503. These calls do not count against the 100 requests that may
+  wait for the extension, so slow uploads cannot block its other routes and requests.
+- What the handler has not read of the upload when it answers is thrown away, and the
+  connection is closed after the answer. So is the connection of any request to a route of a
+  bundle that is answered before its body was read: 401, 403, 404, 405, 408, 413, or an error
+  of the handler.
+- Header values must be Latin-1 without control characters, which is what Node can send. An
+  answer with any other header value fails with 500.
 
 To answer with a client error, throw a `MoonCGError`:
 
@@ -293,8 +357,10 @@ goes beyond them is ended and treated as crashed.
 | Time without answering the server's heartbeat     | 10 s                           | `--extension-heartbeat-timeout-ms` |
 | Heap memory                                       | 256 MiB                        | `--extension-memory-mb`            |
 | Size of one message to the server                 | 1 MiB                          | fixed                              |
+| Pieces of a streamed body on their way            | 4 of 64 KiB per request        | fixed                              |
+| HTTP calls with a streamed body at a time         | 16                             | fixed                              |
 | Log lines                                         | 100 lines or 64 KiB per second | fixed                              |
-| Requests waiting for its answer                   | 100                            | fixed                              |
+| Requests waiting for its answer                   | 100, streamed uploads aside    | fixed                              |
 | Messages to the server, of any kind               | 10,000 per second              | fixed                              |
 
 - **Do not compute for long without a break.** The server asks every extension for a sign of

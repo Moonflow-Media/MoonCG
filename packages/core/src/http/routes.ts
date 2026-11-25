@@ -12,8 +12,13 @@ export interface HttpRequestData {
   readonly params: Readonly<Record<string, string>>;
   readonly query: Readonly<Record<string, string>>;
   readonly headers: Readonly<Record<string, string>>;
-  /** The whole body, base64-encoded, or `null` without one. */
+  /** The whole body, base64-encoded, or `null` without one or when it is streamed. */
   readonly body: string | null;
+  /**
+   * Set for a route that takes its body as a stream: it follows the call in `http.data`
+   * messages and ends with `http.end`.
+   */
+  readonly stream?: true;
   /** Who is calling, in the same form as the sender of a message. */
   readonly sender: Sender;
 }
@@ -22,8 +27,37 @@ export interface HttpRequestData {
 export interface HttpResponseData {
   readonly status: number;
   readonly headers: Readonly<Record<string, string>>;
-  /** The body, base64-encoded, or `null` for none. */
+  /** The body, base64-encoded, or `null` for none or when it is streamed. */
   readonly body: string | null;
+  /** Set when the body follows as a stream of `http.data` messages. `body` is `null` then. */
+  readonly stream?: true;
+}
+
+/** What a route answers on the server's side: a streamed body arrives as `stream`. */
+export interface RouteAnswer {
+  readonly status: number;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: string | null;
+  /** The body, piece by piece, when the handler streams it. Read it, or `return()` it. */
+  readonly pieces?: AsyncIterable<Uint8Array> | undefined;
+}
+
+/** What the HTTP layer hands a route besides the request. */
+export interface RouteCall {
+  /**
+   * The request body as it arrives, for a route that streams it. It throws when the client
+   * goes away or the body breaks a limit; the call then fails with that error.
+   */
+  readonly body?: AsyncIterable<Uint8Array> | undefined;
+  /** Aborted when the client went away: the extension is told to stop. */
+  readonly signal?: AbortSignalLike | undefined;
+}
+
+/** The part of `AbortSignal` a route call uses. */
+export interface AbortSignalLike {
+  readonly aborted: boolean;
+  addEventListener(type: 'abort', listener: () => void): void;
+  removeEventListener(type: 'abort', listener: () => void): void;
 }
 
 export interface Route {
@@ -33,8 +67,15 @@ export interface Route {
   readonly pattern: string;
   /** The permission a caller needs. */
   readonly permission: string;
+  /** Whether the route takes its request body as a stream instead of whole. */
+  readonly stream?: boolean | undefined;
+  /**
+   * How many bytes a streamed request body may have. `null` for no limit, `undefined` for
+   * the server's limit, which is also the limit of every route that does not stream.
+   */
+  readonly maxBodyBytes?: number | null | undefined;
   /** Rejects with a `MoonCGError`. */
-  invoke(request: HttpRequestData): Promise<HttpResponseData>;
+  invoke(request: HttpRequestData, call?: RouteCall): Promise<RouteAnswer>;
 }
 
 const MAX_PATTERN_LENGTH = 200;
