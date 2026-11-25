@@ -27,6 +27,9 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     bundlesDir: fixture('bundles'),
     allowedOrigins: [],
     dataDir: join(tmpdir(), 'mooncg-test-data'),
+    // A folder that does not exist: a test that wants modules names its own.
+    modulesDir: join(tmpdir(), 'mooncg-test-no-modules'),
+    publicUrl: undefined,
     extensionMemoryMb: 128,
     extensionStartTimeoutMs: 10_000,
     extensionHeartbeatTimeoutMs: 10_000,

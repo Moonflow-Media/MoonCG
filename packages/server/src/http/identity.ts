@@ -45,14 +45,33 @@ export interface Transport {
   readonly secureCookies?: boolean | undefined;
   /** Believes `X-Forwarded-Proto` and `X-Forwarded-For`. Only behind a reverse proxy. */
   readonly trustProxy?: boolean | undefined;
+  /** The origin people reach the server at, if it was configured. */
+  readonly publicUrl?: string | undefined;
+}
+
+/** Whether a request is addressed to the configured public address, and that one is HTTPS. */
+function atHttpsPublicUrl(headers: IncomingHttpHeaders, transport: Transport): boolean {
+  if (transport.publicUrl === undefined || !URL.canParse(transport.publicUrl)) return false;
+  const { protocol, host } = new URL(transport.publicUrl);
+  return protocol === 'https:' && headers.host?.toLowerCase() === host;
 }
 
 /**
- * Whether the request reached the user's side of a trusted proxy over HTTPS. The server
- * itself speaks plain HTTP, so without a proxy it is trusted to speak for, the answer is no.
+ * Whether the request reached the user's side over HTTPS. The server itself speaks plain
+ * HTTP, so it is told: by a proxy it is trusted to speak for (`X-Forwarded-Proto`), or by
+ * the configuration, which says that the public address is an `https://` one. A request
+ * addressed to that address came through whatever ends TLS in front of the server, whether
+ * or not that passes a header on. The name is the `Host` of the request, which is not
+ * proof of anything, and need not be: answering as for HTTPS only ever makes the server
+ * stricter. Its cookies are then `Secure` and carry the `__Host-` prefix, which a browser
+ * that did come over plain HTTP refuses to keep, and only a page of the `https://` origin
+ * counts as its own.
  */
 export function viaHttps(headers: IncomingHttpHeaders, transport: Transport): boolean {
-  return transport.trustProxy === true && headers['x-forwarded-proto'] === 'https';
+  return (
+    (transport.trustProxy === true && headers['x-forwarded-proto'] === 'https') ||
+    atHttpsPublicUrl(headers, transport)
+  );
 }
 
 /** Whether cookies set in answer to this request are `Secure`, and so carry the prefix. */

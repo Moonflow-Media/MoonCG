@@ -701,6 +701,7 @@ describe('configuration', () => {
   it('has no way to allow file URLs for Git', () => {
     expect(() => load(['--allow-file-git-urls'])).toThrow();
     const config = load([], { MOONCG_ALLOW_FILE_GIT_URLS: '1', MOONCG_GIT_ALLOW_FILE: '1' });
-    expect(Object.keys(config).filter((key) => /git|url/i.test(key))).toEqual([]);
+    // `publicUrl` is the address of the server itself and has nothing to do with Git.
+    expect(Object.keys(config).filter((key) => /git|url/i.test(key))).toEqual(['publicUrl']);
   });
 });

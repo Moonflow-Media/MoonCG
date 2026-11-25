@@ -1,6 +1,6 @@
 {
   "name": "@mooncg/sdk",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "description": "The MoonCG SDK for bundle authors.",
   "type": "module",
@@ -24,6 +24,10 @@
     "./react": {
       "types": "./dist/react/index.d.ts",
       "default": "./dist/react/index.js"
+    },
+    "./module": {
+      "types": "./dist/module/index.d.ts",
+      "default": "./dist/module/index.js"
     },
     "./browser": "./dist/browser/mooncg.js"
   },

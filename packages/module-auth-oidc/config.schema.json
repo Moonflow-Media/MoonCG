@@ -1,0 +1,95 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "oidc": {
+      "type": "object",
+      "title": "OpenID Connect",
+      "description": "Any provider that speaks OpenID Connect, such as Keycloak, Authentik, Entra ID, Google or Okta. Register the redirect address <public address>/auth/oidc/callback with it.",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "title": "Enabled", "default": false },
+        "name": {
+          "type": "string",
+          "title": "Name on the button",
+          "default": "Single sign-on",
+          "maxLength": 60
+        },
+        "issuer": {
+          "type": "string",
+          "title": "Issuer",
+          "description": "The https:// address of the provider, exactly as it states it itself. Its description is read from <issuer>/.well-known/openid-configuration.",
+          "maxLength": 500
+        },
+        "clientId": { "type": "string", "title": "Client ID", "maxLength": 500 },
+        "clientSecret": {
+          "type": "string",
+          "title": "Client secret",
+          "x-secret": true,
+          "maxLength": 2000
+        },
+        "scopes": {
+          "type": "array",
+          "title": "Scopes",
+          "description": "openid is always asked for. profile adds a name for new users.",
+          "items": { "type": "string", "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E]+$" },
+          "default": ["openid", "profile"],
+          "maxItems": 20
+        },
+        "allowSignup": {
+          "type": "boolean",
+          "title": "Create a user for an account nobody has linked",
+          "description": "Off: such an account is refused until an administrator links it. On: it gets a new user without any role.",
+          "default": false
+        }
+      }
+    },
+    "twitch": {
+      "type": "object",
+      "title": "Twitch",
+      "description": "Register an application at dev.twitch.tv/console with the redirect address <public address>/auth/twitch/callback.",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "title": "Enabled", "default": false },
+        "clientId": { "type": "string", "title": "Client ID", "maxLength": 500 },
+        "clientSecret": {
+          "type": "string",
+          "title": "Client secret",
+          "x-secret": true,
+          "maxLength": 2000
+        },
+        "allowSignup": {
+          "type": "boolean",
+          "title": "Create a user for an account nobody has linked",
+          "description": "Off: such an account is refused until an administrator links it. On: every Twitch account gets a new user without any role.",
+          "default": false
+        }
+      }
+    },
+    "discord": {
+      "type": "object",
+      "title": "Discord",
+      "description": "Register an application at discord.com/developers/applications with the redirect address <public address>/auth/discord/callback.",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "title": "Enabled", "default": false },
+        "clientId": { "type": "string", "title": "Client ID", "maxLength": 500 },
+        "clientSecret": {
+          "type": "string",
+          "title": "Client secret",
+          "x-secret": true,
+          "maxLength": 2000
+        },
+        "allowSignup": {
+          "type": "boolean",
+          "title": "Create a user for an account nobody has linked",
+          "description": "Off: such an account is refused until an administrator links it. On: every Discord account gets a new user without any role.",
+          "default": false
+        }
+      }
+    }
+  }
+}

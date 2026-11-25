@@ -130,8 +130,20 @@ describe.each(Object.entries(stores))('the %s auth store', (_name, open) => {
       subject: 'u1',
       userId: 'u1',
       secret: 'hash-2',
+      realm: null,
     });
     expect(identities.get('local', 'u2')).toBeUndefined();
+  });
+
+  it('keeps the realm an external identity is bound to, and replaces it with the identity', async () => {
+    const { users, identities } = await open();
+    users.create(user('u1', 'ada'));
+    const link = { provider: 'oidc', subject: 's1', userId: 'u1', secret: null };
+    identities.put({ ...link, realm: 'https://id.example' });
+    expect(identities.get('oidc', 's1')?.realm).toBe('https://id.example');
+    expect(identities.listExcept('local')).toEqual([{ ...link, realm: 'https://id.example' }]);
+    identities.put(link);
+    expect(identities.get('oidc', 's1')?.realm).toBeNull();
   });
 
   it('creates and deletes roles, and grants and revokes permissions', async () => {

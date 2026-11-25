@@ -1436,3 +1436,23 @@ label.upload.primary:has(input:focus-visible) {
     overflow-y: visible;
   }
 }
+
+/* ---------------------------------------------- Modules, external accounts */
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-left: auto;
+}
+/* The accounts a user can sign in with, below the rest of the row. */
+.identities {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-basis: 100%;
+  font-size: var(--font-size-sm);
+}
+.identity code {
+  overflow-wrap: anywhere;
+}

@@ -7,9 +7,11 @@ import type {
   RouteHandlerMethod,
 } from 'fastify';
 import { isPrefKey, SESSION_MAX_MS, ThrottledError } from '../auth/auth.js';
+import { LOCAL_PROVIDER } from '../modules/providers.js';
 import type { TokenRecord } from '../storage/auth-store.js';
 import type { HttpContext } from './app.js';
 import { credentialsOf, SESSION_COOKIE, sessionCookie, TOKEN_COOKIE } from './identity.js';
+import { PROVIDERS_SLOT, providerLinks } from './login-page.js';
 
 /**
  * The largest body a route for accounts reads, 16 KiB. Everything these routes take is a few
@@ -123,7 +125,16 @@ export function registerAuthRoutes(app: FastifyInstance, context: HttpContext): 
   type WithName = FastifyRequest<{ Params: { name: string } }>;
   type WithGrant = FastifyRequest<{ Params: { name: string; permission: string } }>;
 
-  route('GET', '/login', (_request, reply) => context.sendPage(reply, 'login.html'));
+  // The page is the same file for everyone; the links to the external providers there are
+  // right now are put into it, as text that was escaped. Through a function: given as a
+  // text, a `$` in what is put in would be read as a pattern (`$&`, `` $` ``), and the name
+  // of a provider could copy parts of the page into itself.
+  route('GET', '/login', (_request, reply) =>
+    context.sendPage(reply, 'login.html', (page) => {
+      const links = providerLinks(context.providers);
+      return page.replace(PROVIDERS_SLOT, () => links);
+    }),
+  );
   route('GET', '/auth.js', (_request, reply) => context.sendPage(reply, 'auth.js'));
   // What the two pages are drawn with. They are for visitors who are not signed in, so these
   // files are too, each by its name: nothing else of the server's files is served this way.
@@ -157,7 +168,11 @@ export function registerAuthRoutes(app: FastifyInstance, context: HttpContext): 
     '/api/v1/auth/login',
     handle(undefined, async (request, reply) => {
       const body = jsonBody(request);
-      const result = await auth.login(
+      // Signing in with a password is a provider among the others: the one the server's
+      // own module `auth-local` registered.
+      const local = context.providers.password(LOCAL_PROVIDER);
+      if (!local) return fail(reply, 404, 'not_found', 'Not found');
+      const result = await local.login(
         text(body, 'username'),
         text(body, 'password'),
         context.remoteAddress(request),

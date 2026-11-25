@@ -67,7 +67,7 @@ A bundle is refused at the stage step, with the reason, when
   permissions, panels, dialogs or graphics, and so on),
 - it would make npm do more than fetch packages from the registry, and was not fetched as
   trusted (see [npm dependencies](#npm-dependencies)),
-- `engine.mooncg` does not allow this MoonCG (`engine.mooncg: needs MoonCG >=1.0.0, but this is 0.8.0`),
+- `engine.mooncg` does not allow this MoonCG (`engine.mooncg: needs MoonCG >=1.0.0, but this is 0.9.0`),
 - a bundle it depends on is not installed or has the wrong version, or it would close a
   dependency cycle,
 - a bundle of that name is installed already (install), or its name is not the name of the

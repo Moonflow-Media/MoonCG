@@ -133,7 +133,7 @@ describe('the shell', () => {
       ['Workspaces', ['/w/Replay', '/w/Show']],
       ['Show', ['/bundles', '/graphics', '/assets']],
       ['Admin', ['/admin/users', '/admin/roles', '/admin/tokens']],
-      ['System', ['/settings', '/logs']],
+      ['System', ['/settings', '/modules', '/logs']],
     ]);
     view.unmount();
   });

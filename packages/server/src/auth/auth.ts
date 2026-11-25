@@ -70,6 +70,29 @@ const ADMIN_ROLE = 'admin';
 const DEV_USER_NAMES = ['dev', 'dev-mode', 'mooncg-dev'];
 const LOCAL = 'local';
 const USER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** The id of a way to sign in: part of an address and of every stored link. */
+const PROVIDER_ID = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const MAX_PROVIDER_ID_LENGTH = 64;
+const MAX_SUBJECT_LENGTH = 255;
+const MAX_REALM_LENGTH = 255;
+/**
+ * How many users signing up with an external account creates, at most, within a time: 20 an
+ * hour, for all providers together. Whoever comes after that is refused like an account
+ * nobody linked, until the hour has passed. Counted in memory: a restart begins anew.
+ */
+export const SIGNUP_LIMIT = { max: 20, windowMs: 60 * MINUTE };
+// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are the point
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+
+/** Whether a text can be the id of an external provider. `local` is the one of passwords. */
+export function isExternalProviderId(id: unknown): id is string {
+  return (
+    typeof id === 'string' &&
+    id.length <= MAX_PROVIDER_ID_LENGTH &&
+    PROVIDER_ID.test(id) &&
+    id !== LOCAL
+  );
+}
 const ROLE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const PREF_KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 /** Whether a text can be the key of a preference. */
@@ -140,6 +163,57 @@ export interface Identity {
   readonly via: 'session' | 'token-session' | 'bearer' | 'dev' | 'none';
 }
 
+/** Who an external account is, as its provider told it. */
+export interface ExternalAccount {
+  readonly subject: string;
+  /** A name for a new user. Never used to find one. */
+  readonly name?: string | undefined;
+  /**
+   * Who vouches for the account, such as the issuer of an OpenID Connect provider. A link is
+   * made for one realm and signs in for that one only.
+   */
+  readonly realm?: string | undefined;
+}
+
+export type ExternalLoginResult =
+  | {
+      readonly ok: true;
+      readonly user: UserInfo;
+      readonly session: string;
+      /** Whether this sign-in created the user. */
+      readonly created: boolean;
+    }
+  | {
+      readonly ok: false;
+      /**
+       * `not_linked`: no user has this account, and signing up is off. `disabled`: the user
+       * it belongs to may not sign in. `setup`: the installation has no user yet.
+       */
+      readonly reason: 'not_linked' | 'disabled' | 'setup';
+      /** With `not_linked`: signing up is on, and as many users as it may create were created. */
+      readonly signupLimited?: true;
+    }
+  | {
+      readonly ok: false;
+      /**
+       * The account is linked, but for another realm than the provider reports now: the id
+       * of the provider stands for another issuer than when the link was made, where the
+       * same subject is somebody else.
+       */
+      readonly reason: 'realm';
+      /** The realm the link was made for. */
+      readonly linkedRealm: string;
+    };
+
+/** An external account a user can sign in with. */
+export interface LinkedIdentity {
+  readonly userId: string;
+  readonly provider: string;
+  readonly subject: string;
+  /** The realm the link is bound to. Left out while it is bound to none. */
+  readonly realm?: string;
+}
+
 export type LoginResult =
   | { readonly ok: true; readonly user: UserInfo; readonly session: string }
   | { readonly ok: false; readonly reason: 'credentials' }
@@ -176,6 +250,8 @@ export interface AuthOptions {
    * never sets this.
    */
   readonly devMode?: boolean;
+  /** How many users signing up may create within a time. Without it, `SIGNUP_LIMIT`. */
+  readonly signupLimit?: { readonly max: number; readonly windowMs: number } | undefined;
 }
 
 export interface Auth {
@@ -212,6 +288,33 @@ export interface Auth {
 
   login(name: string, password: string, address: string): Promise<LoginResult>;
   logout(session: string): void;
+  /**
+   * Signs in whoever a provider has identified. An account belongs to a user only through
+   * a link: by its subject at that provider, never by a name or an address. An account
+   * without a link is refused, or with `signup` gets a new user that holds no role. The
+   * session is the same kind a password opens. Nothing signs in or up while the installation
+   * has no user: that is what the setup is for. A link is bound to the realm the provider
+   * reports: one without a realm takes that of the first sign-in, and from then on the
+   * account is refused (`realm`) when the provider reports another or none. Signing up
+   * creates a bounded number of users per hour. Throws `bad_request` for a provider, a
+   * subject or a realm that cannot be one.
+   */
+  externalLogin(
+    provider: string,
+    account: ExternalAccount,
+    options?: { readonly signup?: boolean },
+  ): ExternalLoginResult;
+  /** Every link of a user to an external account. */
+  listIdentities(): LinkedIdentity[];
+  /**
+   * Lets a user sign in with an external account. An account that another user has is not
+   * moved (`conflict`), and the user of dev mode cannot be linked. With a `realm` the link
+   * is bound to it; without one it is bound by the first sign-in. Linking an account the
+   * user has already replaces the realm of the link.
+   */
+  linkIdentity(userId: string, provider: string, subject: string, realm?: string): void;
+  /** Takes a link away again and ends the sessions of the user. */
+  unlinkIdentity(userId: string, provider: string, subject: string): void;
   /**
    * Resolves with a fresh session; all earlier ones of the user are gone. The user's tokens
    * stay unless `revokeTokens` is set. Rejects with `ThrottledError` after too many wrong
@@ -320,6 +423,42 @@ function checkUserName(name: unknown): asserts name is string {
   }
 }
 
+function checkExternal(provider: unknown, subject: unknown): asserts subject is string {
+  if (!isExternalProviderId(provider)) {
+    throw bad('An external provider has an id of lowercase letters, digits and single dashes');
+  }
+  if (
+    typeof subject !== 'string' ||
+    subject === '' ||
+    subject.length > MAX_SUBJECT_LENGTH ||
+    CONTROL.test(subject)
+  ) {
+    throw bad(`A subject has 1 to ${MAX_SUBJECT_LENGTH} characters and no control characters`);
+  }
+}
+
+function checkRealm(realm: unknown): asserts realm is string | undefined {
+  if (realm === undefined) return;
+  if (
+    typeof realm !== 'string' ||
+    realm === '' ||
+    realm.length > MAX_REALM_LENGTH ||
+    CONTROL.test(realm)
+  ) {
+    throw bad(`A realm has 1 to ${MAX_REALM_LENGTH} characters and no control characters`);
+  }
+}
+
+/** What a provider calls an account, made into something a user can be called. */
+function userNameFrom(name: string | undefined, provider: string): string {
+  const cleaned = (name ?? '')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[._-]+/, '')
+    .slice(0, 48)
+    .replace(/[._-]+$/, '');
+  return cleaned === '' ? `${provider.slice(0, 40)}-user` : cleaned;
+}
+
 function checkGrant(permission: unknown): asserts permission is string {
   if (typeof permission !== 'string' || !isGrantPattern(permission)) {
     throw bad(
@@ -347,6 +486,9 @@ export function createAuth(options: AuthOptions): Auth {
   const byName = new LoginThrottle({ now, ...NAME_LIMIT });
   /** Wrong current passwords when changing the own password, per user. */
   const byUser = new LoginThrottle({ now, ...PAIR_LIMIT });
+  const signupLimit = options.signupLimit ?? SIGNUP_LIMIT;
+  /** When signing up created its latest users, oldest first. */
+  let signups: number[] = [];
   const hashing = createLimiter({ max: MAX_VERIFICATIONS, queue: MAX_WAITING_VERIFICATIONS });
   let setupCode: string | undefined;
   /** Set while the one accepted setup request creates its user. */
@@ -666,6 +808,100 @@ export function createAuth(options: AuthOptions): Auth {
 
     logout(session) {
       sessions.delete(hashSecret(session));
+      changed();
+    },
+
+    externalLogin(provider, account, { signup = false } = {}) {
+      const { subject, realm } = account;
+      checkExternal(provider, subject);
+      checkRealm(realm);
+      // Without a user the installation is not set up, and signing up here would end the
+      // setup with a user who holds nothing. The user of dev mode does not count as one.
+      if (users.count() === 0) return { ok: false, reason: 'setup' };
+      const outcome = store.transaction(() => {
+        const linked = identities.get(provider, subject);
+        if (linked) {
+          const user = users.get(linked.userId);
+          // The user of dev mode never signs in; nothing links it, and nothing stored does.
+          if (!user || user.disabled || user.devMode) return 'disabled' as const;
+          const bound = linked.realm ?? undefined;
+          // Bound to a realm, the link is that account there and nowhere else: under another
+          // issuer the same subject is another person. A provider that names no realm any
+          // more is not believed either.
+          if (bound !== undefined && bound !== realm) return { linkedRealm: bound };
+          // Not bound yet, as a link from before realms were kept or one an administrator
+          // typed in: this sign-in says what it is bound to.
+          if (bound === undefined && realm !== undefined) identities.put({ ...linked, realm });
+          return { user, created: false };
+        }
+        if (!signup) return 'not_linked' as const;
+        signups = signups.filter((at) => now() - at < signupLimit.windowMs);
+        if (signups.length >= signupLimit.max) return 'limited' as const;
+        // A new user, whatever the provider calls the account: a name that is taken gets a
+        // number, and is never taken for the user who has it.
+        const wanted = userNameFrom(account.name, provider);
+        let name = wanted;
+        for (let n = 2; users.byName(name); n++) {
+          name = n <= 50 ? `${wanted}-${n}` : `${wanted}-${randomBytes(4).toString('hex')}`;
+        }
+        const user: UserRecord = { id: randomUUID(), name, disabled: false, createdAt: now() };
+        users.create(user);
+        identities.put({ provider, subject, userId: user.id, secret: null, realm });
+        return { user, created: true };
+      });
+      if (outcome === 'limited') return { ok: false, reason: 'not_linked', signupLimited: true };
+      if (typeof outcome === 'string') return { ok: false, reason: outcome };
+      if ('linkedRealm' in outcome) {
+        return { ok: false, reason: 'realm', linkedRealm: outcome.linkedRealm };
+      }
+      if (outcome.created) signups.push(now());
+      if (outcome.created) changed();
+      sessions.deleteUserSessionsBefore({
+        lastSeen: now() - SESSION_IDLE_MS,
+        createdAt: now() - SESSION_MAX_MS,
+      });
+      return {
+        ok: true,
+        user: info(outcome.user),
+        session: openSession(outcome.user.id),
+        created: outcome.created,
+      };
+    },
+
+    listIdentities: () =>
+      identities.listExcept(LOCAL).map(({ userId, provider, subject, realm }) => ({
+        userId,
+        provider,
+        subject,
+        ...(realm == null ? {} : { realm }),
+      })),
+
+    linkIdentity(userId, provider, subject, realm) {
+      checkExternal(provider, subject);
+      checkRealm(realm);
+      store.transaction(() => {
+        const user = changeable(userId);
+        const holder = identities.get(provider, subject);
+        if (holder && holder.userId !== user.id) {
+          throw new MoonCGError(
+            'conflict',
+            'This account is linked to another user. Unlink it there first.',
+          );
+        }
+        identities.put({ provider, subject, userId: user.id, secret: null, realm });
+      });
+      changed();
+    },
+
+    unlinkIdentity(userId, provider, subject) {
+      checkExternal(provider, subject);
+      store.transaction(() => {
+        existing(userId);
+        if (identities.get(provider, subject)?.userId !== userId) throw missing('The link');
+        identities.delete(provider, subject);
+        // Whoever signed in through it is signed out, as after a new password.
+        sessions.deleteForUser(userId);
+      });
       changed();
     },
 

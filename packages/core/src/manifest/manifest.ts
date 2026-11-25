@@ -158,6 +158,8 @@ export const manifestSchema = z.strictObject({
       'Must be a relative path inside the bundle, outside dashboard/ and graphics/ (those are served to browsers)',
     )
     .optional(),
+  /** The file a module is loaded from. A bundle has `extension` instead. */
+  main: file.optional(),
   permissions: z
     .record(permissionName, shown(1000, 0))
     .refine(some.check, some.message)
@@ -216,13 +218,46 @@ export function parseManifest(input: unknown): ManifestResult {
     };
   }
   const { $schema: _ignored, ...manifest } = parsed.data;
-  const errors = [...duplicateIdErrors(manifest), ...permissionReferenceErrors(manifest)];
+  const errors = [
+    ...kindErrors(manifest),
+    ...duplicateIdErrors(manifest),
+    ...permissionReferenceErrors(manifest),
+  ];
   return errors.length > 0 ? { ok: false, errors } : { ok: true, manifest };
 }
 
 /** The JSON Schema for `mooncg.json`, for publishing and editor completion via `$schema`. */
 export function manifestJsonSchema(): Record<string, unknown> {
   return z.toJSONSchema(manifestSchema, { io: 'input' });
+}
+
+/** What only a bundle has, with what a module has in its place where there is something. */
+const BUNDLE_ONLY: readonly (readonly [keyof Manifest, string])[] = [
+  ['extension', '; a module has "main"'],
+  ['dependencies', ''],
+  ['permissions', '; a module defines permissions in its setup'],
+  ['defaultRoles', ''],
+  ['panels', ''],
+  ['dialogs', ''],
+  ['graphics', ''],
+  ['replicants', ''],
+  ['messages', ''],
+  ['assets', ''],
+  ['capabilities', ''],
+  ['dev', ''],
+];
+
+/** A module is not a bundle with another label: what belongs to the one is refused in the other. */
+function kindErrors(manifest: Manifest): ManifestError[] {
+  if (manifest.kind === 'bundle') {
+    return manifest.main === undefined
+      ? []
+      : [{ path: 'main', message: 'Only a module has a main file; a bundle has "extension"' }];
+  }
+  return BUNDLE_ONLY.filter(([key]) => {
+    const value = manifest[key];
+    return value !== undefined && (typeof value !== 'object' || Object.keys(value).length > 0);
+  }).map(([key, instead]) => ({ path: key, message: `Only a bundle has this${instead}` }));
 }
 
 function duplicateIdErrors(manifest: Manifest): ManifestError[] {

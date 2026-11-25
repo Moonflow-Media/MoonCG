@@ -12,18 +12,56 @@ interface User {
   readonly devMode?: boolean;
 }
 
-/** Users with their roles: create, enable and disable, assign roles, reset passwords, delete. */
+/** A link of a user to an account at an external provider. */
+interface Identity {
+  readonly userId: string;
+  readonly provider: string;
+  readonly subject: string;
+  /** Who vouches for the account, such as an issuer. Missing while the link is bound to none. */
+  readonly realm?: string;
+}
+
+/** An account that tried to sign in and belongs to no user. */
+interface Unlinked {
+  readonly provider: string;
+  readonly subject: string;
+  /** The realm the account came from, which a link to it is made for. */
+  readonly realm?: string;
+  readonly name?: string;
+  readonly at: string;
+}
+
+interface Identities {
+  readonly identities: readonly Identity[];
+  readonly providers: readonly { readonly id: string; readonly name: string }[];
+  readonly unlinked: readonly Unlinked[];
+}
+
+const NO_IDENTITIES: Identities = { identities: [], providers: [], unlinked: [] };
+
+/**
+ * Users with their roles: create, enable and disable, assign roles, reset passwords, delete,
+ * and say which external accounts each can sign in with.
+ */
 export const UsersView = defineComponent({
   name: 'UsersView',
   setup() {
     const users = ref<User[]>([]);
     const roles = ref<string[]>([]);
+    const external = ref<Identities>(NO_IDENTITIES);
+    /** The user chosen for each account that waits to be linked, by provider and subject. */
+    const chosenUser = ref<Record<string, string>>({});
     /** The roles ticked in the form for a new user. */
     const chosen = ref<string[]>([]);
     const { run, send, alert } = useActions(async () => {
       users.value = (await api.request<{ users: User[] }>('GET', '/api/v1/users')).users;
       const listed = await api.request<{ roles: { name: string }[] }>('GET', '/api/v1/roles');
       roles.value = listed.roles.map((role) => role.name);
+      // A server without modules has no external accounts, and no list of them.
+      const linked = await api
+        .request<Identities | undefined>('GET', '/api/v1/identities')
+        .catch(() => undefined);
+      external.value = linked ?? NO_IDENTITIES;
     });
     onMounted(() => run(async () => {}));
 
@@ -63,6 +101,164 @@ export const UsersView = defineComponent({
           ` ${role}`,
         ]),
       );
+
+    const providerName = (id: string) =>
+      external.value.providers.find((provider) => provider.id === id)?.name ?? id;
+    const link = (userId: string, provider: string, subject: string, realm?: string) =>
+      send('PUT', `/api/v1/users/${part(userId)}/identities/${part(provider)}`, {
+        subject,
+        ...(realm === undefined ? {} : { realm }),
+      });
+    /** Who vouches for an account. It decides whose account a subject is, so it is shown. */
+    const realmOf = (realm: string | undefined) =>
+      realm === undefined
+        ? null
+        : h(
+            'span',
+            {
+              class: 'muted',
+              'data-realm': '',
+              title: 'The realm of the account: who vouches for it, such as the issuer.',
+            },
+            realm,
+          );
+    const linkFrom = async (event: Event, user: User) => {
+      event.preventDefault();
+      const form = event.currentTarget as HTMLFormElement;
+      const subject = field(event, 'subject').trim();
+      if (await link(user.id, field(event, 'provider'), subject)) form.reset();
+    };
+    /** The accounts a user can sign in with, and a way to add one where there is a provider. */
+    const identities = (user: User) => {
+      const linked = external.value.identities.filter((identity) => identity.userId === user.id);
+      const { providers } = external.value;
+      if (linked.length === 0 && providers.length === 0) return null;
+      return h('div', { class: 'identities' }, [
+        ...linked.map(({ provider, subject, realm }) =>
+          h(
+            'span',
+            { key: `${provider}:${subject}`, class: 'identity', 'data-identity': provider },
+            [
+              `${providerName(provider)}: `,
+              h('code', subject),
+              ' ',
+              realmOf(realm),
+              realm === undefined ? null : ' ',
+              h(
+                'button',
+                {
+                  type: 'button',
+                  class: 'small ghost',
+                  'data-action': 'unlink',
+                  'aria-label': `Unlink the ${providerName(provider)} account ${subject} from ${user.name}`,
+                  onClick: () =>
+                    sure(
+                      `Unlink the ${providerName(provider)} account from "${user.name}"? They are signed out everywhere.`,
+                    ) &&
+                    send(
+                      'DELETE',
+                      `/api/v1/users/${part(user.id)}/identities/${part(provider)}/${part(subject)}`,
+                    ),
+                },
+                'Unlink',
+              ),
+            ],
+          ),
+        ),
+        providers.length === 0
+          ? null
+          : h(
+              'form',
+              {
+                class: 'inline',
+                'data-form': 'link',
+                onSubmit: (event: Event) => linkFrom(event, user),
+              },
+              [
+                h(
+                  'select',
+                  { name: 'provider', 'aria-label': `Provider of the account for ${user.name}` },
+                  providers.map(({ id, name }) => h('option', { key: id, value: id }, name)),
+                ),
+                h('input', {
+                  name: 'subject',
+                  required: true,
+                  autocomplete: 'off',
+                  placeholder: 'Account id at the provider',
+                  'aria-label': `Id of the account to link to ${user.name}`,
+                }),
+                h('button', { type: 'submit', class: 'small' }, 'Link account'),
+              ],
+            ),
+      ]);
+    };
+    /** The accounts that tried to sign in and belong to nobody: each can be given to a user. */
+    const unlinked = () => {
+      const attempts = external.value.unlinked;
+      if (attempts.length === 0) return null;
+      return h('section', { class: 'card', 'data-help': 'unlinked' }, [
+        h('div', { class: 'card-head' }, h('h2', 'Sign-in attempts without a user')),
+        h('div', { class: 'card-body' }, [
+          h(
+            'p',
+            { class: 'muted' },
+            'These accounts signed in at their provider and belong to no user here, or to one for another realm. An account is its provider and its id, and nothing else: the name is what the account calls itself, and anybody can pick any name there, also that of a user here. Link an account only when you know whose it is.',
+          ),
+          h(
+            'ul',
+            { class: 'rows' },
+            attempts.map(({ provider, subject, realm, name }) => {
+              const key = `${provider}:${subject}`;
+              return h('li', { key, 'data-unlinked': key }, [
+                h('strong', providerName(provider)),
+                h('code', subject),
+                realmOf(realm),
+                name === undefined
+                  ? null
+                  : h(
+                      'span',
+                      { class: 'muted', 'data-claimed-name': '' },
+                      `calls itself "${name}"`,
+                    ),
+                h(
+                  'select',
+                  {
+                    value: chosenUser.value[key] ?? '',
+                    'aria-label': `User to link the account ${subject} to`,
+                    onChange: (event: Event) => {
+                      chosenUser.value = {
+                        ...chosenUser.value,
+                        [key]: (event.target as HTMLSelectElement).value,
+                      };
+                    },
+                  },
+                  [
+                    h('option', { value: '' }, 'Link to…'),
+                    ...users.value
+                      .filter((user) => !user.devMode)
+                      .map((user) => h('option', { key: user.id, value: user.id }, user.name)),
+                  ],
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    class: 'small',
+                    'data-action': 'link',
+                    disabled: !chosenUser.value[key],
+                    onClick: () => {
+                      const userId = chosenUser.value[key];
+                      if (userId) void link(userId, provider, subject, realm);
+                    },
+                  },
+                  'Link',
+                ),
+              ]);
+            }),
+          ),
+        ]),
+      ]);
+    };
 
     const remove = (user: User, question: string) =>
       h(
@@ -154,45 +350,49 @@ export const UsersView = defineComponent({
                           h('button', { type: 'submit', class: 'small' }, 'Set password'),
                         ],
                       ),
+                      identities(user),
                     ]),
               ),
             ),
           ),
-          h('section', { class: 'card' }, [
-            h('div', { class: 'card-head' }, h('h2', 'New user')),
-            h(
-              'div',
-              { class: 'card-body' },
-              h('form', { class: 'stack', 'data-form': 'create', onSubmit: create }, [
-                h('label', [
-                  'Name ',
-                  h('input', { name: 'name', required: true, autocomplete: 'off' }),
-                ]),
-                h('label', [
-                  'Password (at least 8 characters) ',
-                  h('input', {
-                    name: 'password',
-                    type: 'password',
-                    autocomplete: 'new-password',
-                    minlength: 8,
-                    required: true,
-                  }),
-                ]),
-                h(
-                  'span',
-                  { class: 'checks' },
-                  roleBoxes(
-                    (role) => chosen.value.includes(role),
-                    (role, on) => {
-                      chosen.value = on
-                        ? [...chosen.value, role]
-                        : chosen.value.filter((name) => name !== role);
-                    },
+          h('div', { class: 'column' }, [
+            unlinked(),
+            h('section', { class: 'card' }, [
+              h('div', { class: 'card-head' }, h('h2', 'New user')),
+              h(
+                'div',
+                { class: 'card-body' },
+                h('form', { class: 'stack', 'data-form': 'create', onSubmit: create }, [
+                  h('label', [
+                    'Name ',
+                    h('input', { name: 'name', required: true, autocomplete: 'off' }),
+                  ]),
+                  h('label', [
+                    'Password (at least 8 characters) ',
+                    h('input', {
+                      name: 'password',
+                      type: 'password',
+                      autocomplete: 'new-password',
+                      minlength: 8,
+                      required: true,
+                    }),
+                  ]),
+                  h(
+                    'span',
+                    { class: 'checks' },
+                    roleBoxes(
+                      (role) => chosen.value.includes(role),
+                      (role, on) => {
+                        chosen.value = on
+                          ? [...chosen.value, role]
+                          : chosen.value.filter((name) => name !== role);
+                      },
+                    ),
                   ),
-                ),
-                h('button', { type: 'submit', class: 'primary' }, 'Create user'),
-              ]),
-            ),
+                  h('button', { type: 'submit', class: 'primary' }, 'Create user'),
+                ]),
+              ),
+            ]),
           ]),
         ]),
       ]);

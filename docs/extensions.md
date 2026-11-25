@@ -209,8 +209,8 @@ await ctx.http.post(
   bytes, anything else as JSON; `status` defaults to 200.
 - A caller needs the manifest permission named in `permission`; without one, any permission of
   the bundle. The caller is checked before the handler runs, with a session cookie or an API
-  token (`Authorization: Bearer mcg_…`). The handler does not see the `Authorization` and
-  `Cookie` headers.
+  token (`Authorization: Bearer mcg_…`). The handler does not see the `Authorization`,
+  `Proxy-Authorization` and `Cookie` headers.
 - A request that changes something and comes with a session cookie must carry JSON or the
   header `X-MoonCG-CSRF`; see [permissions.md](permissions.md#request-forgery).
 - A handler that returns nothing answers an empty 200. Anything that is not such an object, a

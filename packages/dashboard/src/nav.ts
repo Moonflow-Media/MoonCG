@@ -65,6 +65,7 @@ const PAGES: readonly Page[] = [
   { to: '/admin/roles', label: 'Roles', group: 'Admin', needs: 'system:users.manage' },
   { to: '/admin/tokens', label: 'Tokens', group: 'Admin', needs: 'system:tokens.manage' },
   { to: '/settings', label: 'Settings', group: 'System', needs: 'system:settings.manage' },
+  { to: '/modules', label: 'Modules', group: 'System', needs: 'system:modules.manage' },
   {
     to: '/logs',
     label: 'Logs',

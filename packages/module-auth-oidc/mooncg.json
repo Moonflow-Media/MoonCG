@@ -1,0 +1,10 @@
+{
+  "manifest": 1,
+  "kind": "module",
+  "name": "auth-oidc",
+  "version": "0.8.0",
+  "title": "External logins (OpenID Connect, Twitch, Discord)",
+  "engine": { "mooncg": ">=0.8.0" },
+  "main": "dist/index.js",
+  "config": { "schema": "config.schema.json" }
+}

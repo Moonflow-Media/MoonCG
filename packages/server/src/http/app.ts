@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs';
-import { readFile, realpath, stat } from 'node:fs/promises';
-import { extname, join, relative, sep } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { extname, join } from 'node:path';
 import {
   authorize,
   BUNDLE_NAME_PATTERN,
@@ -31,6 +31,8 @@ import type { GraphicInstances } from '../graphics/instances.js';
 import type { BundleInstaller } from '../install/installer.js';
 import type { FetchableSource } from '../install/sources.js';
 import type { LogBuffer } from '../kernel/logger.js';
+import { localPasswordProvider } from '../modules/auth-local.js';
+import { ProviderRegistry } from '../modules/providers.js';
 import { jsonBody, registerAuthRoutes } from './auth-routes.js';
 import {
   createIdentify,
@@ -44,11 +46,21 @@ import {
   sessionCookie,
   TOKEN_COOKIE,
   TOKEN_PARAMETER,
+  type Transport,
   viaHttps,
 } from './identity.js';
+import { type ModuleHttp, registerModuleRoutes } from './module-routes.js';
 import { devOrigins, devServerUrl, originAllowed } from './origin.js';
+import {
+  ASSET_CSP,
+  CONNECTION_HEADERS,
+  CREDENTIAL_HEADERS,
+  canonicalFile,
+  flatten,
+} from './shared.js';
 
 export { type ResolvePrincipal, resolveLocalAdmin } from './identity.js';
+export { ASSET_CSP } from './shared.js';
 
 /** The largest request body a bundle route accepts, unless configured otherwise. */
 export const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
@@ -73,21 +85,6 @@ export const BUILT_IN_CSP = [
   "base-uri 'none'",
   "form-action 'self'",
   "frame-ancestors 'none'",
-].join('; ');
-
-/**
- * What an uploaded file is served with. `sandbox` makes whatever a browser opens from it a
- * document without an origin and without scripts, so an uploaded page or SVG cannot act as
- * this server towards whoever looks at it. Used as an image, a font or a clip by a page of a
- * bundle, the file works as before: the policy binds the file as a document, not its users.
- */
-export const ASSET_CSP = [
-  'sandbox',
-  "default-src 'none'",
-  "img-src 'self' data:",
-  "media-src 'self'",
-  "style-src 'unsafe-inline'",
-  "frame-ancestors 'self'",
 ].join('; ');
 
 /**
@@ -162,6 +159,12 @@ export interface AppOptions {
   /** Believes `X-Forwarded-Proto` and `X-Forwarded-For`. Only behind a reverse proxy. */
   readonly trustProxy?: boolean | undefined;
   /**
+   * The origin people reach the server at. When it is an `https://` one, requests addressed
+   * to it are answered as requests over HTTPS: see `viaHttps`. Without it, what `modules`
+   * names as the public address counts.
+   */
+  readonly publicUrl?: string | undefined;
+  /**
    * Dev mode: the `dev.url` of a manifest is honoured. Requests for that bundle's pages are
    * sent on to its development server, whose origin may then be framed by the dashboard and
    * send requests. Nothing of that exists without it.
@@ -171,6 +174,16 @@ export interface AppOptions {
   readonly devLogin?: (() => RequestIdentity) | undefined;
   /** The "On Air" lock. Without it the API for it answers 404. */
   readonly onAir?: Pick<OnAirLock, 'state' | 'set' | 'reason'> | undefined;
+  /**
+   * The ways to sign in. Without it there is the local login and nothing else: the registry
+   * the server builds also has what modules registered.
+   */
+  readonly providers?: ProviderRegistry | undefined;
+  /**
+   * Modules and external logins. Without it their routes and their API answer 404. Needs
+   * `auth`.
+   */
+  readonly modules?: ModuleHttp | undefined;
 }
 
 const SERVED_AREAS = new Set(['dashboard', 'graphics']);
@@ -185,6 +198,7 @@ export const DASHBOARD_ROUTES = [
   '/admin/roles',
   '/admin/tokens',
   '/settings',
+  '/modules',
   '/logs',
 ] as const;
 const LIFECYCLE_ACTIONS = ['enable', 'disable', 'reload'] as const;
@@ -212,22 +226,6 @@ function fetchableSource(value: unknown): FetchableSource {
     '"source" must be { type: "git", url, ref? }, { type: "path", path } or { type: "zip", path }',
   );
 }
-
-/** Headers a bundle route may not set: they describe the connection, which the server owns. */
-const CONNECTION_HEADERS = new Set([
-  'connection',
-  'content-length',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailer',
-  'transfer-encoding',
-  'upgrade',
-]);
-
-/** Request headers a bundle route never sees: they are the caller's credentials. */
-const CREDENTIAL_HEADERS = new Set(['authorization', 'cookie']);
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
@@ -308,8 +306,17 @@ export interface HttpContext {
   secure(request: FastifyRequest): boolean;
   /** The address a login attempt is counted against. */
   remoteAddress(request: FastifyRequest): string;
-  /** Sends one of the server's own files; a page goes out with the built-in policy. */
-  sendPage(reply: FastifyReply, name: string): Promise<FastifyReply>;
+  /**
+   * Sends one of the server's own files; a page goes out with the built-in policy. `fill`
+   * gets the content and answers what is sent in its place.
+   */
+  sendPage(
+    reply: FastifyReply,
+    name: string,
+    fill?: (content: string) => string,
+  ): Promise<FastifyReply>;
+  /** The ways to sign in. */
+  readonly providers: ProviderRegistry;
 }
 
 /** Builds the HTTP application. Every route checks `authorize()` before it answers. */
@@ -319,7 +326,13 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     typeof options.bundles === 'function' ? options.bundles() : options.bundles;
   const running = (name: string) =>
     bundles().find((candidate) => candidate.name === name && candidate.state === 'running');
-  const identify: Identify = createIdentify(options);
+  /** How the server is reached: one answer for cookies, for origins and for who a request is. */
+  const transport: Transport = {
+    secureCookies: options.secureCookies,
+    trustProxy: options.trustProxy,
+    publicUrl: options.publicUrl ?? options.modules?.publicUrl,
+  };
+  const identify: Identify = createIdentify({ ...options, ...transport });
   const { dashboardDir, onAir } = options;
   /** The origins besides the server's own that pages may come from, as of now. */
   const allowedOrigins = () => {
@@ -342,7 +355,8 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   // No message leaves the server with an API token or a secret of a bundle's configuration
   // in it, whatever put it there.
   const fail = (reply: FastifyReply, status: number, code: string, message: string) => {
-    const safe = redactSecrets(options.config?.scrub(message) ?? message);
+    const scrubbed = options.modules?.configs.scrub(message) ?? message;
+    const safe = redactSecrets(options.config?.scrub(scrubbed) ?? scrubbed);
     return reply.code(status).send({ error: { code, message: safe } });
   };
   /** Answers for an error the HTTP layer itself raised, such as a body that is too large. */
@@ -398,7 +412,7 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     }
     return fail(reply, 500, 'internal', 'The request could not be completed');
   };
-  const secure = (request: FastifyRequest) => secureCookies(request.headers, options);
+  const secure = (request: FastifyRequest) => secureCookies(request.headers, transport);
   /** One of the server's own pages: never framed, and loading only what this server serves. */
   const builtIn = (reply: FastifyReply, policy = BUILT_IN_CSP) =>
     reply
@@ -416,8 +430,12 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
       ? BUILT_IN_CSP
       : `${BUILT_IN_CSP}; frame-src 'self' ${origins.join(' ')}`;
   };
-  const sendPage = async (reply: FastifyReply, name: string) => {
-    const content = await readFile(publicFile(name), 'utf8');
+  const sendPage = async (
+    reply: FastifyReply,
+    name: string,
+    fill: (content: string) => string = (content) => content,
+  ) => {
+    const content = fill(await readFile(publicFile(name), 'utf8'));
     return name.endsWith('.html')
       ? builtIn(reply).send(content)
       : reply.type(CONTENT_TYPES[extname(name)] ?? 'text/plain').send(content);
@@ -472,7 +490,7 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   // A page of another site must not change anything here through a visitor's browser.
   app.addHook('onRequest', async (request, reply) => {
     if (request.method === 'GET' || request.method === 'HEAD') return;
-    const https = viaHttps(request.headers, options);
+    const https = viaHttps(request.headers, transport);
     if (!originAllowed(request.headers, allowedOrigins(), https)) {
       return fail(reply, 403, 'forbidden', 'Requests from this origin are not allowed');
     }
@@ -1095,8 +1113,16 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   });
 
   if (auth) {
-    registerAuthRoutes(app, {
+    // The local login is a provider like any other. Whoever builds the app without a
+    // registry of their own, as tests do, gets one with just that.
+    let { providers } = options;
+    if (!providers) {
+      providers = new ProviderRegistry();
+      providers.addPassword(localPasswordProvider(auth));
+    }
+    const context: HttpContext = {
       auth,
+      providers,
       identityOf,
       can,
       deny,
@@ -1111,7 +1137,9 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         return (last?.trim() || (request.raw.socket.remoteAddress ?? 'unknown')).slice(0, 64);
       },
       sendPage,
-    });
+    };
+    registerAuthRoutes(app, context);
+    if (options.modules) registerModuleRoutes(app, context, options.modules);
   }
 
   /** Dispatches to the routes bundle extensions registered. They come and go at run time. */
@@ -1258,39 +1286,9 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   return app;
 }
 
-/** Keeps the string values of a query or header map; of a repeated one, the first. */
-function flatten(
-  values: Readonly<Record<string, unknown>>,
-  without: ReadonlySet<string> = new Set(),
-): Record<string, string> {
-  const flat: Record<string, string> = {};
-  for (const [name, value] of Object.entries(values)) {
-    const first = Array.isArray(value) ? value[0] : value;
-    if (typeof first === 'string' && !without.has(name)) flat[name] = first;
-  }
-  return flat;
-}
-
 /** The URL of a bundle file, with every path segment percent-encoded. */
 function fileUrl(bundle: string, file: string): string {
   return `/b/${encodeURIComponent(bundle)}/${file.split('/').map(encodeURIComponent).join('/')}`;
-}
-
-/**
- * Resolves a requested file to its real location on disk. Answers `undefined` unless that is a
- * file whose real path, relative to the real area directory, is exactly the requested one.
- * This rejects names that differ only in case on a case-insensitive file system, and anything
- * reached through a symlink or junction, including one that points outside the area.
- */
-async function canonicalFile(areaDir: string, requested: string): Promise<string | undefined> {
-  try {
-    const root = await realpath(areaDir);
-    const real = await realpath(join(root, requested));
-    if (relative(root, real).split(sep).join('/') !== requested) return undefined;
-    return (await stat(real)).isFile() ? real : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 /**

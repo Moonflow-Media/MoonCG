@@ -5,7 +5,7 @@ A **bundle** brings dashboard panels, graphics for OBS or vMix, and an optional 
 extension. Bundles share state through **replicants**: values the server owns and syncs to every
 panel and graphic over a WebSocket.
 
-This repository has finished milestones 1 to 7 of its plan. It loads bundles from a folder, serves their
+This repository has finished milestones 1 to 8 of its plan. It loads bundles from a folder, serves their
 panels and graphics, syncs replicants and messages, runs each bundle's extension in its own
 worker thread, can enable, disable and reload bundles while it runs, and has users, roles,
 permissions and API tokens. Its dashboard has workspaces, pages for bundles, graphics, users,
@@ -15,7 +15,10 @@ runs, from a Git repository, a ZIP archive or a folder, with a rollback when a n
 not start: see [docs/bundles.md](docs/bundles.md). For writing bundles there is `mooncg dev`,
 which watches the bundle folders and reloads what changes, templates for a new installation
 and a new bundle, and an **On Air** lock that keeps all of that away from a running show: see
-[docs/development.md](docs/development.md).
+[docs/development.md](docs/development.md). **Modules** extend the server itself, with ways to
+sign in, routes and permissions, and one is shipped: sign-in with OpenID Connect, Twitch or
+Discord, with accounts linked to users by an administrator. See
+[docs/modules.md](docs/modules.md) and [docs/external-logins.md](docs/external-logins.md).
 
 ## Run the example
 
@@ -81,6 +84,8 @@ never sit behind a proxy or a tunnel, and is never for a show. [docs/development
 | `--host`                           | `MOONCG_HOST`                           | `127.0.0.1` | Address to listen on                               |
 | `--bundles-dir`                    | `MOONCG_BUNDLES_DIR`                    | `bundles`   | Folder with one subfolder per bundle               |
 | `--data-dir`                       | `MOONCG_DATA_DIR`                       | `data`      | Folder for what the server stores                  |
+| `--modules-dir`                    | `MOONCG_MODULES_DIR`                    | `modules`   | Folder with one subfolder per module               |
+| `--public-url`                     | `MOONCG_PUBLIC_URL`                     | none        | Origin people reach the server at; external logins |
 | `--allowed-origin`                 | `MOONCG_ALLOWED_ORIGINS`                | none        | Extra origin whose pages may open the WebSocket    |
 | `--extension-memory-mb`            | `MOONCG_EXTENSION_MEMORY_MB`            | `256`       | Heap each bundle extension may use, in MiB         |
 | `--max-body-bytes`                 | `MOONCG_MAX_BODY_BYTES`                 | `1048576`   | Largest request body a bundle HTTP route accepts   |
@@ -107,7 +112,8 @@ The switches are on in the environment as `1` or `true`, and each can be turned 
 command line with `--no-` in front, such as `--no-watch`. For `watch`, the flag wins over
 `MOONCG_WATCH` (where `0` turns it off), which wins over the file.
 
-`port`, `host`, `bundlesDir`, `dataDir`, `allowedOrigins` and `watch` can also be set in
+`port`, `host`, `bundlesDir`, `dataDir`, `modulesDir`, `publicUrl`, `allowedOrigins` and `watch`
+can also be set in
 `mooncg.config.json` in the directory the server is started in; `mooncg init` writes one.
 Flags and environment variables win over the file, and relative paths in it start at the
 file's own folder. See [docs/development.md](docs/development.md#the-configuration-file).
@@ -129,9 +135,11 @@ The server listens as soon as it knows its bundles; their extensions start in th
 and a bundle shows as `enabling` until its extension has started.
 
 The data directory is created on first start. It holds `mooncg.db`, a SQLite database with the
-persistent replicants, the list of disabled bundles, and the users, roles, tokens and sessions.
+persistent replicants, the list of disabled bundles and of enabled modules, and the users with
+their links to external accounts, roles, tokens and sessions.
 Deleting it resets all of that, and the next start offers the setup again. Beside the
-database it holds `config/` and `assets/` of the bundles, `staging/` for bundles that are being
+database it holds `config/` of the bundles and, in `config/modules/`, of the modules, `assets/`
+of the bundles, `staging/` for bundles that are being
 installed, `backups/` with the earlier versions of updated and removed bundles, and
 `bundle-sources.json`, which remembers where each bundle was installed from. `data/` is
 git-ignored.
@@ -161,15 +169,16 @@ TypeScript directly, so rebuild after changing sources. Tests need no build.
 
 ## Repository layout
 
-| Path                  | Content                                                                                                                                                                                                       |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/core`       | Pure logic without IO: manifest parser, replicant engine, message bus, route table, bundle state machine, wire protocol, permissions, session handler                                                         |
-| `packages/server`     | Config, logger and lifecycle, bundle manager and installer, schema validation, storage, accounts, worker-thread extension host, HTTP and WebSocket transport                                                  |
-| `packages/sdk`        | What bundle authors use: `@mooncg/sdk/client` (browser and Node client), `/extension` (extension context), `/vue` and `/react` adapters                                                                       |
-| `docs/`               | `permissions.md` (accounts, roles, tokens, setup), `bundles.md` (installing, updating, removing), `development.md` (live reload, dev mode, On Air), `extensions.md`, `dashboard.md` and `folder-structure.md` |
-| `packages/cli`        | The `mooncg` command line: `mooncg init`, `start`, `dev`, `types`, `user`, `token` and `bundle`, with the bundle templates                                                                                    |
-| `packages/dashboard`  | The dashboard: a Vue application the server serves at `/`; see [docs/dashboard.md](docs/dashboard.md)                                                                                                         |
-| `examples/scoreboard` | A reference bundle with a panel, a dialog, a graphic, an extension, an asset category and a config schema with a secret                                                                                       |
+| Path                        | Content                                                                                                                                                                                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/core`             | Pure logic without IO: manifest parser, replicant engine, message bus, route table, bundle state machine, wire protocol, permissions, session handler                                                                                             |
+| `packages/server`           | Config, logger and lifecycle, bundle manager and installer, schema validation, storage, accounts, worker-thread extension host, HTTP and WebSocket transport                                                                                      |
+| `packages/sdk`              | What bundle and module authors use: `@mooncg/sdk/client` (browser and Node client), `/extension` (extension context), `/module` (module context), `/vue` and `/react` adapters                                                                    |
+| `packages/module-auth-oidc` | The module `auth-oidc`, shipped with the server: sign-in with OpenID Connect, Twitch and Discord; see [docs/external-logins.md](docs/external-logins.md)                                                                                          |
+| `docs/`                     | `permissions.md` (accounts, roles, tokens, setup), `bundles.md` (installing, updating, removing), `development.md` (live reload, dev mode, On Air), `modules.md`, `external-logins.md`, `extensions.md`, `dashboard.md` and `folder-structure.md` |
+| `packages/cli`              | The `mooncg` command line: `mooncg init`, `start`, `dev`, `types`, `user`, `token`, `bundle` and `module`, with the bundle templates                                                                                                              |
+| `packages/dashboard`        | The dashboard: a Vue application the server serves at `/`; see [docs/dashboard.md](docs/dashboard.md)                                                                                                                                             |
+| `examples/scoreboard`       | A reference bundle with a panel, a dialog, a graphic, an extension, an asset category and a config schema with a secret                                                                                                                           |
 
 ## Writing a bundle
 

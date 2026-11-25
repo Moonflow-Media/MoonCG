@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import {
+  isLoopbackAuthority,
   isLoopbackHost,
   MessageBus,
   type Policy,
@@ -41,6 +42,10 @@ import {
   recordingLogger,
 } from './kernel/logger.js';
 import { MOONCG_VERSION } from './kernel/version.js';
+import { authLocalModule } from './modules/auth-local.js';
+import { ExternalLogins } from './modules/external-login.js';
+import { type BuiltinModule, ModuleManager } from './modules/manager.js';
+import { ProviderRegistry } from './modules/providers.js';
 import { createPersistence } from './replicants/persistence.js';
 import { openSqliteStorage, type Storage } from './storage/replicant-store.js';
 
@@ -90,6 +95,13 @@ export interface ServerOptions {
   readonly stagingTtlMs?: number;
   /** Watches a bundle folder. Defaults to chokidar; tests put their own in its place. */
   readonly createWatcher?: CreateFileWatcher;
+  /**
+   * The modules MoonCG ships, each as the folder its manifest lies in. They are listed
+   * beside those of the modules folder and, like those, run only once enabled.
+   */
+  readonly builtinModules?: readonly BuiltinModule[];
+  /** How long the setup of a module may take. Tests lower it. */
+  readonly moduleSetupTimeoutMs?: number;
 }
 
 export interface ServerStats {
@@ -107,6 +119,10 @@ export interface ServerStats {
 export interface RunningServer {
   readonly port: number;
   readonly url: string;
+  /** The configuration the server was started with. */
+  readonly config: ServerConfig;
+  /** The modules: those shipped with the server and those of the modules folder. */
+  readonly modules: ModuleManager;
   /** The bundles as they are now. */
   readonly bundles: readonly BundleRecord[];
   readonly manager: BundleManager;
@@ -152,6 +168,24 @@ export function bindingWarning(
   );
 }
 
+/**
+ * What to say about a public address that is plain `http://` and not this machine. It is
+ * allowed, because installations on a LAN without HTTPS exist, and it should be known what
+ * it means for external logins. `undefined` for `https://`, for loopback and without one.
+ */
+export function publicUrlWarning(config: Pick<ServerConfig, 'publicUrl'>): string | undefined {
+  const { publicUrl } = config;
+  if (publicUrl === undefined || !URL.canParse(publicUrl)) return undefined;
+  const { protocol, host } = new URL(publicUrl);
+  if (protocol !== 'http:' || isLoopbackAuthority(host)) return undefined;
+  return (
+    `The public address ${publicUrl} is plain HTTP: the codes of external sign-ins and the ` +
+    'session cookies travel unencrypted, for everyone on the way to read, and most providers ' +
+    'refuse a redirect address that is not https://. Use it on a trusted network only, or put ' +
+    'an HTTPS reverse proxy in front and set the public address to its https:// address.'
+  );
+}
+
 /** Loads the bundles and starts serving. Failed bundles are reported, not fatal. */
 export async function startServer(
   config: ServerConfig,
@@ -169,7 +203,15 @@ export async function startServer(
     dataDir: config.dataDir,
     warn: (message) => warn(message),
   });
-  const logger = scrubbingLogger(recordingLogger(options.logger ?? createLogger(), logs), configs);
+  // The modules keep their configuration the same way, in a folder of their own.
+  const moduleConfigs = new BundleConfigs({
+    dataDir: config.dataDir,
+    kind: 'module',
+    warn: (message) => warn(message),
+  });
+  const logger = scrubbingLogger(recordingLogger(options.logger ?? createLogger(), logs), {
+    scrub: (text) => moduleConfigs.scrub(configs.scrub(text)),
+  });
   warn = (message) => logger.warn(message);
   const lifecycle = createLifecycle(logger);
   const registry = new ReplicantRegistry({
@@ -228,6 +270,7 @@ export async function startServer(
       policy: options.policy,
       secureCookies: config.secureCookies,
       trustProxy: config.trustProxy,
+      publicUrl: config.publicUrl,
       devLogin,
     });
     const onAir = new OnAirLock({ registry, store: storage.settings, logger });
@@ -379,6 +422,26 @@ export async function startServer(
       logger.error(`Starting the bundles failed: ${errorMessage(error)}`);
     });
 
+    // Modules: trusted code inside this process. They are loaded before the server listens,
+    // so that every way to sign in is there with the first request. One that fails to load
+    // or to start shows as failed and stops nothing else.
+    const providers = new ProviderRegistry();
+    const externalLogins = new ExternalLogins({ auth, providers, logger });
+    const modules = new ModuleManager({
+      modulesDir: config.modulesDir,
+      builtin: options.builtinModules,
+      // The local login is a module of the server itself, registered like any other.
+      internal: [authLocalModule(auth)],
+      store: storage.modules,
+      configs: moduleConfigs,
+      providers,
+      logger,
+      mooncgVersion: MOONCG_VERSION,
+      setupTimeoutMs: options.moduleSetupTimeoutMs,
+    });
+    lifecycle.add('modules', () => modules.close());
+    await modules.load();
+
     const app = await createApp({
       bundles: () => manager.list(),
       sdkFile: options.sdkFile,
@@ -399,9 +462,18 @@ export async function startServer(
       allowedOrigins: config.allowedOrigins,
       secureCookies: config.secureCookies,
       trustProxy: config.trustProxy,
+      publicUrl: config.publicUrl,
       dev: config.dev,
       devLogin,
       onAir,
+      providers,
+      modules: {
+        modules,
+        externalLogins,
+        configs: moduleConfigs,
+        publicUrl: config.publicUrl,
+        logger,
+      },
     });
     lifecycle.add('http', () => app.close());
     const sockets = attachWebSocket(app.server, {
@@ -416,7 +488,7 @@ export async function startServer(
       allowedOrigins: config.dev
         ? () => [...config.allowedOrigins, ...devOrigins(manager.list())]
         : config.allowedOrigins,
-      transport: { trustProxy: config.trustProxy },
+      transport: { trustProxy: config.trustProxy, publicUrl: config.publicUrl },
       heartbeatMs: options.socketHeartbeatMs,
       logger,
     });
@@ -440,6 +512,8 @@ export async function startServer(
     const url = `http://${urlHost}:${port}`;
     const warning = bindingWarning(config);
     if (warning !== undefined) logger.warn(warning);
+    const publicWarning = publicUrlWarning(config);
+    if (publicWarning !== undefined) logger.warn(publicWarning);
     const setupCode = auth.setupCode();
     const setupUrl = setupCode === undefined ? undefined : `${url}/setup?code=${setupCode}`;
     if (setupUrl !== undefined) {
@@ -448,6 +522,8 @@ export async function startServer(
     return {
       port,
       url,
+      config,
+      modules,
       auth,
       onAir,
       watchers,

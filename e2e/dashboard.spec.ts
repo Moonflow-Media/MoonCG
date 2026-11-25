@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type Browser, type BrowserContext, expect, type Page, test } from '@playwright/test';
+import { startMockIdp } from '../packages/module-auth-oidc/test/mock-idp.js';
 import { zipOf } from '../packages/server/test/zip-writer.js';
 
 /**
@@ -543,7 +544,7 @@ test('the shell: grouped navigation, counts, connection, and every page without 
   const group = (name: string) => admin.locator(`[data-nav-group="${name}"] a.nav-item`);
   await expect(group('Show')).toHaveText([/^Bundles/, /^Graphics/, /^Assets$/]);
   await expect(group('Admin')).toHaveText(['Users', 'Roles', 'Tokens']);
-  await expect(group('System')).toHaveText([/^Settings$/, /^Logs/]);
+  await expect(group('System')).toHaveText([/^Settings$/, /^Modules$/, /^Logs/]);
   await expect(admin.locator('a[href="/w/Show"] .count')).toHaveText('1');
   await expect(admin.locator('a[href="/bundles"] .count')).toHaveCount(0);
 
@@ -583,6 +584,7 @@ test('the shell: grouped navigation, counts, connection, and every page without 
     ['Roles', 'Roles'],
     ['Tokens', 'API tokens'],
     ['Settings', 'Settings'],
+    ['Modules', 'Modules'],
     ['Logs', 'Logs'],
   ] as const;
   for (const [link, heading] of pages) {
@@ -1072,4 +1074,84 @@ test('live reload: a changed panel reloads, a graphic is only marked, pages outl
   await expect(panel.locator('#home')).toHaveText('Home +1');
 
   expect(problems).toEqual([]);
+});
+
+test('an external login: the module enabled, an account linked, signed in through the provider', async ({
+  browser,
+}) => {
+  // An identity provider on this machine, which signs in whoever comes as one account.
+  const idp = await startMockIdp();
+  idp.browserAccount = { sub: 'idp-vera-1', preferred_username: 'someone.else' };
+  const admin = await asAdmin(browser);
+  try {
+    // --- The settings of the module that MoonCG ships, and the module itself, which does
+    // nothing until an administrator turns it on.
+    const saved = await admin.request.put(`${base}/api/v1/modules/auth-oidc/config`, {
+      data: {
+        values: {
+          oidc: {
+            enabled: true,
+            name: 'Mock Provider',
+            issuer: idp.issuer,
+            clientId: idp.clientId,
+            clientSecret: idp.clientSecret,
+          },
+        },
+      },
+    });
+    expect(saved.status()).toBe(200);
+    expect(await saved.text()).not.toContain(idp.clientSecret);
+    await nav(admin, 'Modules').click();
+    const row = admin.locator('[data-module="auth-oidc"]');
+    await expect(row.locator('.state')).toHaveText('disabled');
+    await row.locator('[data-action="enable"]').click();
+    await expect(row.locator('.state')).toHaveText('running');
+    await expect(row).toContainText('Sign-in: oidc');
+
+    // --- Nobody is linked: the account is refused, and no user is made of it.
+    const visitor = await freshPage(browser);
+    await visitor.goto(`${base}/login`);
+    const button = visitor.getByRole('link', { name: 'Sign in with Mock Provider' });
+    await button.click();
+    await visitor.waitForURL(`${base}/login`);
+    await expect(visitor.locator('#notice')).toContainText('not linked to a user');
+
+    // --- The administrator sees who tried and links the account to the viewer.
+    await nav(admin, 'Users').click();
+    const attempt = admin.locator('[data-unlinked="oidc:idp-vera-1"]');
+    await expect(attempt).toContainText('someone.else');
+    await attempt.locator('select').selectOption({ label: 'vera' });
+    await attempt.locator('[data-action="link"]').click();
+    await expect(admin.locator('[data-user="vera"] [data-identity="oidc"]')).toContainText(
+      'idp-vera-1',
+    );
+    await expect(attempt).toHaveCount(0);
+
+    // --- Now the same account signs in, as the viewer and as nobody else.
+    const { problems, watch } = watcher();
+    watch(visitor);
+    await visitor.goto(`${base}/login`);
+    await visitor.getByRole('link', { name: 'Sign in with Mock Provider' }).click();
+    await visitor.waitForURL(`${base}/`);
+    await expect(visitor.locator('[data-user-name]')).toHaveText('vera');
+    await expect(nav(visitor, 'Users')).toHaveCount(0);
+    const cookies = await visitor.context().cookies(base);
+    const session = cookies.find((cookie) => cookie.name === 'mooncg_session');
+    expect(session).toMatchObject({ httpOnly: true, sameSite: 'Lax' });
+    // The cookie of the sign-in itself is used up and gone.
+    expect(cookies.some((cookie) => cookie.name === 'mooncg_oauth')).toBe(false);
+    expect(problems).toEqual([]);
+
+    // --- Unlinking signs the viewer out, and the account is refused again.
+    await admin.reload();
+    admin.once('dialog', (dialog) => void dialog.accept());
+    await admin.locator('[data-user="vera"] [data-action="unlink"]').click();
+    await expect(admin.locator('[data-user="vera"] [data-identity]')).toHaveCount(0);
+    const me = await visitor.request.get(`${base}/api/v1/me`);
+    expect(me.status()).toBe(401);
+  } finally {
+    // The server is shared: the next test finds it without the provider.
+    await admin.request.post(`${base}/api/v1/modules/auth-oidc/disable`, { data: {} });
+    await idp.close();
+  }
 });

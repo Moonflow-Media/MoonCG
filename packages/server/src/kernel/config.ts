@@ -32,6 +32,14 @@ export interface ServerConfig {
   readonly allowedOrigins: readonly string[];
   /** Absolute path of the folder for everything the server stores, such as `mooncg.db`. */
   readonly dataDir: string;
+  /** Absolute path of the folder that holds one folder per module. */
+  readonly modulesDir: string;
+  /**
+   * The origin people reach the server at, such as `https://show.example`. External logins
+   * build the address a provider sends the browser back to from it, and from nothing a
+   * request says. Without it they work on this machine only.
+   */
+  readonly publicUrl: string | undefined;
   /** The heap each bundle extension may use, in MiB, before its thread is ended. */
   readonly extensionMemoryMb: number;
   /** How long a bundle extension may take to start, in milliseconds. */
@@ -117,6 +125,8 @@ const FLAGS = {
   host: { type: 'string' },
   'bundles-dir': { type: 'string' },
   'data-dir': { type: 'string' },
+  'modules-dir': { type: 'string' },
+  'public-url': { type: 'string' },
   'extension-memory-mb': { type: 'string' },
   'extension-start-timeout-ms': { type: 'string' },
   'extension-heartbeat-timeout-ms': { type: 'string' },
@@ -180,6 +190,8 @@ interface FileValues {
   readonly host?: string;
   readonly dataDir?: string;
   readonly bundlesDir?: string;
+  readonly modulesDir?: string;
+  readonly publicUrl?: string;
   readonly allowedOrigins?: readonly string[];
   readonly watch?: boolean;
 }
@@ -191,7 +203,17 @@ function fileValues(file: ConfigFile | undefined): FileValues {
     new Error(`Invalid configuration file ${file.path}: ${problem}`);
   const { values } = file;
   if (!isPlainObject(values)) throw wrong('expected a JSON object');
-  const known = ['$schema', 'port', 'host', 'dataDir', 'bundlesDir', 'allowedOrigins', 'watch'];
+  const known = [
+    '$schema',
+    'port',
+    'host',
+    'dataDir',
+    'bundlesDir',
+    'modulesDir',
+    'publicUrl',
+    'allowedOrigins',
+    'watch',
+  ];
   for (const key of Object.keys(values)) {
     if (key === 'dev') {
       throw wrong(
@@ -201,13 +223,16 @@ function fileValues(file: ConfigFile | undefined): FileValues {
     if (!known.includes(key))
       throw wrong(`unknown setting "${key}" (known: ${known.slice(1).join(', ')})`);
   }
-  const path = (key: 'dataDir' | 'bundlesDir') => {
+  const path = (key: 'dataDir' | 'bundlesDir' | 'modulesDir') => {
     const value = values[key];
     if (value === undefined) return undefined;
     if (typeof value !== 'string' || value === '') throw wrong(`"${key}" must be a path`);
     return resolve(file.dir, value);
   };
-  const { port, host, allowedOrigins, watch } = values;
+  const { port, host, allowedOrigins, watch, publicUrl } = values;
+  if (publicUrl !== undefined && typeof publicUrl !== 'string') {
+    throw wrong('"publicUrl" must be an address such as "https://show.example"');
+  }
   if (
     port !== undefined &&
     (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65535)
@@ -235,11 +260,14 @@ function fileValues(file: ConfigFile | undefined): FileValues {
   }
   const dataDir = path('dataDir');
   const bundlesDir = path('bundlesDir');
+  const modulesDir = path('modulesDir');
   return {
     ...(port === undefined ? {} : { port: String(port) }),
     ...(host === undefined ? {} : { host }),
     ...(dataDir === undefined ? {} : { dataDir }),
     ...(bundlesDir === undefined ? {} : { bundlesDir }),
+    ...(modulesDir === undefined ? {} : { modulesDir }),
+    ...(publicUrl === undefined ? {} : { publicUrl }),
     ...(allowedOrigins === undefined ? {} : { allowedOrigins: allowedOrigins as string[] }),
     ...(watch === undefined ? {} : { watch }),
   };
@@ -248,11 +276,11 @@ function fileValues(file: ConfigFile | undefined): FileValues {
 /**
  * Builds the configuration from four places, the earlier one winning: command line flags,
  * environment variables, the configuration file (`port`, `host`, `dataDir`, `bundlesDir`,
- * `allowedOrigins`, `watch`; see `readConfigFile`) and the defaults. `--dev` turns dev mode
+ * `modulesDir`, `publicUrl`, `allowedOrigins`, `watch`; see `readConfigFile`) and the defaults. `--dev` turns dev mode
  * on and exists as a flag only; `--watch` (`MOONCG_WATCH`) turns on the watcher alone, and
  * `--no-watch` (`MOONCG_WATCH=0`) turns it off whatever the later places say.
  *
- * Each flag (`--port`, `--host`, `--bundles-dir`, `--data-dir`,
+ * Each flag (`--port`, `--host`, `--bundles-dir`, `--data-dir`, `--modules-dir`, `--public-url`,
  * `--extension-memory-mb`, `--extension-start-timeout-ms`, `--extension-heartbeat-timeout-ms`,
  * `--max-body-bytes`, `--asset-max-file-bytes`, `--asset-quota-bytes`, `--asset-max-files`,
  * `--bundle-max-archive-bytes`, `--bundle-max-unpacked-bytes`, `--bundle-max-files`,
@@ -293,6 +321,13 @@ export function loadConfig({ argv, env, cwd, file }: ConfigSources): ServerConfi
     ),
     allowedOrigins,
     dataDir: resolve(cwd, values['data-dir'] ?? env.MOONCG_DATA_DIR ?? fromFile.dataDir ?? 'data'),
+    modulesDir: resolve(
+      cwd,
+      values['modules-dir'] ?? env.MOONCG_MODULES_DIR ?? fromFile.modulesDir ?? 'modules',
+    ),
+    publicUrl: parsePublicUrl(
+      values['public-url'] ?? (env.MOONCG_PUBLIC_URL || undefined) ?? fromFile.publicUrl,
+    ),
     extensionMemoryMb: parsePositive(
       'extension memory',
       values['extension-memory-mb'] ?? env.MOONCG_EXTENSION_MEMORY_MB ?? '256',
@@ -426,6 +461,32 @@ function parseRegistry(text: string | undefined): string | undefined {
     );
   }
   return text;
+}
+
+/**
+ * The origin the server is reached at: `http://` or `https://`, a host, perhaps a port, and
+ * nothing else. What comes after would have to be part of every address the server builds,
+ * and it serves at the root only.
+ */
+function parsePublicUrl(text: string | undefined): string | undefined {
+  if (text === undefined || text === '') return undefined;
+  const url = URL.canParse(text) ? new URL(text) : undefined;
+  const plain =
+    url !== undefined &&
+    (url.protocol === 'http:' || url.protocol === 'https:') &&
+    url.username === '' &&
+    url.password === '' &&
+    url.pathname === '/' &&
+    url.search === '' &&
+    url.hash === '' &&
+    !text.includes('#') &&
+    !text.includes('?');
+  if (!url || !plain) {
+    throw new Error(
+      `Invalid public address "${url ? url.origin : text}": expected an origin such as https://show.example, without a path, a query or credentials`,
+    );
+  }
+  return url.origin;
 }
 
 function parseOrigin(text: string): string {

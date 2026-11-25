@@ -68,6 +68,13 @@ export const AUTH_MIGRATION = `
 export const DEV_USER_MIGRATION =
   'ALTER TABLE users ADD COLUMN dev_mode INTEGER NOT NULL DEFAULT 0';
 
+/**
+ * Which issuer a link to an external account was made for: see `IdentityRecord.realm`. Links
+ * that were there before have none and take the one of their next sign-in. Added as its own
+ * migration.
+ */
+export const IDENTITY_REALM_MIGRATION = 'ALTER TABLE identities ADD COLUMN realm TEXT';
+
 /** Times are milliseconds since the epoch. */
 export interface UserRecord {
   readonly id: string;
@@ -88,6 +95,13 @@ export interface IdentityRecord {
   readonly subject: string;
   readonly userId: string;
   readonly secret: string | null;
+  /**
+   * For an external account: who vouched for it, as its provider names that, such as the
+   * issuer of an OpenID Connect provider. The id of a provider is a name in the settings
+   * here; the realm is what stands behind it. A subject means an account only together with
+   * it. `null` or left out: not bound yet, or a provider that names none.
+   */
+  readonly realm?: string | null | undefined;
 }
 
 export interface RoleRecord {
@@ -140,6 +154,9 @@ export interface IdentityRepository {
   get(provider: string, subject: string): IdentityRecord | undefined;
   /** Creates the identity or replaces it. */
   put(identity: IdentityRecord): void;
+  /** Every identity of every provider but the given one, by provider and subject. */
+  listExcept(provider: string): IdentityRecord[];
+  delete(provider: string, subject: string): void;
 }
 
 export interface RoleRepository {
@@ -328,22 +345,49 @@ export function sqlAuthStore(db: Db): AuthStore {
     identities: {
       get: (provider, subject) =>
         db
-          .all<{ user_id: string; secret: string | null }>(
-            'SELECT user_id, secret FROM identities WHERE provider = ? AND subject = ?',
+          .all<{ user_id: string; secret: string | null; realm: string | null }>(
+            'SELECT user_id, secret, realm FROM identities WHERE provider = ? AND subject = ?',
             provider,
             subject,
           )
-          .map((row) => ({ provider, subject, userId: row.user_id, secret: row.secret }))[0],
-      put: ({ provider, subject, userId, secret }) =>
+          .map((row) => ({
+            provider,
+            subject,
+            userId: row.user_id,
+            secret: row.secret,
+            realm: row.realm,
+          }))[0],
+      put: ({ provider, subject, userId, secret, realm }) =>
         db.run(
-          `INSERT INTO identities (provider, subject, user_id, secret) VALUES (?, ?, ?, ?)
+          `INSERT INTO identities (provider, subject, user_id, secret, realm)
+           VALUES (?, ?, ?, ?, ?)
            ON CONFLICT (provider, subject)
-           DO UPDATE SET user_id = excluded.user_id, secret = excluded.secret`,
+           DO UPDATE SET user_id = excluded.user_id, secret = excluded.secret,
+             realm = excluded.realm`,
           provider,
           subject,
           userId,
           secret,
+          realm ?? null,
         ),
+      listExcept: (provider) =>
+        db
+          .all<{
+            provider: string;
+            subject: string;
+            user_id: string;
+            secret: string | null;
+            realm: string | null;
+          }>('SELECT * FROM identities WHERE provider <> ? ORDER BY provider, subject', provider)
+          .map((row) => ({
+            provider: row.provider,
+            subject: row.subject,
+            userId: row.user_id,
+            secret: row.secret,
+            realm: row.realm,
+          })),
+      delete: (provider, subject) =>
+        db.run('DELETE FROM identities WHERE provider = ? AND subject = ?', provider, subject),
     },
     roles: {
       list: roleList,

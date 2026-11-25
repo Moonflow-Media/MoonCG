@@ -14,6 +14,148 @@ initial commit of the repository.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-25
+
+Wire protocol: 6 (unchanged). Database: version 8 (was 6), migrated at the first start.
+
+### Added
+
+- Modules: code that runs inside the server. A module is a folder with a `mooncg.json` of
+  `"kind": "module"` and a main file whose default export is a setup function; it lives in
+  the modules folder of an installation (`modules/`, or `--modules-dir`,
+  `MOONCG_MODULES_DIR`, `"modulesDir"` of the configuration file). The folder is read when
+  the server starts. A module does nothing until an administrator has enabled it, which is
+  remembered in the database; enabling starts it at once, disabling stops it and takes away
+  everything it registered. A module that cannot be loaded, whose stored configuration does
+  not fit its schema, or whose setup throws, rejects or takes more than ten seconds, shows as
+  `failed` with the reason, and the server and the other modules run on. Enabling a failed
+  module again reads its manifest and main file anew. A folder whose name no module can
+  have is listed as `failed` (_Invalid name_) and never read. See `docs/modules.md`.
+- The public module API, `@mooncg/sdk/module`: `defineModule` and the types of the context.
+  `ctx.auth.registerProvider` adds a way to sign in, `ctx.http.register` a route below
+  `/m/<module>`, `ctx.permissions.define` a permission, `ctx.onDispose` what runs when the
+  module stops; `ctx.config` is the module's configuration and `ctx.logger` writes to the
+  server log. What a setup returns is run when the module stops as well.
+- Module routes say who may call them: a `permission`, checked before the handler runs, or
+  `public: true`. A route with neither is refused. They pass the same origin and forgery
+  checks as every route of the server, get no cookie, `Authorization` or
+  `Proxy-Authorization` header or `token` parameter of the caller, and answer 401 to an
+  anonymous caller for everything that is not a public route, so that nothing tells which
+  modules and routes exist. What a route answers goes out with the sandboxing
+  Content-Security-Policy of uploaded files unless the handler sets its own.
+- Permissions of modules, `system:module.<module>.<name>`: a namespace no built-in permission
+  is in, so a module cannot redefine one. `GET /api/v1/permissions` lists the system
+  permissions there are, built-in and of running modules, and the Roles page shows them.
+- Module configuration: a JSON Schema named by the manifest, stored in
+  `data/config/modules/<name>.json`, with `x-secret` properties that no answer, log line or
+  error message contains, edited on the Settings page. Saving starts the module again and
+  says so, or says why the module is not running with the new values.
+- `system:modules.manage`, a permission of its own for enabling and disabling modules. Their
+  configuration takes it together with `system:settings.manage`.
+- `GET /api/v1/modules`, `POST /api/v1/modules/:name/enable` and `…/disable`,
+  `GET` and `PUT /api/v1/modules/:name/config`.
+- `mooncg module list`, `enable <name>` and `disable <name>`, through the API of a running
+  server with a token that holds `system:modules.manage`. `enable` exits with 1 and the
+  reason when the module then fails.
+- Dashboard: a Modules page with state, error, **Enable**, **Disable** and **Try again**; the
+  forms of module settings on the Settings page; the external accounts of each user on the
+  Users page, with **Link account**, **Unlink** and the list of accounts that tried to sign
+  in and belong to nobody; the system permissions on the Roles page.
+- External logins. `auth-oidc`, a module shipped with the server as the package
+  `@mooncg/module-auth-oidc` and disabled until enabled, signs people in with a generic OpenID
+  Connect provider (authorization code flow with PKCE, found by discovery), with Twitch
+  (OpenID Connect) or with Discord (OAuth 2.0: who signed in is asked at `/users/@me`, since
+  Discord issues no ID token). Each is a section of the module's settings with a client ID, a
+  client secret and a switch. See `docs/external-logins.md`.
+- The login page shows a link per provider, `Sign in with <name>`, below the password form,
+  with an icon the server serves itself. Its Content-Security-Policy is unchanged.
+  `GET /api/v1/auth/providers` tells the ways to sign in.
+- `GET /auth/<provider>/start` and `GET /auth/<provider>/callback`. The server creates
+  `state`, the nonce and the PKCE verifier, keeps them for ten minutes under a ticket that
+  only the browser gets (cookie `mooncg_oauth`: `HttpOnly`, `SameSite=Lax`, `Secure` and
+  `__Host-` over HTTPS), accepts a `state` once and only with its ticket, and limits returns
+  that open no session per address like wrong passwords. The session it opens is the one a
+  password opens.
+- Starting a sign-in is bounded per address: 30 starts a minute (then 429 with
+  `Retry-After`, before the provider is asked) and ten started sign-ins at a time, of which
+  an eleventh pushes out the address's own oldest. Of the 1000 kept for everyone, the address
+  that holds the most gives one up when it is full, so nobody ends the sign-ins of others by
+  starting many.
+- The realm of a link. A provider reports with every account who vouches for it (`realm` of
+  what `callback` answers; for OpenID Connect and Twitch the issuer, for Discord
+  `https://discord.com`), and the link of a user to an account is bound to it
+  (`identities.realm`, a new column). An account whose provider reports another realm than
+  its link was made for, or none, is refused (`/login?error=realm`) with both in the log, and
+  waits in the list of attempts to be linked again. Changing the issuer in the settings
+  therefore breaks the links made for the old one instead of handing them to the new one.
+  Links made by typing a subject, and links from a database of before, are bound by their
+  first sign-in. The client ID is not part of the realm. `PUT
+  /api/v1/users/:id/identities/:provider` takes an optional `realm`, and the Users page
+  shows the realm of each link and of each attempt.
+- Signing up creates at most 20 users an hour, for all providers together; beyond that an
+  account is refused like one nobody linked.
+- An `https://` public address means HTTPS: requests addressed to it get `Secure`,
+  `__Host-` cookies and are checked against the `https://` origin, for HTTP and the WebSocket
+  alike, also without `--trust-proxy` and `--secure-cookies`. A plain `http://` public
+  address beyond this machine is allowed and warned about at the start.
+- The log names every external sign-in (user, provider, subject, address) and every link and
+  unlink (who did it, the account, the user, the realm).
+- The list of accounts that tried to sign in and belong to nobody holds one entry per
+  account and at most five of its twenty from one address; names in it are shown without
+  format characters (zero-width, bidirectional overrides) and after the provider and the id.
+- `--public-url` (`MOONCG_PUBLIC_URL`, `"publicUrl"`): the origin people reach the server at.
+  The address a provider sends the browser back to is built from it and from nothing a
+  request says. Without it, external logins work on this machine only, by a loopback name
+  and the port the server listens on.
+- For OpenID Connect the module verifies the signature of the ID token with the provider's
+  published keys and an asymmetric algorithm, `iss`, `aud` (and `azp`), `exp` and the nonce;
+  takes an issuer and endpoints over `https://` only, or plain `http://` to this machine;
+  checks that the discovery document names the configured issuer; and follows no redirect of
+  a provider's endpoint. No token of a provider is stored, logged or sent to a browser.
+- Linking: an external account belongs to a user only through a link by its id at the
+  provider, never by a name or an e-mail address. An account nobody linked is refused, or,
+  with _Create a user for an account nobody has linked_ turned on for its provider (off by
+  default), gets a new user without any role. `GET /api/v1/identities`,
+  `PUT /api/v1/users/:id/identities/:provider` and
+  `DELETE /api/v1/users/:id/identities/:provider/:subject`, for holders of
+  `system:users.manage` and only for users who hold nothing the caller does not. An account
+  that another user has is not moved (409). Unlinking ends the user's sessions.
+- External logins are no way around the rest: nothing signs in or up while the installation
+  has no user, a disabled user is refused, and the user of dev mode cannot be linked.
+- `returnTo` on `/auth/<provider>/start` names where to go after signing in: a path of this
+  server, or it is ignored.
+
+### Changed
+
+- The local login is registered like every other way to sign in: the server's own module
+  `auth-local` puts a provider `local` into the registry the providers of modules are in, and
+  `POST /api/v1/auth/login` asks that registry. `auth-local` always runs and cannot be
+  disabled. Nothing changes for whoever signs in with a password.
+- `mooncg.json`: `main` names the main file of a module and is refused in a bundle; what
+  only a bundle has (`extension`, `permissions`, `panels`, and the rest) is refused in a
+  module.
+- The configuration file takes `modulesDir` and `publicUrl`. The line the server prints when
+  it listens names the modules folder.
+- Bundle routes no longer get the `Proxy-Authorization` header of the caller, like
+  `Authorization` and `Cookie`.
+
+### Dependencies
+
+- `jose` 6, in `@mooncg/module-auth-oidc`: verifying the signature and the claims of ID
+  tokens and fetching a provider's keys. The flow itself (discovery, the authorization
+  request, redeeming the code) is written with `fetch`.
+
+### Not in this release
+
+- `storage.registerAdapter`, `registry.registerSource` and `dashboard.registerPage` of the
+  plan are not part of the module API: none of them would do anything yet.
+- Modules are not installed through the API or the command line: a module is a folder copied
+  into `modules/`, found at the next start. They are not watched for changes.
+- A signed-in user cannot link an external account themselves; an administrator does.
+- One generic OpenID Connect provider per installation.
+- The Twitch and Discord presets follow the providers' documentation and are tested against
+  an identity provider that runs in the tests. They were not run against Twitch or Discord.
+
 ## [0.8.0] - 2026-11-25
 
 Wire protocol: 6 (was 5).

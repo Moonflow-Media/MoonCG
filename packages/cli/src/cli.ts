@@ -4,6 +4,7 @@ import type { ScryptParams } from '@mooncg/server/accounts';
 import { type AccountArgs, tokenCommand, UsageError, userCommand } from './accounts-command.js';
 import { bundleCommand } from './bundle-command.js';
 import { createBundle, initInstallation, shownPath } from './create-command.js';
+import { moduleCommand } from './module-command.js';
 import { writeTypes } from './types-command.js';
 
 const USAGE = `Usage: mooncg <command>
@@ -68,10 +69,19 @@ const USAGE = `Usage: mooncg <command>
       reload and restore are refused unless --on-air is given, which takes the same
       permission as the change itself. A removal that both stand in the way of takes both.
 
-  bundle commands take --url <url> (default: http://127.0.0.1:9090, or MOONCG_URL) and an
-  API token that holds system:bundles.manage, from MOONCG_TOKEN or --token <token>.
-  Prefer MOONCG_TOKEN: an argument shows in the process list and the shell history. The
-  token is not sent over plain http to another machine unless --insecure is given.`;
+  module list
+  module enable <name>
+  module disable <name>
+      Manage the modules of a running server through its API. A module is code that runs
+      inside the server, such as a login provider: one in the modules folder runs only
+      once it is enabled, which starts it at once and is remembered. To install a module,
+      copy its folder into the modules folder and restart the server.
+
+  bundle and module commands take --url <url> (default: http://127.0.0.1:9090, or
+  MOONCG_URL) and an API token, from MOONCG_TOKEN or --token <token>, that holds
+  system:bundles.manage for bundles and system:modules.manage for modules. Prefer
+  MOONCG_TOKEN: an argument shows in the process list and the shell history. The token is
+  not sent over plain http to another machine unless --insecure is given.`;
 
 /** Where the command line reads from and writes its messages to. */
 export interface CliIo {
@@ -189,6 +199,19 @@ export async function run(
               : (question) => io.confirm?.(question) ?? Promise.resolve(false),
           pollMs: options.pollMs,
         },
+      );
+      return 0;
+    }
+    if (command === 'module') {
+      await moduleCommand(
+        first,
+        positionals.slice(2),
+        {
+          url: values.url ?? env.MOONCG_URL ?? 'http://127.0.0.1:9090',
+          token: values.token ?? env.MOONCG_TOKEN,
+          insecure: values.insecure ?? false,
+        },
+        { log: (line) => io.log(line), warn: (line) => io.error(line), fetch: io.fetch },
       );
       return 0;
     }

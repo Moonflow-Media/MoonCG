@@ -73,6 +73,8 @@ or `MOONCG_CONFIG` name another file, which must then exist.
 | `host`           | `--host`                | `MOONCG_HOST`            |
 | `bundlesDir`     | `--bundles-dir`         | `MOONCG_BUNDLES_DIR`     |
 | `dataDir`        | `--data-dir`            | `MOONCG_DATA_DIR`        |
+| `modulesDir`     | `--modules-dir`         | `MOONCG_MODULES_DIR`     |
+| `publicUrl`      | `--public-url`          | `MOONCG_PUBLIC_URL`      |
 | `allowedOrigins` | `--allowed-origin`      | `MOONCG_ALLOWED_ORIGINS` |
 | `watch`          | `--watch`, `--no-watch` | `MOONCG_WATCH`           |
 
@@ -84,6 +86,12 @@ start at the folder the file is in; relative paths in flags and environment vari
 at the working directory. A setting the server does not
 know, or of the wrong type, keeps it from starting and is named in the error: a typo is not
 passed over. Everything else is configured with flags and environment variables only.
+
+`modulesDir` is the folder of the [modules](modules.md), `modules` unless set; it need not
+exist. `publicUrl` is the origin people reach the server at, such as `https://show.example`,
+without a path; [external logins](external-logins.md#the-public-address-and-the-redirect-address)
+build the address a provider sends the browser back to from it. Neither is in the file
+`mooncg init` writes.
 
 `dev` cannot be set in the file, and there is no environment variable for it. See
 [dev mode](#dev-mode) for why.

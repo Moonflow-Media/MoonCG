@@ -10,6 +10,10 @@ There are three different trees to keep apart:
 2. **An installation** — what sits on the machine that runs a show.
 3. **The source repository** — the code of MoonCG / NodeCG itself.
 
+A fourth, smaller one is **a module**: a folder in `modules/` of an installation with a
+`mooncg.json` of `"kind": "module"` and a main file. NodeCG has nothing like it.
+[modules.md](modules.md#writing-a-module) shows it.
+
 ## 1. A bundle
 
 ### NodeCG
@@ -90,12 +94,14 @@ NodeCG also supports being installed as a dependency of a single bundle project;
 my-show/
 ├── bundles/              show bundles
 │   └── <name>/
-├── modules/              system modules (auth providers, storage, …)   (milestone 8)
-│   └── <name>/
+├── modules/              modules: code that runs inside the server, such as a login provider
+│   └── <name>/           mooncg.json with "kind": "module", and its main file
 ├── data/                 everything MoonCG writes at runtime
-│   ├── mooncg.db         replicants, disabled bundles, users, roles, tokens, sessions, per-user layouts, On Air
+│   ├── mooncg.db         replicants, disabled bundles, enabled modules, users and their external accounts, roles, tokens, sessions, per-user layouts, On Air
 │   ├── config/
-│   │   └── <bundle>.json bundle config, secrets included; edited on the settings page
+│   │   ├── <bundle>.json bundle config, secrets included; edited on the settings page
+│   │   └── modules/
+│   │       └── <module>.json   module config, such as the client secrets of login providers
 │   ├── assets/
 │   │   ├── <bundle>/<category>/   uploaded files, one flat folder per category
 │   │   └── .incoming/             uploads that are still arriving
@@ -104,14 +110,19 @@ my-show/
 │   ├── backups/
 │   │   └── <bundle>/<version>-<time>/   an earlier version: bundle/ and backup.json
 │   └── bundle-sources.json   where each bundle was installed from, for updates
-└── mooncg.config.json    server config: port, host, bundles dir, data dir, origins, watch
+└── mooncg.config.json    server config: port, host, bundles dir, data dir, modules dir, public URL, origins, watch
 ```
 
 `mooncg init` creates this folder: `bundles/`, `data/`, `mooncg.config.json` and a
 `.gitignore` for `data/`. The server reads the file from the directory it is started in;
-flags and environment variables win over it. Everything but the six settings named above is
+flags and environment variables win over it. Everything but the eight settings named above is
 configured with flags and environment variables only. See
 [development.md](development.md#the-configuration-file).
+
+`modules/` is not created by `mooncg init` and need not exist: the modules MoonCG ships, such
+as `auth-oidc`, come with the server and not from this folder. A module of your own is a
+folder you put there; it runs only once an administrator has enabled it. See
+[modules.md](modules.md).
 
 `staging/` is emptied whenever the server starts, and a staged bundle nobody decides about is
 deleted after 30 minutes. `backups/` keeps the newest three versions of each bundle
@@ -120,16 +131,17 @@ address. [bundles.md](bundles.md) says how bundles get in and out.
 
 ### Differences
 
-| Topic               | NodeCG                                        | MoonCG                                                                                                |
-| ------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Runtime data        | Spread over `cfg/`, `db/`, `assets/`, `logs/` | One folder, `data/`. Back up or delete that folder and you have backed up or reset the installation   |
-| Bundle config       | `cfg/<bundle>.json`, edited by hand           | `data/config/<bundle>.json`, edited in the dashboard as a form generated from the schema              |
-| System extensions   | None; one bundle may ship a database adapter  | `modules/`, separate from show bundles and installable only by admins                                 |
-| Installing a bundle | `git clone` into `bundles/`, then restart     | `mooncg bundle install` or the dashboard: through `data/staging/`, checked, then moved in, no restart |
-| Updating a bundle   | Manual `git pull`, then restart               | Old version kept in `data/backups/` and restored if the new one fails to start                        |
-| npm dependencies    | `npm install` in the bundle folder, by hand   | Installed by the server in staging, without install scripts unless asked for                          |
-| Logs                | `logs/` files                                 | Console, and the latest 1000 lines on the dashboard's log page                                        |
-| Assets              | `assets/<bundle>/<category>/`                 | `data/assets/<bundle>/<category>/`, with a size limit per file and a quota per category               |
+| Topic               | NodeCG                                           | MoonCG                                                                                                  |
+| ------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Runtime data        | Spread over `cfg/`, `db/`, `assets/`, `logs/`    | One folder, `data/`. Back up or delete that folder and you have backed up or reset the installation     |
+| Bundle config       | `cfg/<bundle>.json`, edited by hand              | `data/config/<bundle>.json`, edited in the dashboard as a form generated from the schema                |
+| System extensions   | None; one bundle may ship a database adapter     | `modules/`, separate from show bundles; a module runs only once an administrator has enabled it         |
+| External logins     | Steam, Twitch and Discord, built into the server | A shipped module, `auth-oidc`: OpenID Connect, Twitch, Discord; accounts are linked to users explicitly |
+| Installing a bundle | `git clone` into `bundles/`, then restart        | `mooncg bundle install` or the dashboard: through `data/staging/`, checked, then moved in, no restart   |
+| Updating a bundle   | Manual `git pull`, then restart                  | Old version kept in `data/backups/` and restored if the new one fails to start                          |
+| npm dependencies    | `npm install` in the bundle folder, by hand      | Installed by the server in staging, without install scripts unless asked for                            |
+| Logs                | `logs/` files                                    | Console, and the latest 1000 lines on the dashboard's log page                                          |
+| Assets              | `assets/<bundle>/<category>/`                    | `data/assets/<bundle>/<category>/`, with a size limit per file and a quota per category                 |
 
 ## 3. The source repository
 
@@ -154,11 +166,13 @@ MoonCG/
 │   ├── core/         @mooncg/core — pure logic, no file or network access
 │   │   └── src/      manifest/ replicant/ messages/ http/ bundle/ protocol/ permissions/ session/ dev/
 │   ├── server/       @mooncg/server
-│   │   ├── src/      kernel/ auth/ bundles/ install/ config/ assets/ graphics/ extension-host/ http/ replicants/ storage/ dev/
+│   │   ├── src/      kernel/ auth/ bundles/ modules/ install/ config/ assets/ graphics/ extension-host/ http/ replicants/ storage/ dev/
 │   │   └── public/   the login and setup pages
-│   ├── sdk/          @mooncg/sdk — the only package bundle authors depend on
-│   │   └── src/      client/ extension/ vue/ react/ — later module/ (milestone 8)
-│   ├── cli/          the `mooncg` command — `init`, `start`, `dev`, `types`, `user`, `token` and `bundle`
+│   ├── sdk/          @mooncg/sdk — the only package bundle and module authors depend on
+│   │   └── src/      client/ extension/ module/ vue/ react/
+│   ├── module-auth-oidc/   @mooncg/module-auth-oidc — the module `auth-oidc`, shipped with the server
+│   │   └── src/      mooncg.json and config.schema.json beside it; built to dist/
+│   ├── cli/          the `mooncg` command — `init`, `start`, `dev`, `types`, `user`, `token`, `bundle` and `module`
 │   │   └── templates/   what `mooncg bundle create` copies
 │   └── dashboard/    @mooncg/dashboard — Vue 3 app, built with Vite, served at /
 │       └── src/      stores/ views/ — logic in plain modules, components as render functions
@@ -176,18 +190,21 @@ MoonCG/
 | What bundle authors install | `nodecg` (types) plus helper packages                | `@mooncg/sdk` only                                                                                 |
 | Database                    | TypeORM adapter packages                             | A small `Db` interface over Node's built-in SQLite, inside `server/src/storage/`                   |
 | Dashboard                   | Polymer, inside the main package                     | Own package, Vue 3 + Vite                                                                          |
+| Shipped modules             | Login providers are part of the server               | A package of their own (`module-auth-oidc`) that the server depends on and finds at start          |
 
 ## URLs, for orientation
 
 The folder names show up in the URLs, so the mapping is worth knowing:
 
-| What               | NodeCG                             | MoonCG                               |
-| ------------------ | ---------------------------------- | ------------------------------------ |
-| Dashboard          | `/dashboard/`                      | `/`                                  |
-| Panel              | `/bundles/<name>/dashboard/<file>` | `/b/<name>/dashboard/<file>`         |
-| Graphic            | `/bundles/<name>/graphics/<file>`  | `/b/<name>/graphics/<file>`          |
-| Bundle HTTP routes | wherever the extension mounts them | `/b/<name>/api/…`                    |
-| Assets             | `/assets/<name>/<category>/<file>` | `/b/<name>/assets/<category>/<file>` |
-| Client API script  | injected                           | `/sdk/mooncg.js`                     |
-| Sign in, setup     | `/login/` (if enabled)             | `/login`, `/setup`                   |
-| Server API         | none                               | `/api/v1/…`                          |
+| What               | NodeCG                             | MoonCG                                 |
+| ------------------ | ---------------------------------- | -------------------------------------- |
+| Dashboard          | `/dashboard/`                      | `/`                                    |
+| Panel              | `/bundles/<name>/dashboard/<file>` | `/b/<name>/dashboard/<file>`           |
+| Graphic            | `/bundles/<name>/graphics/<file>`  | `/b/<name>/graphics/<file>`            |
+| Bundle HTTP routes | wherever the extension mounts them | `/b/<name>/api/…`                      |
+| Assets             | `/assets/<name>/<category>/<file>` | `/b/<name>/assets/<category>/<file>`   |
+| Client API script  | injected                           | `/sdk/mooncg.js`                       |
+| Sign in, setup     | `/login/` (if enabled)             | `/login`, `/setup`                     |
+| External login     | `/login/<provider>` (built in)     | `/auth/<provider>/start`, `…/callback` |
+| Module HTTP routes | none                               | `/m/<module>/…`                        |
+| Server API         | none                               | `/api/v1/…`                            |

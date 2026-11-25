@@ -2,6 +2,9 @@ import { openAsBlob } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { UsageError } from './accounts-command.js';
+import { createApiClient, printable } from './api-client.js';
+
+export { printable } from './api-client.js';
 
 /** What the bundle commands were given on the command line. */
 export interface BundleArgs {
@@ -113,24 +116,6 @@ const part = encodeURIComponent;
 const counted = (count: number, one: string, many = `${one}s`) =>
   `${count} ${count === 1 ? one : many}`;
 
-/**
- * What the server said, as it may be printed: on one line and without control characters.
- * A manifest is written by whoever wrote the bundle; an escape sequence in it could redraw
- * the terminal and hide what is being asked.
- */
-export function printable(text: string): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are the point
-  return text.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ');
-}
-
-/** An address as it may be shown: without the user name and password in it. */
-function shownUrl(url: URL): string {
-  const copy = new URL(url);
-  copy.username = '';
-  copy.password = '';
-  return copy.toString().replace(/\/$/, '');
-}
-
 function describeSource({ type, location, ref, commit }: Source): string {
   if (type === 'git') {
     const at = ref === undefined ? '' : ` at ${ref}`;
@@ -220,66 +205,10 @@ export async function bundleCommand(
       throw new UsageError();
     }
   };
-  const send = deps.fetch ?? fetch;
   /** Everything that came from the server passes here before it is printed. */
   const log = (line: string) => deps.log(printable(line));
 
-  /** Where the server is, checked once, when the first request is about to go there. */
-  let checked: { readonly base: string; readonly shown: string } | undefined;
-  const server = () => {
-    if (checked) return checked;
-    const url = URL.canParse(args.url) ? new URL(args.url) : undefined;
-    if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
-      throw new Error('--url must be the address of the server, such as http://127.0.0.1:9090');
-    }
-    const shown = shownUrl(url);
-    const host = url.hostname.replace(/^\[|\]$/g, '');
-    const local = host === 'localhost' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
-    if (url.protocol === 'http:' && !local) {
-      if (!args.insecure) {
-        throw new Error(
-          `${shown} is plain http on another machine: the API token would cross the network unencrypted. ` +
-            'Use an https:// address, or pass --insecure if the network is yours.',
-        );
-      }
-      deps.warn?.(`Warning: the API token is sent to ${shown} unencrypted (--insecure).`);
-    }
-    checked = { base: shown, shown };
-    return checked;
-  };
-
-  /** Asks the server. Rejects with what it said when it refuses. */
-  const call = async <T>(method: string, path: string, body?: unknown | Blob): Promise<T> => {
-    if (args.token === undefined || args.token === '') {
-      throw new Error(
-        'No API token given. Set MOONCG_TOKEN or pass --token; the token must hold system:bundles.manage.',
-      );
-    }
-    const { base, shown } = server();
-    const upload = body instanceof Blob;
-    let response: Response;
-    try {
-      response = await send(`${base}${path}`, {
-        method,
-        headers: {
-          authorization: `Bearer ${args.token}`,
-          ...(body === undefined
-            ? {}
-            : { 'content-type': upload ? 'application/zip' : 'application/json' }),
-        },
-        ...(body === undefined ? {} : { body: upload ? body : JSON.stringify(body) }),
-      });
-    } catch {
-      throw new Error(`No MoonCG server answers at ${shown}. Is it running? Check --url.`);
-    }
-    if (response.status === 204) return undefined as T;
-    const answer = (await response.json().catch(() => undefined)) as
-      | { error?: { message?: string } }
-      | undefined;
-    if (response.ok) return answer as T;
-    if (response.status === 401) throw new Error('The server did not accept the API token.');
-    throw new Error(printable(answer?.error?.message ?? `The server answered ${response.status}`));
-  };
+  const call = createApiClient(args, deps, 'system:bundles.manage');
 
   /** Follows a job to its end, naming each step as it begins. */
   const finished = async ({ job }: { job: Job }): Promise<Job> => {

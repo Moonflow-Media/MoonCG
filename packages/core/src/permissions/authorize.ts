@@ -59,6 +59,42 @@ export const TOKENS_MANAGE = 'system:tokens.manage';
 export const SETTINGS_MANAGE = 'system:settings.manage';
 /** Reserved for reading the server log. */
 export const LOGS_VIEW = 'system:logs.view';
+/**
+ * Required to enable and disable modules and to change their configuration. A module is code
+ * that runs inside the server and may decide who signs in, which is more than a bundle does,
+ * so it is a permission of its own and not the one for bundles.
+ */
+export const MODULES_MANAGE = 'system:modules.manage';
+
+/** The system permissions the server itself knows, each with what it allows. */
+export const SYSTEM_PERMISSIONS: Readonly<Record<string, string>> = {
+  [DASHBOARD_VIEW]: 'Open the dashboard and see the list of bundles',
+  [BUNDLES_MANAGE]: 'Install, update, remove, enable, disable and reload bundles; switch On Air',
+  [USERS_MANAGE]: 'Manage users, roles and grants, and link external logins',
+  [TOKENS_MANAGE]: 'Create, list and revoke API tokens',
+  [SETTINGS_MANAGE]: 'Read and change the configuration of bundles',
+  [LOGS_VIEW]: 'Read the server log',
+  [MODULES_MANAGE]: 'Enable and disable modules and change their configuration',
+};
+
+const MODULE_PERMISSION_NAME = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+
+/**
+ * The permission a module defines under a name of its own: `system:module.<module>.<name>`.
+ * Everything a module defines is in this namespace, which no built-in permission is in, so a
+ * module can never redefine one of those. Throws for a name that is none.
+ */
+export function modulePermission(module: string, name: string): string {
+  if (!BUNDLE_NAME_PATTERN.test(module)) {
+    throw new Error(`"${module}" is not the name of a module`);
+  }
+  if (!MODULE_PERMISSION_NAME.test(name)) {
+    throw new Error(
+      `"${name}" cannot be the name of a permission: use lowercase letters, digits and single dashes`,
+    );
+  }
+  return `system:module.${module}.${name}`;
+}
 
 /** The namespace of what the server itself provides, such as the `system:bundles` replicant. */
 export const SYSTEM_BUNDLE = 'system';

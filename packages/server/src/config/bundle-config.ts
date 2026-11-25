@@ -292,6 +292,11 @@ export interface BundleConfigsOptions {
   readonly dataDir: string;
   /** Told what an administrator should know, such as a secret too short to be masked. */
   readonly warn?: ((message: string) => void) | undefined;
+  /**
+   * Whose configurations these are. Modules keep theirs like bundles do, in a folder of
+   * their own, `config/modules`, so that a module and a bundle of one name do not meet.
+   */
+  readonly kind?: 'bundle' | 'module' | undefined;
 }
 
 /**
@@ -300,6 +305,7 @@ export interface BundleConfigsOptions {
  */
 export class BundleConfigs {
   readonly #dir: string;
+  readonly #kind: 'bundle' | 'module';
   readonly #warn: (message: string) => void;
   /**
    * The secrets each bundle's configuration holds, and those it held before the last change:
@@ -312,7 +318,11 @@ export class BundleConfigs {
   readonly #writes = new Map<string, Promise<unknown>>();
 
   constructor(options: BundleConfigsOptions) {
-    this.#dir = join(options.dataDir, 'config');
+    this.#kind = options.kind ?? 'bundle';
+    this.#dir =
+      this.#kind === 'module'
+        ? join(options.dataDir, 'config', 'modules')
+        : join(options.dataDir, 'config');
     this.#warn = options.warn ?? (() => {});
   }
 
@@ -436,7 +446,7 @@ export class BundleConfigs {
       if (text.length >= MIN_SCRUBBED_LENGTH || this.#warned.has(key)) continue;
       this.#warned.add(key);
       this.#warn(
-        `The secret ${path} of bundle "${bundle}" has fewer than ${MIN_SCRUBBED_LENGTH} ` +
+        `The secret ${path} of ${this.#kind} "${bundle}" has fewer than ${MIN_SCRUBBED_LENGTH} ` +
           'characters and cannot be kept out of logs and errors',
       );
     }
@@ -466,7 +476,10 @@ export class BundleConfigs {
   async #prepare(bundle: ConfiguredBundle): Promise<Prepared> {
     const file = bundle.manifest.config?.schema;
     if (file === undefined) {
-      throw new MoonCGError('not_found', `Bundle "${bundle.name}" has no configuration`);
+      throw new MoonCGError(
+        'not_found',
+        `${this.#kind === 'module' ? 'Module' : 'Bundle'} "${bundle.name}" has no configuration`,
+      );
     }
     const path = 'config.schema';
     let text: string;

@@ -5,6 +5,7 @@ import {
   AUTH_MIGRATION,
   type AuthStore,
   DEV_USER_MIGRATION,
+  IDENTITY_REALM_MIGRATION,
   PREFS_MIGRATION,
   sqlAuthStore,
 } from './auth-store.js';
@@ -28,6 +29,10 @@ export const MIGRATIONS: readonly string[] = [
   // What the server itself remembers, such as whether it is on air.
   'CREATE TABLE settings (key TEXT NOT NULL PRIMARY KEY, json TEXT NOT NULL)',
   DEV_USER_MIGRATION,
+  // Modules are disabled unless listed here: code that runs inside the server starts only
+  // once an administrator has said so.
+  'CREATE TABLE enabled_modules (name TEXT NOT NULL PRIMARY KEY)',
+  IDENTITY_REALM_MIGRATION,
 ];
 
 export interface StoredReplicant {
@@ -141,6 +146,13 @@ export interface BundleSettingsStore {
   setDisabled(bundle: string, disabled: boolean): Promise<void>;
 }
 
+/** Which modules an administrator has enabled. That choice survives a restart. */
+export interface ModuleSettingsStore {
+  /** The names of the enabled modules, sorted. */
+  enabled(): Promise<string[]>;
+  setEnabled(module: string, enabled: boolean): Promise<void>;
+}
+
 /** What the server itself remembers across restarts, one JSON value per key. */
 export interface SettingsStore {
   get(key: string): Promise<Json | undefined>;
@@ -151,6 +163,7 @@ export interface SettingsStore {
 export interface Storage {
   readonly replicants: ReplicantStore;
   readonly bundles: BundleSettingsStore;
+  readonly modules: ModuleSettingsStore;
   readonly settings: SettingsStore;
   /** Users, roles, tokens and sessions. */
   readonly auth: AuthStore;
@@ -163,6 +176,7 @@ export interface Storage {
  */
 export function memoryStorage(): Storage {
   const disabled = new Set<string>();
+  const enabledModules = new Set<string>();
   const settings = new Map<string, string>();
   const db = openSqliteDbSync(':memory:');
   migrate(db, MIGRATIONS);
@@ -183,6 +197,13 @@ export function memoryStorage(): Storage {
       async setDisabled(bundle, value) {
         if (value) disabled.add(bundle);
         else disabled.delete(bundle);
+      },
+    },
+    modules: {
+      enabled: async () => [...enabledModules].sort(),
+      async setEnabled(module, value) {
+        if (value) enabledModules.add(module);
+        else enabledModules.delete(module);
       },
     },
     close: async () => db.close(),
@@ -219,6 +240,16 @@ export async function openSqliteStorage(dataDir: string): Promise<Storage> {
       async setDisabled(bundle, value) {
         if (value) db.run('INSERT OR IGNORE INTO disabled_bundles (name) VALUES (?)', bundle);
         else db.run('DELETE FROM disabled_bundles WHERE name = ?', bundle);
+      },
+    },
+    modules: {
+      enabled: async () =>
+        db
+          .all<{ name: string }>('SELECT name FROM enabled_modules ORDER BY name')
+          .map((row) => row.name),
+      async setEnabled(module, value) {
+        if (value) db.run('INSERT OR IGNORE INTO enabled_modules (name) VALUES (?)', module);
+        else db.run('DELETE FROM enabled_modules WHERE name = ?', module);
       },
     },
     close: () => replicants.close(),

@@ -132,3 +132,39 @@ input:focus-visible {
   font-size: var(--font-size-sm);
   overflow-wrap: anywhere;
 }
+
+/* Not in the design: the external providers below the form, each a link that looks like a
+   quiet button. A link and not a form, because the policy of the page lets forms post back
+   here only. */
+.providers {
+  display: grid;
+  gap: var(--space-sm);
+  margin-top: var(--space-lg);
+}
+.or {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  text-align: center;
+}
+.provider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  text-decoration: none;
+  background: var(--surface-page);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.provider:hover {
+  border-color: var(--border-focus);
+}
+.provider:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}

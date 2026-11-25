@@ -1,6 +1,7 @@
 import { defineComponent, h, onMounted, reactive, ref, type VNode } from 'vue';
 import { api, messageOf } from '../api.js';
 import { collect, type Field, type FormState, fieldsOf, initialState } from '../schema-form.js';
+import { useSession } from '../stores/session.js';
 import { part } from './admin.js';
 import { pageHead } from './parts.js';
 
@@ -18,17 +19,36 @@ interface Described {
   readonly secretFields: readonly string[];
   readonly secrets: readonly string[];
   readonly problems: readonly string[];
-  readonly bundle: BundleState;
+  /** The bundle the configuration belongs to, or else the module. */
+  readonly bundle?: BundleState;
+  readonly module?: BundleState;
   /** In the answer to a save: whether the extension now runs with the stored values. */
   readonly restarted?: boolean | undefined;
   readonly restartNote?: string | undefined;
 }
 
-/** The form for one bundle's configuration, drawn from the bundle's schema. */
+/** What the form says about saving, for a bundle and for a module. */
+const WORDS = {
+  bundle: {
+    button: 'Save and restart',
+    done: 'Saved. The extension was restarted with the new settings.',
+    not: 'Saved, but the extension was not restarted.',
+  },
+  module: {
+    button: 'Save and start again',
+    done: 'Saved. The module was started again with the new settings.',
+    not: 'Saved, but the module is not running.',
+  },
+} as const;
+
+/** The form for the configuration of one bundle or module, drawn from its schema. */
 const ConfigForm = defineComponent({
   name: 'ConfigForm',
   props: {
+    /** The name of the bundle, or of the module. */
     bundle: { type: String, required: true },
+    /** Whose configuration this is. */
+    kind: { type: String as () => 'bundle' | 'module', default: 'bundle' },
     title: { type: String, required: true },
     /** The state of the bundle as the list of settings told it. */
     state: { type: String, default: '' },
@@ -41,7 +61,11 @@ const ConfigForm = defineComponent({
     const clear = reactive(new Set<string>());
     const problem = ref('');
     const saved = ref('');
-    const path = () => `/api/v1/bundles/${part(props.bundle)}/config`;
+    const path = () => `/api/v1/${props.kind}s/${part(props.bundle)}/config`;
+    const words = () => WORDS[props.kind];
+    /** What the form is known by on the page: a module is told apart from a bundle. */
+    const key = () => (props.kind === 'module' ? `module:${props.bundle}` : props.bundle);
+    const owner = (answer: Described | undefined) => answer?.bundle ?? answer?.module;
 
     const show = (answer: Described) => {
       described.value = answer;
@@ -74,8 +98,8 @@ const ConfigForm = defineComponent({
         // The server says whether the extension runs with the new values, and if not, why.
         saved.value =
           answer.restarted === false
-            ? `Saved, but the extension was not restarted. ${answer.restartNote ?? ''}`.trim()
-            : 'Saved. The extension was restarted with the new settings.';
+            ? `${words().not} ${answer.restartNote ?? ''}`.trim()
+            : words().done;
       } catch (error) {
         problem.value = messageOf(error);
       }
@@ -86,7 +110,7 @@ const ConfigForm = defineComponent({
       const input = event.target as HTMLInputElement;
       state[field.path] = input.type === 'checkbox' ? input.checked : input.value;
     };
-    const id = (field: Field) => `config-${props.bundle}-${field.path}`;
+    const id = (field: Field) => `config-${key()}-${field.path}`;
 
     const control = (field: Field): VNode => {
       const common = { id: id(field), 'data-field': field.path, onInput: set(field) };
@@ -170,15 +194,15 @@ const ConfigForm = defineComponent({
     return () => {
       const current = described.value;
       // What the list said, until the bundle's own answer is there, which is newer.
-      const state = current?.bundle.state ?? props.state;
-      return h('section', { class: 'card config', 'data-config': props.bundle }, [
+      const state = owner(current)?.state ?? props.state;
+      return h('section', { class: 'card config', 'data-config': key() }, [
         h('div', { class: 'card-head' }, [
           h('h2', props.title),
           state ? h('span', { class: ['state', state] }, state) : null,
         ]),
         h('div', { class: 'card-body' }, [
-          current && current.bundle.state !== 'running'
-            ? h('p', { class: 'muted' }, `The bundle is ${current.bundle.state}.`)
+          current && state !== 'running'
+            ? h('p', { class: 'muted' }, `The ${props.kind} is ${state}.`)
             : null,
           current && current.problems.length > 0
             ? h(
@@ -195,7 +219,7 @@ const ConfigForm = defineComponent({
                 h(
                   'div',
                   { class: 'form-actions' },
-                  h('button', { type: 'submit', class: 'primary' }, 'Save and restart'),
+                  h('button', { type: 'submit', class: 'primary' }, words().button),
                 ),
               ])
             : null,
@@ -213,16 +237,30 @@ const SAVING = [
   'A secret is stored but never shown. Leave its field empty to keep the stored value.',
 ] as const;
 
-/** The settings of every bundle that has a config schema. */
+/** A module as the list of modules tells it. */
+interface ModuleState extends BundleState {
+  /** Whether it has settings. */
+  readonly config: boolean;
+}
+
+/** The settings of every bundle and of every module that has a config schema. */
 export const SettingsView = defineComponent({
   name: 'SettingsView',
   setup() {
+    const session = useSession();
     const bundles = ref<readonly BundleState[]>();
+    const modules = ref<readonly ModuleState[]>([]);
     const problem = ref('');
     onMounted(async () => {
       try {
         const answer = await api.request<{ bundles: BundleState[] }>('GET', '/api/v1/config');
         bundles.value = answer.bundles;
+        // The settings of a module decide what code inside the server does, so they take
+        // what managing modules takes as well. Whoever lacks it is not shown them.
+        if (session.can('system:modules.manage')) {
+          const listed = await api.request<{ modules: ModuleState[] }>('GET', '/api/v1/modules');
+          modules.value = listed.modules.filter((module) => module.config);
+        }
       } catch (error) {
         problem.value = `Could not load the settings: ${messageOf(error)}`;
       }
@@ -231,15 +269,15 @@ export const SettingsView = defineComponent({
       h('div', [
         pageHead('Settings', {
           description:
-            'Saving restarts the extension of the bundle. Secrets are stored but never shown.',
+            'Saving restarts the extension of the bundle, or the module. Secrets are stored but never shown.',
         }),
         problem.value ? h('p', { class: 'problem', role: 'alert' }, problem.value) : null,
-        bundles.value?.length === 0 ? h('p', { class: 'empty' }, 'No bundle has settings.') : null,
+        bundles.value?.length === 0 && modules.value.length === 0
+          ? h('p', { class: 'empty' }, 'No bundle has settings.')
+          : null,
         h('div', { class: 'split' }, [
-          h(
-            'div',
-            { class: 'column' },
-            (bundles.value ?? []).map((bundle) =>
+          h('div', { class: 'column' }, [
+            ...(bundles.value ?? []).map((bundle) =>
               h(ConfigForm, {
                 key: bundle.name,
                 bundle: bundle.name,
@@ -247,7 +285,16 @@ export const SettingsView = defineComponent({
                 state: bundle.state,
               }),
             ),
-          ),
+            ...modules.value.map((module) =>
+              h(ConfigForm, {
+                key: `module:${module.name}`,
+                kind: 'module',
+                bundle: module.name,
+                title: module.title ?? module.name,
+                state: module.state,
+              }),
+            ),
+          ]),
           h('section', { class: 'card', 'data-help': 'saving' }, [
             h('div', { class: 'card-head' }, h('h2', 'What saving does')),
             h(

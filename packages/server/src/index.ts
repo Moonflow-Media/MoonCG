@@ -27,6 +27,7 @@ export {
   type ServerConfig,
 } from './kernel/config.js';
 export { createLogger, type Logger } from './kernel/logger.js';
+export type { BuiltinModule, ModuleManager, ModuleRecord } from './modules/manager.js';
 export { type RunningProcess, type RunOptions, runServer } from './run.js';
 export { type RunningServer, type ServerOptions, startServer } from './server.js';
 export type {
@@ -38,6 +39,7 @@ export type {
 } from './storage/auth-store.js';
 export {
   type BundleSettingsStore,
+  type ModuleSettingsStore,
   memoryStorage,
   type ReplicantStore,
   type Storage,

@@ -31,6 +31,19 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * A text someone else chose (the name of an account, of a folder), as it may be put into a
+ * log line or a list: control characters become a space, and format characters are left
+ * out. Those draw nothing and can reorder what is drawn around them (zero-width characters,
+ * the bidirectional overrides), so that a text reads as another. Cut to `max` characters.
+ */
+export function printable(text: string, max = 200): string {
+  return text
+    .replace(/\p{Cf}+/gu, '')
+    .replace(/\p{Cc}+/gu, ' ')
+    .slice(0, max);
+}
+
 /** One line of the server log as the log page gets it. Ids rise by one per line. */
 export interface LogEntry {
   readonly id: number;

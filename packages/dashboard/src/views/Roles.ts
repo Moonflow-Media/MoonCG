@@ -9,13 +9,27 @@ interface Role {
   readonly grants: readonly string[];
 }
 
+/** A system permission there is to grant: one of the server, or one a module defined. */
+interface Known {
+  readonly permission: string;
+  readonly description: string;
+  /** The module that defined it. */
+  readonly module?: string;
+}
+
 /** Roles and what each grants. Built-in roles can be changed but not deleted. */
 export const RolesView = defineComponent({
   name: 'RolesView',
   setup() {
     const roles = ref<Role[]>([]);
+    const known = ref<Known[]>([]);
     const { run, send, alert } = useActions(async () => {
       roles.value = (await api.request<{ roles: Role[] }>('GET', '/api/v1/roles')).roles;
+      // A help, not a need: the page works without the list.
+      const listed = await api
+        .request<{ permissions: Known[] } | undefined>('GET', '/api/v1/permissions')
+        .catch(() => undefined);
+      known.value = listed?.permissions ?? [];
     });
     onMounted(() => run(async () => {}));
 
@@ -115,6 +129,29 @@ export const RolesView = defineComponent({
               ]),
             ),
           ]),
+          known.value.length === 0
+            ? null
+            : h('section', { class: 'card', 'data-help': 'permissions' }, [
+                h('div', { class: 'card-head' }, h('h2', 'System permissions')),
+                h(
+                  'div',
+                  { class: 'card-body' },
+                  h(
+                    'ul',
+                    { class: 'grants' },
+                    known.value.map(({ permission, description, module }) =>
+                      h('li', { key: permission, 'data-permission': permission }, [
+                        h('code', permission),
+                        h(
+                          'span',
+                          { class: 'muted' },
+                          module === undefined ? description : `${description} (module ${module})`,
+                        ),
+                      ]),
+                    ),
+                  ),
+                ),
+              ]),
         ]),
       ]);
   },

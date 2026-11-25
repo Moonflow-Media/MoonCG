@@ -32,6 +32,9 @@ scripts can use as well, the REST API under `/api/v1` and the SDK client.
 | Bundle settings: a form from the bundle's config schema       | Done                                    |
 | Assets: upload, list, delete, live list for graphics          | Done                                    |
 | Users, roles and tokens pages                                 | Done                                    |
+| Modules page: state, errors, enable and disable               | Done; installing is copying a folder    |
+| Module settings on the settings page                          | Done                                    |
+| External accounts of users: link, unlink, attempts to link    | Done; no page to link your own account  |
 | Log page with level filter, followed while open               | Done                                    |
 
 ## Pages
@@ -44,9 +47,18 @@ scripts can use as well, the REST API under `/api/v1` and the SDK client.
 | `/graphics`                    | Graphics with their URLs and connected pages | `system:dashboard.view`  |
 | `/assets`                      | The asset categories of each bundle          | `system:dashboard.view`  |
 | `/settings`                    | A form for each bundle that has a config     | `system:settings.manage` |
+| `/modules`                     | Modules with state and errors; on and off    | `system:modules.manage`  |
 | `/admin/users`, `/admin/roles` | Users and roles                              | `system:users.manage`    |
 | `/admin/tokens`                | API tokens                                   | `system:tokens.manage`   |
 | `/logs`                        | The latest lines of the server log           | `system:logs.view`       |
+
+The settings page also has a form for each [module](modules.md) with a config, for whoever
+holds `system:modules.manage` as well. The users page shows the
+[external accounts](external-logins.md#who-an-account-is-linking) each user can sign in with,
+each with the [realm](external-logins.md#the-realm-of-a-link) it is bound to, and the accounts
+that tried to sign in and belong to nobody: provider, id and realm first, and last what the
+account calls itself. The roles page lists the system
+permissions there are, with those modules defined.
 
 The navigation leaves out what you may not use, and pages draw no button the server would
 refuse. That is a convenience only: every request is checked by the server, whatever the

@@ -5,6 +5,7 @@ import { AssetsView } from './views/Assets.js';
 import { BundlesView } from './views/Bundles.js';
 import { GraphicsView } from './views/Graphics.js';
 import { LogsView } from './views/Logs.js';
+import { ModulesView } from './views/Modules.js';
 import { RolesView } from './views/Roles.js';
 import { SettingsView } from './views/Settings.js';
 import { TokensView } from './views/Tokens.js';
@@ -30,6 +31,7 @@ export const routes: RouteRecordRaw[] = [
   { path: '/admin/roles', component: RolesView },
   { path: '/admin/tokens', component: TokensView },
   { path: '/settings', component: SettingsView },
+  { path: '/modules', component: ModulesView },
   { path: '/logs', component: LogsView },
 ];
 

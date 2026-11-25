@@ -24,6 +24,20 @@ function builtDashboardDir(): string | undefined {
   }
 }
 
+/**
+ * The folders of the modules MoonCG ships. They are packages of their own that the server
+ * depends on, found the way the dashboard is: wherever the installation put them.
+ */
+function shippedModules(): { dir: string }[] {
+  return ['@mooncg/module-auth-oidc'].flatMap((name) => {
+    try {
+      return [{ dir: dirname(fileURLToPath(import.meta.resolve(`${name}/package.json`))) }];
+    } catch {
+      return [];
+    }
+  });
+}
+
 export interface RunOptions extends ServerOptions {
   /**
    * Whether the process is guarded against uncaught errors and stops the server on SIGINT
@@ -60,11 +74,12 @@ export async function runServer(
   const server = await startServer(config, {
     sdkFile: builtSdkFile(),
     dashboardDir: builtDashboardDir(),
+    builtinModules: shippedModules(),
     ...serverOptions,
     logger,
   });
   logger.info(
-    `MoonCG is listening on ${server.url} (bundles: ${config.bundlesDir}, data: ${config.dataDir}` +
+    `MoonCG is listening on ${server.url} (bundles: ${config.bundlesDir}, modules: ${config.modulesDir}, data: ${config.dataDir}` +
       `${file === undefined ? '' : `, configuration: ${file.path}`})`,
   );
   // The server is listening already; the bundles finish starting in the background.

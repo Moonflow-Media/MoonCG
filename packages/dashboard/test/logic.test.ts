@@ -29,6 +29,7 @@ describe('navigation', () => {
       '/admin/roles',
       '/admin/tokens',
       '/settings',
+      '/modules',
       '/logs',
     ]);
   });
@@ -69,7 +70,7 @@ describe('the groups of the navigation', () => {
       ['Workspaces', ['Show', 'Replay']],
       ['Show', ['Bundles', 'Graphics', 'Assets']],
       ['Admin', ['Users', 'Roles', 'Tokens']],
-      ['System', ['Settings', 'Logs']],
+      ['System', ['Settings', 'Modules', 'Logs']],
     ]);
   });
 

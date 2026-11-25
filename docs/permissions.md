@@ -16,6 +16,10 @@ login and setup pages.
 - [Response headers](#response-headers)
 - [Extensions](#extensions)
 
+Signing in with an account kept elsewhere (OpenID Connect, Twitch, Discord) is in
+[external-logins.md](external-logins.md); modules, which add such ways to sign in, routes and
+permissions, are in [modules.md](modules.md).
+
 ## First start
 
 While no user exists, the server prints a setup URL when it starts:
@@ -62,14 +66,24 @@ parts and each part is equal or `*`:
 
 System permissions:
 
-| Permission               | Allows                                                                    |
-| ------------------------ | ------------------------------------------------------------------------- |
-| `system:dashboard.view`  | The dashboard page, the bundle list, the replicant `system:revision`      |
-| `system:bundles.manage`  | Installing, updating, removing, enabling, disabling and reloading bundles |
-| `system:users.manage`    | Users, roles and grants, within what the holder holds (see below)         |
-| `system:tokens.manage`   | Creating, listing and revoking API tokens                                 |
-| `system:settings.manage` | Reading and changing the configuration of bundles; the settings page      |
-| `system:logs.view`       | The log page and `GET /api/v1/logs`                                       |
+| Permission                      | Allows                                                                             |
+| ------------------------------- | ---------------------------------------------------------------------------------- |
+| `system:dashboard.view`         | The dashboard page, the bundle list, the replicant `system:revision`               |
+| `system:bundles.manage`         | Installing, updating, removing, enabling, disabling and reloading bundles          |
+| `system:users.manage`           | Users, roles and grants, within what the holder holds (see below)                  |
+| `system:tokens.manage`          | Creating, listing and revoking API tokens                                          |
+| `system:settings.manage`        | Reading and changing the configuration of bundles; the settings page               |
+| `system:logs.view`              | The log page and `GET /api/v1/logs`                                                |
+| `system:modules.manage`         | Enabling and disabling modules; with `system:settings.manage`, their configuration |
+| `system:module.<module>.<name>` | Whatever the module that defined it says. See [modules.md](modules.md#permissions) |
+
+`system:users.manage` also covers linking and unlinking the external accounts of users, under
+the same rule as everything about users (see below). A module is code that runs inside the
+server, which is more than a bundle is, so managing modules is a permission of its own and not
+`system:bundles.manage`; [modules.md](modules.md#who-may-do-this) says why. Permissions that
+modules define are in a namespace of their own, `system:module.…`, so no module can redefine
+a built-in one. `GET /api/v1/permissions` lists all system permissions there are, to holders
+of `system:users.manage`, and the Roles page shows them.
 
 Two things need only that you are signed in, with whatever grants: loading the SDK
 (`/sdk/mooncg.js`) and opening the WebSocket. Both are what every bundle page does first, also
@@ -92,8 +106,9 @@ administrator. Whoever manages users, roles and grants through the API can
 
 - assign or remove a role, or delete one, only if they hold every grant of that role,
 - add a grant to a role or remove one, or create a role, only with grants they hold,
-- rename, disable, delete or reset the password of a user only if they hold everything that
-  user holds.
+- rename, disable, delete or reset the password of a user, or link an external account to
+  them or unlink one, only if they hold everything that user holds. Linking an account to a
+  user lets whoever has that account act as the user.
 
 Anything else is refused with 403. Holders of `*` are not limited by this. The `mooncg`
 command works on the data directory directly and is not limited either: whoever can run it
@@ -288,6 +303,7 @@ All of it is JSON over HTTP. Errors are `{ "error": { "code", "message" } }`.
 | Request                                           | Needs                  | Does                                            |
 | ------------------------------------------------- | ---------------------- | ----------------------------------------------- |
 | `POST /api/v1/auth/login` `{username, password}`  | nothing                | Signs in; sets the session cookie               |
+| `GET /api/v1/auth/providers`                      | nothing                | The ways to sign in, `local` and external ones  |
 | `POST /api/v1/auth/logout`                        | nothing                | Ends the session; clears the cookies            |
 | `GET /api/v1/me`                                  | signed in              | `{ user, roles, permissions }`                  |
 | `POST /api/v1/me/password` `{current, password}`  | a user's session       | Changes the own password                        |
@@ -306,6 +322,10 @@ All of it is JSON over HTTP. Errors are `{ "error": { "code", "message" } }`.
 | `GET /api/v1/tokens`                              | `system:tokens.manage` | Lists tokens, never their secrets               |
 | `POST /api/v1/tokens` `{name, grants, expires?}`  | `system:tokens.manage` | Creates a token; the answer has `secret`, once  |
 | `DELETE /api/v1/tokens/:id`                       | `system:tokens.manage` | Revokes a token                                 |
+
+Linking external accounts (`/api/v1/identities`, `/api/v1/users/:id/identities/…`) is in
+[external-logins.md](external-logins.md#the-api); modules (`/api/v1/modules`,
+`/api/v1/permissions`) are in [modules.md](modules.md#the-api).
 
 No answer ever contains a password or a hash. Status codes: 400 for unusable input, 401 when
 not signed in, 403 without the permission or beyond what you hold, 404 for something that does
@@ -349,12 +369,15 @@ seconds, and the server reads accounts for every request, so it acts on the chan
 - **Sessions** are a random 256-bit id in the cookie `mooncg_session` (HttpOnly,
   SameSite=Lax); the database has only its hash. A session ends after 7 days without use and
   at the latest 30 days after signing in. A page with an open socket counts as use. Signing
-  out deletes it. Changing or resetting a password, and disabling a user, ends all of that
-  user's sessions.
-- **Cookie names.** When the cookies are `Secure` (`--secure-cookies`, or HTTPS behind a
-  trusted proxy) they are named `__Host-mooncg_session` and `__Host-mooncg_token`, which a
-  browser only accepts over HTTPS and for this exact host. Over plain HTTP they keep the plain
-  names, because a browser would refuse the prefix there.
+  out deletes it. Changing or resetting a password, disabling a user, and unlinking an
+  external account of theirs, ends all of that user's sessions. A session opened by signing
+  in with an external account is the same session, with the same cookie and the same ends.
+- **Cookie names.** When the cookies are `Secure` (`--secure-cookies`, HTTPS behind a
+  trusted proxy, or a request to an `https://`
+  [public address](external-logins.md#the-public-address-and-the-redirect-address)) they are
+  named `__Host-mooncg_session` and `__Host-mooncg_token`, which a browser only accepts over
+  HTTPS and for this exact host. Over plain HTTP they keep the plain names, because a browser
+  would refuse the prefix there.
 - **Throttling.** Three limits, each answering 429 with `Retry-After`, also for the right
   password:
   - one user name from one address: 5 failed attempts, then refused for 5 seconds, doubling
@@ -394,6 +417,15 @@ A page of another site must not be able to act through your browser.
    token by itself.
 4. The sign-in of [dev mode](#dev-mode) counts as a cookie for the second rule: it needs no
    credentials at all, so a request that changes something must still prove it was meant.
+5. One request changes something without either: `GET /auth/<provider>/callback`, where an
+   external provider sends the browser back to. It opens a session, and it cannot carry JSON
+   or a header, because it is the provider that sends the browser there. What stands in is
+   `state`: a random value the server handed to this browser, which the browser shows it holds
+   by a cookie, and which works once. See
+   [external-logins.md](external-logins.md#what-is-checked).
+
+Routes of [modules](modules.md#http-routes) (`/m/<module>/…`) fall under rules 1 to 3 like
+every other, also those a module declared public.
 
 ## Listening beyond this machine
 
@@ -414,8 +446,22 @@ HTTPS in front of it and start with `--secure-cookies --trust-proxy`:
 Without `--trust-proxy` those headers are ignored, because anyone can send them. The proxy must
 pass `Host` and `Origin` through unchanged, or add its public origin with `--allowed-origin`.
 The origin check compares scheme, host and port. The server takes its own scheme for `http`
-unless a trusted proxy says `X-Forwarded-Proto: https`, so behind an HTTPS proxy without
-`--trust-proxy` a page's `https://…` origin does not match and its requests are refused.
+unless a trusted proxy says `X-Forwarded-Proto: https`, or the request is addressed to a
+public address (`--public-url`) that is `https://`. So behind an HTTPS proxy without
+`--trust-proxy` and without such a public address, a page's `https://…` origin does not match
+and its requests are refused.
+
+The three settings agree on one answer per request, used for the cookies, for the origin
+check and for the WebSocket alike:
+
+| Setting                  | A request counts as HTTPS when             | Cookies are `Secure` |
+| ------------------------ | ------------------------------------------ | -------------------- |
+| `--trust-proxy`          | The proxy says `X-Forwarded-Proto: https`  | On those requests    |
+| `--public-url https://…` | Its `Host` is that of the public address   | On those requests    |
+| `--secure-cookies`       | It does not say; one of the two above does | On every request     |
+
+A public address says nothing about where a request came from: `--trust-proxy` is still what
+makes the server count login attempts per client and not per proxy.
 
 ## Dev mode
 
@@ -443,8 +489,8 @@ or a token acts as themselves; whoever brings one that is not accepted gets `401
 Outside dev mode that user is inert: it cannot sign in, its sessions and tokens are deleted at
 the next start without `--dev` and not accepted, no token can be created for it, and it counts
 neither as a user nor as an administrator, so an installation that was only ever used in dev
-mode still gets its [setup](#first-start). It cannot be renamed, disabled, given a password or
-other roles, only deleted, and shows as `dev mode only` on the Users page and in
+mode still gets its [setup](#first-start). It cannot be renamed, disabled, given a password,
+other roles or a link to an external account, only deleted, and shows as `dev mode only` on the Users page and in
 `mooncg user list`.
 
 What it cannot protect against is the machine itself: every program and every person that can
@@ -458,6 +504,9 @@ reaches it is an administrator, and MoonCG cannot tell. `mooncg start` has none 
 Every answer carries `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`.
 
 The server's own pages (`/`, `/login`, `/setup`) are sent with `X-Frame-Options: DENY` and
+the policy below. The login page keeps it also with external providers on it: their buttons
+are links, not forms, nothing is loaded from a provider, and their icons are files of this
+server (`/auth/<provider>/icon`, sent with the policy of uploaded assets).
 
 ```
 Content-Security-Policy: default-src 'self'; style-src 'self';
@@ -489,7 +538,8 @@ anything else is `application/octet-stream` with `Content-Disposition: attachmen
 gives a document opened from such a file no origin and no scripts, so an uploaded HTML page or
 SVG cannot act as this server towards whoever opens it. [dashboard.md](dashboard.md#assets)
 has the details.
-When the server listens on anything but loopback without `--secure-cookies`, it logs a warning.
+When the server listens on anything but loopback without `--secure-cookies`, it logs a warning,
+and another for a public address (`--public-url`) that is plain `http://` and not this machine.
 
 ## Extensions
 
@@ -514,6 +564,6 @@ An extension reaching into **another** bundle needs the capability (`bundle:<nam
 Installed bundles are trusted code, and `check` answers yes for a sender of kind `extension`.
 
 Bundle HTTP routes are checked before the handler runs. The handler does not get the caller's
-`Authorization` and `Cookie` headers or a `token` query parameter. It gets `request.sender`,
+`Authorization`, `Proxy-Authorization` and `Cookie` headers or a `token` query parameter. It gets `request.sender`,
 in the same form as a message's sender, so `ctx.permissions.check(request.sender, 'operate')`
 works in a route as well.
