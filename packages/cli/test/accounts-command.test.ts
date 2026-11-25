@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openAccounts } from '@mooncg/server/accounts';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createAuth } from '../../server/src/auth/auth.js';
+import { openSqliteStorage } from '../../server/src/storage/replicant-store.js';
 import { type CliIo, run } from '../src/cli.js';
 
 const CHEAP = { N: 16, r: 1, p: 1 };
@@ -127,6 +129,28 @@ describe('mooncg user', () => {
     expect(out[0]).toMatch(/^ada\s+admin$/);
     expect(out[1]).toMatch(/^vera\s+viewer\s+disabled$/);
     expect(out.join('\n')).not.toMatch(/scrypt/);
+  });
+
+  it('shows the user dev mode created as what it is, and gives it no password or token', async () => {
+    const { mooncg, out, errors, dataDir } = await setup();
+    await mooncg('user', 'create', 'ada', '--admin', '--password', PASSWORD);
+    // What "mooncg dev" does when it starts on this data directory.
+    const storage = await openSqliteStorage(dataDir);
+    createAuth({ store: storage.auth, devMode: true }).ensureDevUser();
+    await storage.close();
+    out.length = 0;
+
+    expect(await mooncg('user', 'list')).toBe(0);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatch(/^ada\s+admin$/);
+    expect(out[1]).toMatch(/^dev\s+admin\s+dev mode only/);
+
+    expect(await mooncg('user', 'passwd', 'dev', '--password', PASSWORD)).toBe(1);
+    expect(errors.at(-1)).toMatch(/dev mode/);
+    expect(
+      await mooncg('token', 'create', 'obs', '--user', 'dev', '--grant', 'system:dashboard.view'),
+    ).toBe(1);
+    expect(errors.at(-1)).toMatch(/dev mode/);
   });
 
   it('sets a new password and signs the user out everywhere', async () => {

@@ -19,8 +19,15 @@ export {
 } from './install/installer.js';
 export type { NpmInstall, NpmRequest } from './install/npm.js';
 export type { BundleSource, PublicSource } from './install/sources.js';
-export { loadConfig, type ServerConfig } from './kernel/config.js';
+export {
+  CONFIG_FILE,
+  type ConfigFile,
+  loadConfig,
+  readConfigFile,
+  type ServerConfig,
+} from './kernel/config.js';
 export { createLogger, type Logger } from './kernel/logger.js';
+export { type RunningProcess, type RunOptions, runServer } from './run.js';
 export { type RunningServer, type ServerOptions, startServer } from './server.js';
 export type {
   AuthStore,

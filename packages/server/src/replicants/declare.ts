@@ -31,13 +31,22 @@ class DeclarationError extends Error {
 }
 
 /**
+ * The schemas of a manifest's replicants as they were read and found usable, by the name of
+ * the replicant. See `checkReplicants`.
+ */
+export type CheckedSchemas = ReadonlyMap<string, Validate>;
+
+/**
  * Declares the replicants of a bundle manifest: compiles each schema, picks the initial value
  * (the stored one for a persistent replicant if it still fits the schema, else the default)
- * and registers it. When there are errors, none of the replicants stay.
+ * and registers it. When there are errors, none of the replicants stay. With `checked`, the
+ * schemas `checkReplicants` read for this very manifest, no file is read again: what was
+ * checked is what is declared.
  */
 export async function declareReplicants(
   bundle: { readonly name: string; readonly dir: string; readonly manifest: Manifest },
   options: DeclareOptions,
+  checked?: CheckedSchemas,
 ): Promise<DeclaredReplicants> {
   const { registry, logger, persistence } = options;
   const saving: (() => void)[] = [];
@@ -47,7 +56,8 @@ export async function declareReplicants(
       const validate =
         declaration.schema === undefined
           ? undefined
-          : await loadSchema(bundle.dir, declaration.schema, `${path}.schema`);
+          : (checked?.get(name) ??
+            (await loadSchema(bundle.dir, declaration.schema, `${path}.schema`)));
       const fallback = declaration.default ?? null;
       const problems = validate?.(fallback);
       if (problems?.length) {
@@ -91,6 +101,38 @@ export async function declareReplicants(
       for (const start of saving) start();
     },
   };
+}
+
+/**
+ * Checks what `declareReplicants` would refuse, without declaring anything: each schema must
+ * be readable and usable, and each default must fit it. Returns the problems, worded like
+ * the errors of a bundle that fails to start, and the schemas as they were read, to hand to
+ * `declareReplicants` so that it declares exactly what was checked. For a bundle that keeps
+ * running while its files are edited.
+ */
+export async function checkReplicants(bundle: {
+  readonly dir: string;
+  readonly manifest: Manifest;
+}): Promise<{ readonly errors: string[]; readonly schemas: CheckedSchemas }> {
+  const errors: string[] = [];
+  const schemas = new Map<string, Validate>();
+  for (const [name, declaration] of Object.entries(bundle.manifest.replicants)) {
+    if (declaration.schema === undefined) continue;
+    const path = `replicants.${name}`;
+    try {
+      const validate = await loadSchema(bundle.dir, declaration.schema, `${path}.schema`);
+      schemas.set(name, validate);
+      const problems = validate(declaration.default ?? null);
+      if (problems?.length) {
+        errors.push(`${path}.default: does not match the schema: ${problems.join('; ')}`);
+      }
+    } catch (error) {
+      errors.push(
+        error instanceof DeclarationError ? error.message : `${path}: ${errorMessage(error)}`,
+      );
+    }
+  }
+  return { errors, schemas };
 }
 
 async function loadSchema(dir: string, file: string, path: string): Promise<Validate> {

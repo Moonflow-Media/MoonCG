@@ -163,8 +163,10 @@ describe('a replicant the server removed', () => {
   });
 });
 
-describe('hello for an unknown bundle', () => {
-  it('rejects ready with not_found and does not reconnect', async () => {
+describe('hello for a bundle that is not running', () => {
+  // The page waits for the bundle: see client-bundle-restart.test.ts.
+  it('does not reject ready: the bundle may be back in a moment', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { client, socket, sockets } = setup();
     socket().open();
     socket().receive({
@@ -173,8 +175,12 @@ describe('hello for an unknown bundle', () => {
       message: 'Bundle "scoreboard" is not running',
     });
 
-    await expect(client.ready).rejects.toMatchObject({ code: 'not_found' });
+    const settled = vi.fn();
+    client.ready.then(settled, settled);
     await tick();
-    expect(sockets).toHaveLength(1);
+    expect(settled).not.toHaveBeenCalled();
+    expect(sockets.length).toBeGreaterThan(1);
+    client.close();
+    vi.restoreAllMocks();
   });
 });

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, api } from '../src/api.js';
 import { live } from '../src/live.js';
 import { describeSource } from '../src/stores/installs.js';
+import { useOnAir } from '../src/stores/onAir.js';
 import { BundlesView } from '../src/views/Bundles.js';
 
 type Listener = (value: unknown) => void;
@@ -355,6 +356,88 @@ describe('a staged bundle', () => {
       path: `/api/v1/bundles/-/staged/${STAGED.id}`,
     });
     view.unmount();
+  });
+
+  describe('while the installation is on air', () => {
+    const UPDATE = { name: 'board', title: 'Board', target: 'board', replaces: '1.0.0' };
+
+    it('fetches an update without a question: fetching interrupts nothing', async () => {
+      const { calls, asked } = setup();
+      useOnAir().onAir = true;
+      const view = await show();
+      await button(row(view, 'board'), 'Update')?.trigger('click');
+      await view
+        .find('.install')
+        .findAll('button')
+        .find((item) => item.text().startsWith('Fetch from'))
+        ?.trigger('click');
+      await flushPromises();
+
+      expect(asked).toEqual([]);
+      expect(calls.at(-1)).toEqual({
+        method: 'POST',
+        path: '/api/v1/bundles/board/update',
+        body: {},
+      });
+      view.unmount();
+    });
+
+    it('says on a fetched update that putting it in place is blocked, and what to do', async () => {
+      useOnAir().onAir = true;
+      const { view, card } = await staged(UPDATE);
+      const note = card.find('[data-on-air-note]');
+      expect(note.text()).toContain('on air');
+      expect(note.text()).toContain('"board"');
+      expect(note.text()).toMatch(/stays here|wait/);
+      view.unmount();
+    });
+
+    it('says nothing of the kind on a new bundle, or off air', async () => {
+      useOnAir().onAir = true;
+      const fresh = await staged();
+      expect(fresh.card.find('[data-on-air-note]').exists()).toBe(false);
+      fresh.view.unmount();
+      useOnAir().onAir = false;
+      const update = await staged(UPDATE);
+      expect(update.card.find('[data-on-air-note]').exists()).toBe(false);
+      update.view.unmount();
+    });
+
+    it('asks before an update is put in place, and overrides the lock only on a yes', async () => {
+      useOnAir().onAir = true;
+      const { view, card, calls, asked, confirms } = await staged(UPDATE);
+      const posts = () => calls.filter((call) => call.method === 'POST');
+
+      confirms.answer = false;
+      await button(card, 'Update')?.trigger('click');
+      await flushPromises();
+      expect(asked).toHaveLength(1);
+      expect(asked[0]).toContain('on air');
+      expect(asked[0]).toContain('Update "board"');
+      expect(posts()).toEqual([]);
+
+      confirms.answer = true;
+      await button(card, 'Update')?.trigger('click');
+      await flushPromises();
+      expect(posts()).toEqual([
+        {
+          method: 'POST',
+          path: `/api/v1/bundles/-/staged/${STAGED.id}/commit`,
+          body: { scripts: false, forceOnAir: true },
+        },
+      ]);
+      view.unmount();
+    });
+
+    it('installs a new bundle without a question and without overriding anything', async () => {
+      useOnAir().onAir = true;
+      const { view, card, calls, asked } = await staged();
+      await button(card, 'Install')?.trigger('click');
+      await flushPromises();
+      expect(asked).toEqual([]);
+      expect(calls.at(-1)?.body).toEqual({ scripts: false });
+      view.unmount();
+    });
   });
 
   it('names an update as one, with both versions', async () => {

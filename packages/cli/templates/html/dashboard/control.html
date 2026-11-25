@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{title}}</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        font-family: system-ui, sans-serif;
+      }
+      label {
+        display: block;
+        margin-bottom: 12px;
+      }
+      input[type='text'] {
+        display: block;
+        box-sizing: border-box;
+        width: 100%;
+        margin-top: 4px;
+        padding: 8px;
+        font-size: 14px;
+      }
+      #problem {
+        color: #b00020;
+      }
+    </style>
+  </head>
+  <body>
+    <label>
+      Text
+      <input id="text" type="text" maxlength="200" />
+    </label>
+    <label>
+      <input id="visible" type="checkbox" />
+      Show it on the overlay
+    </label>
+    <p id="problem" role="alert"></p>
+
+    <script type="module">
+      import { createClient } from '/sdk/mooncg.js';
+
+      // The client learns its bundle from this page's URL: /b/{{name}}/...
+      const mc = createClient();
+      const message = mc.replicant('message');
+      const text = document.getElementById('text');
+      const visible = document.getElementById('visible');
+      const problem = document.getElementById('problem');
+      const report = (error) => {
+        problem.textContent = error.message;
+      };
+
+      // Called with the value now and whenever anyone changes it.
+      message.subscribe((value) => {
+        // Not while someone is typing in the field.
+        if (document.activeElement !== text) text.value = value.text;
+        visible.checked = value.visible;
+        problem.textContent = '';
+      });
+      message.ready.catch(report);
+
+      text.addEventListener('change', () => {
+        message
+          .update((draft) => {
+            draft.text = text.value;
+          })
+          .catch(report);
+      });
+      visible.addEventListener('change', () => {
+        message
+          .update((draft) => {
+            draft.visible = visible.checked;
+          })
+          .catch(report);
+      });
+    </script>
+  </body>
+</html>

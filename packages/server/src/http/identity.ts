@@ -3,6 +3,9 @@ import {
   ALLOW_ALL_POLICY,
   ALLOW_ALL_PRINCIPAL,
   ANONYMOUS_PRINCIPAL,
+  isLoopbackAddress,
+  isLoopbackAuthority,
+  isLoopbackOrigin,
   type Policy,
   type Principal,
 } from '@mooncg/core';
@@ -87,10 +90,78 @@ export function credentialsOf(headers: IncomingHttpHeaders, secure = false): Cre
   };
 }
 
+/** The query parameter an API token may arrive in. A bundle route never sees it. */
+export const TOKEN_PARAMETER = 'token';
+
+/**
+ * Whether a request says anything about who it is: a session or token cookie, an
+ * `Authorization` header of any kind, or a `token` in its address. Whether any of it is
+ * valid is another question. Dev mode asks this: whoever brought credentials that are not
+ * accepted is refused like everywhere else, and never signed in as someone else instead.
+ */
+export function carriesCredentials(
+  request: Pick<IncomingMessage, 'headers' | 'url'>,
+  secure = false,
+): boolean {
+  const { headers, url = '' } = request;
+  const { session, tokenSession, invalid } = credentialsOf(headers, secure);
+  if (session !== undefined || tokenSession !== undefined || invalid) return true;
+  if (headers.authorization !== undefined) return true;
+  const at = url.indexOf('?');
+  if (at === -1) return false;
+  return url
+    .slice(at + 1)
+    .split('&')
+    .some((parameter) => parameter.split('=')[0] === TOKEN_PARAMETER);
+}
+
+/** Headers a proxy adds to what it passes on. A request with one did not come straight here. */
+const PROXY_HEADERS = [
+  'forwarded',
+  'via',
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-real-ip',
+] as const;
+
+/**
+ * Whether dev mode may sign a request in without credentials. All of it must hold:
+ *
+ * - the other end of the socket is this machine. That is the address of the connection
+ *   itself; no header is believed about where a request comes from;
+ * - no proxy passed the request on: behind a proxy on this machine every request of the
+ *   whole network would come from loopback;
+ * - the request is addressed to this machine by a loopback name. A page of another site
+ *   whose name was pointed at 127.0.0.1 (DNS rebinding) reaches the socket from loopback,
+ *   but its requests still carry its own name as `Host`;
+ * - the request does not come from a page of another site: it states no `Origin`, as a
+ *   command line tool, OBS or a page that navigates does, or one on this machine, which is
+ *   the server's own, that of another server here and that of every `dev.url` (a manifest
+ *   takes no other). The visitor's browser is on this machine whatever page it shows, so the
+ *   address of the socket says nothing about the page; its origin does. This holds even for
+ *   an origin that is allowed to connect: allowed is not signed in.
+ */
+export function devLoginAllowed(request: Pick<IncomingMessage, 'headers' | 'socket'>): boolean {
+  const { headers, socket } = request;
+  return (
+    isLoopbackAddress(socket.remoteAddress) &&
+    isLoopbackAuthority(headers.host) &&
+    PROXY_HEADERS.every((name) => headers[name] === undefined) &&
+    (headers.origin === undefined || isLoopbackOrigin(headers.origin))
+  );
+}
+
 export interface IdentifyOptions extends Transport {
   readonly auth?: Auth | undefined;
   readonly resolvePrincipal?: ResolvePrincipal | undefined;
   readonly policy?: Policy | undefined;
+  /**
+   * Dev mode only: who a request that brought no credentials at all acts as, if
+   * `devLoginAllowed` lets it. Without it, such a request is anonymous, as it always is
+   * outside dev mode.
+   */
+  readonly devLogin?: (() => RequestIdentity) | undefined;
 }
 
 /**
@@ -108,7 +179,18 @@ export function createIdentify(options: IdentifyOptions): Identify {
     });
   }
   if (auth) {
-    return ({ headers }) => auth.identify(credentialsOf(headers, secureCookies(headers, options)));
+    const { devLogin } = options;
+    return (request) => {
+      const { headers } = request;
+      const secure = secureCookies(headers, options);
+      const identity = auth.identify(credentialsOf(headers, secure));
+      // Whoever brings credentials acts as themselves, also in dev mode.
+      if (identity.principal.kind !== 'anonymous' || devLogin === undefined) return identity;
+      // And whoever brings credentials that are not accepted is refused, also in dev mode:
+      // an expired session or a revoked token must not turn into an administrator.
+      if (carriesCredentials(request, secure)) return identity;
+      return devLoginAllowed(request) ? devLogin() : identity;
+    };
   }
   return () => ({ principal: ANONYMOUS_PRINCIPAL, policy: { roles: {} }, via: 'none' });
 }

@@ -49,6 +49,13 @@ export interface BundleInfo {
   readonly assets?: readonly AssetCategoryInfo[] | undefined;
   /** Where the bundle was installed from. Told to those who may manage bundles only. */
   readonly source?: SourceInfo | undefined;
+  /**
+   * Why the bundle as it is on disk was not loaded when its files changed. The version that
+   * ran before keeps running.
+   */
+  readonly reloadErrors?: readonly string[] | undefined;
+  /** What changed on disk and waits for On Air to end, as the areas the changes are in. */
+  readonly pendingChanges?: readonly string[] | undefined;
 }
 
 /** A panel as a workspace shows it: its id is unique across bundles. */
@@ -98,10 +105,15 @@ export const useBundles = defineStore('bundles', () => {
     loaded.value = true;
   }
 
-  async function change(name: string, action: BundleAction): Promise<void> {
+  /** `forceOnAir` does it although the installation is on air. */
+  async function change(name: string, action: BundleAction, forceOnAir = false): Promise<void> {
     problem.value = '';
     try {
-      await api.request('POST', `/api/v1/bundles/${encodeURIComponent(name)}/${action}`);
+      await api.request(
+        'POST',
+        `/api/v1/bundles/${encodeURIComponent(name)}/${action}`,
+        forceOnAir ? { forceOnAir: true } : undefined,
+      );
     } catch (error) {
       problem.value = `Could not ${action} "${name}": ${messageOf(error)}`;
     }

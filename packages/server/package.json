@@ -1,11 +1,11 @@
 {
   "name": "@mooncg/server",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "description": "The MoonCG server: kernel, HTTP, WebSocket transport, extension host.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.22"
   },
   "exports": {
     ".": {
@@ -29,6 +29,7 @@
     "@mooncg/dashboard": "workspace:*",
     "@mooncg/sdk": "workspace:*",
     "ajv": "^8.20.0",
+    "chokidar": "^6.0.0",
     "fastify": "^5.12.8",
     "semver": "^7.8.6",
     "ws": "^8.23.0",

@@ -64,7 +64,18 @@ export interface ClientOptions {
   onEnded?: (reason: GraphicEndReason) => void;
   /** How long a refused duplicate waits before it asks again. Defaults to 3000. */
   duplicateRetryMs?: number;
-  /** What a graphic does when the server asks it to reload. Defaults to reloading the page. */
+  /**
+   * What happens when the server says that the bundle is not running. By default the client
+   * waits for it and keeps asking, ever more slowly up to every 15 seconds: a bundle that is
+   * reloaded is back within moments, and its pages go on by themselves. With `false` the
+   * client gives up at once and `ready` rejects with `not_found`.
+   */
+  waitForBundle?: boolean;
+  /**
+   * What the page does when the server asks it to reload: a graphic an operator reloads, or
+   * any page of a bundle whose files changed while the server watches them. Defaults to
+   * reloading the page.
+   */
   reloadPage?: () => void;
 }
 
@@ -187,6 +198,9 @@ export function graphicFromPath(pathname: string): string | undefined {
 
 const DUPLICATE_NOTICE_ID = 'mooncg-duplicate';
 
+/** The longest a page waits before it asks again for a bundle that is not running. */
+export const ABSENT_RETRY_MAX_MS = 15_000;
+
 const ENDED_NOTICE_ID = 'mooncg-ended';
 const ENDED_TEXT: Readonly<Record<GraphicEndReason, string>> = {
   replaced:
@@ -234,6 +248,8 @@ function showNotice(id: string, text: string | undefined): void {
 
 interface Deferred<T = void> {
   readonly promise: Promise<T>;
+  /** Whether the promise was rejected. One that was can never be resolved after all. */
+  readonly rejected: boolean;
   resolve(value: T): void;
   reject(error: MoonCGError): void;
 }
@@ -241,18 +257,35 @@ interface Deferred<T = void> {
 function defer<T = void>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (error: MoonCGError) => void;
+  let settled = false;
+  let rejected = false;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
   // Nobody has to await `ready`; a rejection must not surface as an unhandled one.
   promise.catch(() => {});
-  return { promise, resolve, reject };
+  return {
+    promise,
+    get rejected() {
+      return rejected;
+    },
+    resolve(value) {
+      settled = true;
+      resolve(value);
+    },
+    reject(error) {
+      if (!settled) rejected = true;
+      settled = true;
+      reject(error);
+    },
+  };
 }
 
 interface ReplicantState {
   readonly handle: ReplicantHandle<unknown>;
-  readonly ready: Deferred;
+  /** Replaced by a fresh one when a replicant that was refused is asked for again. */
+  ready: Deferred;
   readonly listeners: Set<(value: unknown, meta: ReplicantMeta) => void>;
   loaded: boolean;
   value: Json | undefined;
@@ -304,6 +337,7 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
   const createSocket = options.createSocket ?? ((target) => new WebSocket(target));
   const reconnectDelayMs = options.reconnectDelayMs ?? 1000;
   const duplicateRetryMs = options.duplicateRetryMs ?? 3000;
+  const waitForBundle = options.waitForBundle ?? true;
   const graphic =
     'graphic' in options
       ? options.graphic
@@ -334,6 +368,11 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
   let nextId = 1;
   /** The server refused this page as a second instance of its graphic; it keeps asking. */
   let duplicate = false;
+  /**
+   * How often in a row the server said that the bundle is not running. The page keeps
+   * asking, ever more slowly: a bundle that is reloaded is back within moments.
+   */
+  let absent = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let status: ConnectionStatus = 'reconnecting';
   const statusListeners = new Set<(status: ConnectionStatus) => void>();
@@ -390,6 +429,8 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
   const subscribe = (name: string, state: ReplicantState) => {
     const id = nextId++;
     pendingSubs.set(id, state);
+    // A `ready` that was rejected cannot resolve; whoever asks from now on gets one that can.
+    if (state.ready.rejected) state.ready = defer();
     // Telling the server what is already here lets it send only the missed patches. Not when
     // the local copy is in doubt: a replay would only repeat what went wrong.
     const known =
@@ -472,6 +513,7 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
           return;
         }
         connected = true;
+        absent = 0;
         if (duplicate) {
           duplicate = false;
           onDuplicate(false);
@@ -479,12 +521,7 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
         ready.resolve();
         setStatus('live');
         for (const [name, state] of replicants) subscribe(name, state);
-        for (const [name, topic] of topics) {
-          topic.subscribed = ask((id) => ({ t: 'msg.sub', id, name })).catch((error) => {
-            topics.delete(name);
-            report(`could not listen to "${name}" again`, error);
-          });
-        }
+        for (const [name, topic] of topics) listenAgain(name, topic);
         return;
       case 'rep.snap': {
         const state = replicants.get(msg.name);
@@ -497,7 +534,10 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
         state.rev = msg.rev;
         state.resync = false;
         setError(state, undefined);
-        if (sameValue) return;
+        if (sameValue) {
+          state.ready.resolve();
+          return;
+        }
         state.value = deepFreeze(msg.value);
         state.loaded = true;
         state.ready.resolve();
@@ -530,6 +570,17 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
         state.ready.reject(error);
         return;
       }
+      case 'rep.back': {
+        // Declared again, as after its bundle was restarted: asked for like the first time.
+        const state = replicants.get(msg.name);
+        if (state && connected) subscribe(msg.name, state);
+        return;
+      }
+      case 'msg.back': {
+        const topic = topics.get(msg.name);
+        if (topic && connected) listenAgain(msg.name, topic);
+        return;
+      }
       case 'msg':
         for (const listener of [...(topics.get(msg.name)?.listeners ?? [])]) {
           try {
@@ -552,8 +603,8 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
         return;
       }
       case 'msg.gone':
-        // The server ended the subscription; a reconnect must not ask for it again.
-        topics.delete(msg.name);
+        // The server ended the subscription. The listeners stay: the server says when the
+        // topic is back, and it is asked for again then, or at the next reconnect.
         console.warn(`MoonCG: ${msg.message}`);
         return;
       case 'msg.call': {
@@ -594,6 +645,11 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
             if (!duplicate) onDuplicate(true);
             duplicate = true;
             socket?.close();
+          } else if (msg.code === 'not_found' && waitForBundle) {
+            // The bundle is not running, which a reload of it ends by itself: ask again.
+            if (absent === 0) console.warn(`MoonCG: ${msg.message}. Waiting for it.`);
+            absent++;
+            socket?.close();
           } else stop(error);
           return;
         }
@@ -632,7 +688,25 @@ export function createConnection(options: ConnectionOptions = {}): Connection {
       pending.clear();
       if (stopError) return;
       setStatus('reconnecting');
-      reconnectTimer = setTimeout(connect, duplicate ? duplicateRetryMs : reconnectDelayMs);
+      const delay = duplicate
+        ? duplicateRetryMs
+        : absent > 0
+          ? Math.min(reconnectDelayMs * 2 ** Math.min(absent - 1, 10), ABSENT_RETRY_MAX_MS)
+          : reconnectDelayMs;
+      reconnectTimer = setTimeout(connect, delay);
+    });
+  };
+
+  /**
+   * Asks the server for a topic the page listened to before. A topic that is not declared
+   * right now is kept: the server says when it is back. One the server refuses is given up.
+   */
+  const listenAgain = (name: string, topic: TopicState) => {
+    topic.subscribed = ask((id) => ({ t: 'msg.sub', id, name })).catch((error) => {
+      const code = error instanceof MoonCGError ? error.code : undefined;
+      if (code === 'not_found' || code === 'disconnected') return;
+      if (topics.get(name) === topic) topics.delete(name);
+      report(`could not listen to "${name}" again`, error);
     });
   };
 

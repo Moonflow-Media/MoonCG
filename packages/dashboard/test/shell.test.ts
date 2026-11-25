@@ -160,7 +160,11 @@ describe('the shell', () => {
 
   it('counts the graphics that are open right now', async () => {
     const { view, push, followed } = await show(admin);
-    expect([...followed.keys()]).toEqual(['board:$instances.overlay', 'board:$instances.studio']);
+    // Besides the lists of the graphics, the shell follows the On Air switch.
+    expect([...followed.keys()].filter((name) => name.startsWith('board:'))).toEqual([
+      'board:$instances.overlay',
+      'board:$instances.studio',
+    ]);
     expect(view.find('a[href="/graphics"] .count').exists()).toBe(false);
 
     push('board:$instances.overlay', [

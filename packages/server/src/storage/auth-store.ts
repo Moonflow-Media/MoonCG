@@ -61,12 +61,25 @@ export const AUTH_MIGRATION = `
     ('viewer', 'system:dashboard.view');
 `;
 
+/**
+ * Marks the users dev mode created for itself. Such a user is nobody outside dev mode: see
+ * `UserRecord.devMode`. Added as its own migration.
+ */
+export const DEV_USER_MIGRATION =
+  'ALTER TABLE users ADD COLUMN dev_mode INTEGER NOT NULL DEFAULT 0';
+
 /** Times are milliseconds since the epoch. */
 export interface UserRecord {
   readonly id: string;
   readonly name: string;
   readonly disabled: boolean;
   readonly createdAt: number;
+  /**
+   * Created by dev mode, to act as while it signs in without a password. Outside dev mode
+   * such a user is inert, and it never counts as a user or an administrator of the
+   * installation. Nothing ever takes the mark away.
+   */
+  readonly devMode?: boolean | undefined;
 }
 
 /** Ties a user to a way of signing in. For `local`, the subject is the user id and the secret the password hash. */
@@ -109,14 +122,17 @@ export interface UserRepository {
   get(id: string): UserRecord | undefined;
   /** Names are compared without regard to case. */
   byName(name: string): UserRecord | undefined;
+  /** How many users there are, not counting those dev mode created. */
   count(): number;
+  /** The users dev mode created. */
+  devMode(): UserRecord[];
   create(user: UserRecord): void;
   update(id: string, change: { readonly name?: string; readonly disabled?: boolean }): void;
   delete(id: string): void;
   roles(id: string): string[];
   addRole(id: string, role: string): void;
   removeRole(id: string, role: string): void;
-  /** How many enabled users hold the `admin` role. */
+  /** How many enabled users hold the `admin` role, not counting those dev mode created. */
   admins(): number;
 }
 
@@ -204,6 +220,7 @@ interface UserRow {
   name: string;
   disabled: number;
   created_at: number;
+  dev_mode: number;
 }
 interface TokenRow {
   id: string;
@@ -227,6 +244,7 @@ const toUser = (row: UserRow): UserRecord => ({
   name: row.name,
   disabled: row.disabled !== 0,
   createdAt: row.created_at,
+  ...(row.dev_mode !== 0 ? { devMode: true } : {}),
 });
 const toToken = (row: TokenRow): TokenRecord => ({
   id: row.id,
@@ -273,14 +291,18 @@ export function sqlAuthStore(db: Db): AuthStore {
       list: () => db.all<UserRow>('SELECT * FROM users ORDER BY name').map(toUser),
       get: (id) => db.all<UserRow>('SELECT * FROM users WHERE id = ?', id).map(toUser)[0],
       byName: (name) => db.all<UserRow>('SELECT * FROM users WHERE name = ?', name).map(toUser)[0],
-      count: () => db.all<{ n: number }>('SELECT COUNT(*) AS n FROM users')[0]?.n ?? 0,
-      create: ({ id, name, disabled, createdAt }) =>
+      count: () =>
+        db.all<{ n: number }>('SELECT COUNT(*) AS n FROM users WHERE dev_mode = 0')[0]?.n ?? 0,
+      devMode: () =>
+        db.all<UserRow>('SELECT * FROM users WHERE dev_mode <> 0 ORDER BY name').map(toUser),
+      create: ({ id, name, disabled, createdAt, devMode }) =>
         db.run(
-          'INSERT INTO users (id, name, disabled, created_at) VALUES (?, ?, ?, ?)',
+          'INSERT INTO users (id, name, disabled, created_at, dev_mode) VALUES (?, ?, ?, ?, ?)',
           id,
           name,
           disabled ? 1 : 0,
           createdAt,
+          devMode ? 1 : 0,
         ),
       update(id, { name, disabled }) {
         if (name !== undefined) db.run('UPDATE users SET name = ? WHERE id = ?', name, id);
@@ -300,7 +322,7 @@ export function sqlAuthStore(db: Db): AuthStore {
       admins: () =>
         db.all<{ n: number }>(
           `SELECT COUNT(*) AS n FROM users JOIN user_roles ON user_roles.user_id = users.id
-           WHERE user_roles.role = 'admin' AND users.disabled = 0`,
+           WHERE user_roles.role = 'admin' AND users.disabled = 0 AND users.dev_mode = 0`,
         )[0]?.n ?? 0,
     },
     identities: {

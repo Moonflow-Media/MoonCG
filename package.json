@@ -1,11 +1,11 @@
 {
   "name": "mooncg",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "description": "A simpler, modular broadcast graphics framework.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.22"
   },
   "packageManager": "pnpm@11.13.0",
   "scripts": {
@@ -15,6 +15,7 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "start": "pnpm build && node packages/server/dist/main.js --bundles-dir examples",
+    "dev": "pnpm build && node packages/cli/dist/main.js dev --bundles-dir examples",
     "test:e2e": "pnpm build && playwright test",
     "screenshots": "pnpm build && node e2e/screenshots.mjs"
   },

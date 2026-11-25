@@ -1,6 +1,12 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { type BundleState, type Manifest, parseManifest, SYSTEM_BUNDLE } from '@mooncg/core';
+import {
+  type BundleState,
+  type ChangeArea,
+  type Manifest,
+  parseManifest,
+  SYSTEM_BUNDLE,
+} from '@mooncg/core';
 import { errorMessage } from '../kernel/logger.js';
 import { BundleManager, type BundleManagerOptions } from './manager.js';
 
@@ -20,6 +26,16 @@ export interface BundleRecord extends DiscoveredBundle {
   readonly state: BundleState;
   /** Why the bundle last failed, kept until it runs again. */
   readonly lastError?: string | undefined;
+  /**
+   * Why the bundle as it is on disk now was not loaded when its files changed: an invalid
+   * manifest or schema. The version that ran before keeps running. Gone once a reload works.
+   */
+  readonly reloadErrors?: readonly string[] | undefined;
+  /**
+   * What changed on disk and was not acted on because the installation is on air, as the
+   * areas the changes belong to. They are applied when the lock is released.
+   */
+  readonly pendingChanges?: readonly ChangeArea[] | undefined;
 }
 
 /** Reads the manifest of every folder in `bundlesDir`. A bad bundle never throws. */

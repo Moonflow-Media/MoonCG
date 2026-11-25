@@ -7,6 +7,7 @@ import {
   type StagedInfo,
   useInstalls,
 } from '../stores/installs.js';
+import { useOnAir } from '../stores/onAir.js';
 import { readableSize } from './Assets.js';
 import { field } from './admin.js';
 import { counted, segmented } from './parts.js';
@@ -127,6 +128,14 @@ export const BundleInstall = defineComponent({
     };
     const stop = installs.follow();
     onUnmounted(stop);
+    const onAir = useOnAir();
+    /**
+     * How an update is put in place while the installation is on air: overriding the lock
+     * once the person said so, not at all (`undefined`) when they called it off. Fetching
+     * it, and installing a new bundle, interrupt nothing and are never asked about.
+     */
+    const overrideFor = (target: string | undefined) =>
+      target === undefined ? false : onAir.overrideFor(`Update "${target}"`);
 
     const fetchGit = async (event: Event) => {
       event.preventDefault();
@@ -198,6 +207,15 @@ export const BundleInstall = defineComponent({
                 ' Let the install scripts of these packages run. They are programs that run on the server.',
               ])
             : null,
+          // Fetched while on air: it is here, and putting it in place is what is blocked.
+          isUpdate && onAir.onAir
+            ? h(
+                'p',
+                { class: 'on-air-note', 'data-on-air-note': '' },
+                `MoonCG is on air: putting this update in place stops and starts "${staged.target}", so it is blocked. ` +
+                  'It stays here until it expires; update when On Air is off, or press Update to be asked whether to do it anyway.',
+              )
+            : null,
           h('div', { class: 'form-actions' }, [
             h(
               'button',
@@ -215,11 +233,15 @@ export const BundleInstall = defineComponent({
                 type: 'button',
                 class: 'primary',
                 disabled: installs.sending,
-                onClick: () =>
-                  installs.commit(
+                onClick: () => {
+                  const override = overrideFor(staged.target);
+                  if (override === undefined) return;
+                  void installs.commit(
                     staged.id,
                     staged.installCode === 'allowed' || scripts.get(staged.id) === true,
-                  ),
+                    override,
+                  );
+                },
               },
               isUpdate ? 'Update' : 'Install',
             ),
@@ -263,7 +285,7 @@ export const BundleInstall = defineComponent({
                       type: 'button',
                       class: 'primary',
                       disabled: working,
-                      onClick: () => installs.refetch(target, trusted()),
+                      onClick: () => void installs.refetch(target, trusted()),
                     },
                     `Fetch from ${describeSource(source)}`,
                   ),

@@ -59,9 +59,9 @@ const hello = (graphic?: string): ClientMessage =>
     ? { t: 'hello', v: PROTOCOL_VERSION, bundle: 'scoreboard' }
     : { t: 'hello', v: PROTOCOL_VERSION, bundle: 'scoreboard', graphic };
 
-describe('protocol version 5', () => {
-  it('is version 5', () => {
-    expect(PROTOCOL_VERSION).toBe(5);
+describe('the protocol version', () => {
+  it('is version 6', () => {
+    expect(PROTOCOL_VERSION).toBe(6);
   });
 
   it('carries the graphic a page is in hello', () => {

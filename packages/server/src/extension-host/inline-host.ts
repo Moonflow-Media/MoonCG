@@ -50,6 +50,8 @@ export class InlineHost implements ExtensionHost {
     const connection = createConnection({
       bundle: spec.bundle,
       url: 'loopback:',
+      // An extension is started for a bundle that is there; a refusal is final.
+      waitForBundle: false,
       createSocket: () => loopback.socket,
       onError: (message, error) => log.error(`${message}: ${errorMessage(error)}`),
     });

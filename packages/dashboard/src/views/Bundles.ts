@@ -1,6 +1,7 @@
 import { defineComponent, h, nextTick, onMounted, ref } from 'vue';
 import { type BundleAction, type BundleInfo, useBundles } from '../stores/bundles.js';
 import { describeSource, useInstalls } from '../stores/installs.js';
+import { useOnAir } from '../stores/onAir.js';
 import { sure } from './admin.js';
 import { BundleInstall } from './BundleInstall.js';
 import { counted, dot, pageHead, segmented } from './parts.js';
@@ -27,7 +28,14 @@ export const BundlesView = defineComponent({
   setup() {
     const bundles = useBundles();
     const installs = useInstalls();
+    const onAir = useOnAir();
     const filter = ref<Filter>('all');
+    /** Changes a bundle's state. While on air, what interrupts it is asked about first. */
+    const change = (name: string, action: BundleAction) => {
+      const override =
+        action === 'enable' ? false : onAir.overrideFor(`${LABELS[action]} "${name}"`);
+      if (override !== undefined) void bundles.change(name, action, override);
+    };
     /** The bundle the install form is set to update. */
     const updating = ref<string>();
     const update = async (name: string) => {
@@ -43,7 +51,11 @@ export const BundlesView = defineComponent({
       const question =
         `Remove "${name}"? It is stopped and ${files}. ` +
         'Its settings, uploaded assets and stored values are kept.';
-      if (sure(question)) void installs.remove(name);
+      if (!sure(question)) return;
+      // A second question, about being on air alone. It overrides the lock and nothing
+      // else: a bundle that others still need is refused by the server as it always was.
+      const override = onAir.overrideFor(`Remove "${name}"`);
+      if (override !== undefined) void installs.remove(name, override);
     };
     onMounted(() => void bundles.refresh());
     const actions = (bundle: BundleInfo): BundleAction[] =>
@@ -82,7 +94,23 @@ export const BundlesView = defineComponent({
               ]),
             ]),
             h('div', { class: 'bundle-facts' }, facts(bundle)),
-            h('div', h('span', { class: ['state', bundle.state] }, bundle.state)),
+            h('div', { class: 'bundle-state' }, [
+              h('span', { class: ['state', bundle.state] }, bundle.state),
+              bundle.reloadErrors?.length
+                ? h('span', { class: 'badge failed', 'data-badge': 'not-reloaded' }, 'not reloaded')
+                : null,
+              bundle.pendingChanges?.length
+                ? h(
+                    'span',
+                    {
+                      class: 'badge warn',
+                      'data-badge': 'pending',
+                      title: `Changed on disk while on air: ${bundle.pendingChanges.join(', ')}. Applied when On Air ends.`,
+                    },
+                    'changes pending',
+                  )
+                : null,
+            ]),
             h(
               'div',
               { class: 'bundle-actions' },
@@ -97,7 +125,7 @@ export const BundlesView = defineComponent({
                           class: LOOKS[action],
                           // Not while it is being updated or removed.
                           disabled: installs.busy(bundle.name),
-                          onClick: () => bundles.change(bundle.name, action),
+                          onClick: () => change(bundle.name, action),
                         },
                         LABELS[action],
                       ),
@@ -127,6 +155,14 @@ export const BundlesView = defineComponent({
             ),
           ]),
           ...bundle.errors.map((error) => h('p', { class: 'problem' }, error)),
+          // The files on disk could not be loaded; what ran before keeps running.
+          ...(bundle.reloadErrors ?? []).map((error) =>
+            h(
+              'p',
+              { class: 'problem' },
+              `Not reloaded, the version from before keeps running: ${error}`,
+            ),
+          ),
         ],
       );
 
@@ -182,6 +218,13 @@ export const BundlesView = defineComponent({
           }),
         }),
         bundles.problem ? h('p', { class: 'problem', role: 'alert' }, bundles.problem) : null,
+        onAir.onAir
+          ? h(
+              'p',
+              { class: 'on-air-note', 'data-on-air-note': '' },
+              'On Air: updating, removing, disabling and reloading a bundle is blocked, and changed files wait. Each button asks before it does it anyway.',
+            )
+          : null,
         h('div', { class: 'stats' }, [
           ...STATES.map(figure),
           h('div', { class: 'stat', 'data-stat': 'graphics' }, [

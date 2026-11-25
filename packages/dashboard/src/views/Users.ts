@@ -8,6 +8,8 @@ interface User {
   readonly name: string;
   readonly disabled: boolean;
   readonly roles: readonly string[];
+  /** The user dev mode created to act as. It cannot be changed, only deleted. */
+  readonly devMode?: boolean;
 }
 
 /** Users with their roles: create, enable and disable, assign roles, reset passwords, delete. */
@@ -62,6 +64,38 @@ export const UsersView = defineComponent({
         ]),
       );
 
+    const remove = (user: User, question: string) =>
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'small danger',
+          'data-action': 'delete',
+          onClick: () => sure(question) && send('DELETE', `/api/v1/users/${part(user.id)}`),
+        },
+        'Delete',
+      );
+    /** The user of dev mode: shown as what it is, with nothing to change but deleting it. */
+    const devModeRow = (user: User) =>
+      h('li', { key: user.id, 'data-user': user.name }, [
+        h('strong', user.name),
+        h(
+          'span',
+          {
+            class: 'state installed',
+            'data-dev-mode': '',
+            title:
+              'Created by "mooncg dev", which acts as this user without a password. It cannot sign in, and outside dev mode it is nobody: its tokens are not accepted and it does not count as a user.',
+          },
+          'dev mode only',
+        ),
+        h('span', { class: 'checks' }, user.roles.join(', ')),
+        remove(
+          user,
+          `Delete the user "${user.name}" of dev mode? Its tokens and preferences go too. Dev mode creates it again at its next start.`,
+        ),
+      ]);
+
     return () =>
       h('div', [
         pageHead('Users'),
@@ -74,55 +108,53 @@ export const UsersView = defineComponent({
               'ul',
               { class: 'rows' },
               users.value.map((user) =>
-                h('li', { key: user.id, 'data-user': user.name }, [
-                  h('strong', user.name),
-                  user.disabled ? h('span', { class: 'state disabled' }, 'disabled') : null,
-                  h(
-                    'span',
-                    { class: 'checks' },
-                    roleBoxes(
-                      (role) => user.roles.includes(role),
-                      (role, on) => setRole(user, role, on),
-                    ),
-                  ),
-                  h(
-                    'button',
-                    {
-                      type: 'button',
-                      class: 'small',
-                      'data-action': 'toggle',
-                      onClick: () =>
-                        send('PATCH', `/api/v1/users/${part(user.id)}`, {
-                          disabled: !user.disabled,
-                        }),
-                    },
-                    user.disabled ? 'Enable' : 'Disable',
-                  ),
-                  h(
-                    'button',
-                    {
-                      type: 'button',
-                      class: 'small danger',
-                      'data-action': 'delete',
-                      onClick: () =>
-                        sure(`Delete the user "${user.name}"? Their sessions and tokens go too.`) &&
-                        send('DELETE', `/api/v1/users/${part(user.id)}`),
-                    },
-                    'Delete',
-                  ),
-                  h('form', { class: 'inline', onSubmit: (event: Event) => reset(event, user) }, [
-                    h('input', {
-                      name: 'new-password',
-                      type: 'password',
-                      autocomplete: 'new-password',
-                      minlength: 8,
-                      required: true,
-                      placeholder: 'New password',
-                      'aria-label': `New password for ${user.name}`,
-                    }),
-                    h('button', { type: 'submit', class: 'small' }, 'Set password'),
-                  ]),
-                ]),
+                user.devMode
+                  ? devModeRow(user)
+                  : h('li', { key: user.id, 'data-user': user.name }, [
+                      h('strong', user.name),
+                      user.disabled ? h('span', { class: 'state disabled' }, 'disabled') : null,
+                      h(
+                        'span',
+                        { class: 'checks' },
+                        roleBoxes(
+                          (role) => user.roles.includes(role),
+                          (role, on) => setRole(user, role, on),
+                        ),
+                      ),
+                      h(
+                        'button',
+                        {
+                          type: 'button',
+                          class: 'small',
+                          'data-action': 'toggle',
+                          onClick: () =>
+                            send('PATCH', `/api/v1/users/${part(user.id)}`, {
+                              disabled: !user.disabled,
+                            }),
+                        },
+                        user.disabled ? 'Enable' : 'Disable',
+                      ),
+                      remove(
+                        user,
+                        `Delete the user "${user.name}"? Their sessions and tokens go too.`,
+                      ),
+                      h(
+                        'form',
+                        { class: 'inline', onSubmit: (event: Event) => reset(event, user) },
+                        [
+                          h('input', {
+                            name: 'new-password',
+                            type: 'password',
+                            autocomplete: 'new-password',
+                            minlength: 8,
+                            required: true,
+                            placeholder: 'New password',
+                            'aria-label': `New password for ${user.name}`,
+                          }),
+                          h('button', { type: 'submit', class: 'small' }, 'Set password'),
+                        ],
+                      ),
+                    ]),
               ),
             ),
           ),

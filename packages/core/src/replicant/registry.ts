@@ -44,6 +44,7 @@ export function qualifyReplicantName(name: string, bundle: string): string {
 export class ReplicantRegistry {
   readonly #entries = new Map<string, ReplicantEntry>();
   readonly #options: RegistryOptions;
+  readonly #declareListeners = new Set<(qualifiedName: string) => void>();
   #declared = 0;
 
   constructor(options: RegistryOptions = {}) {
@@ -67,7 +68,31 @@ export class ReplicantRegistry {
       writePermission: bundlePermission(bundle, declaration.write),
     };
     this.#entries.set(key, entry);
+    for (const listener of [...this.#declareListeners]) {
+      try {
+        listener(key);
+      } catch (error) {
+        this.#options.onListenerError?.(key, error);
+      }
+    }
     return entry;
+  }
+
+  /**
+   * Calls `listener` with the qualified name of every replicant declared from now on, until
+   * the returned function is called. A connection uses it to learn that a replicant it lost
+   * with its bundle is there again.
+   */
+  onDeclare(listener: (qualifiedName: string) => void): () => void {
+    this.#declareListeners.add(listener);
+    return () => {
+      this.#declareListeners.delete(listener);
+    };
+  }
+
+  /** How many listeners wait for declarations. A leak shows as a count that grows. */
+  get declareListenerCount(): number {
+    return this.#declareListeners.size;
   }
 
   get(qualifiedName: string): ReplicantEntry | undefined {

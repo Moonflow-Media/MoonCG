@@ -16,7 +16,7 @@ import type { PatchOp } from '../replicant/patch.js';
 export const MAX_FRAME_BYTES = 1024 * 1024;
 
 /** Sent in `hello` and `welcome`. Bump on any incompatible change to the messages below. */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 /**
  * `name` is a replicant or message name, either bare (the session's own bundle) or
@@ -112,7 +112,10 @@ export type GraphicEndReason = (typeof GRAPHIC_END_REASONS)[number];
 /** `name` is always the qualified `bundle:name`. `id` echoes the request being answered. */
 export type ServerMessage =
   | { readonly t: 'welcome'; readonly v: number }
-  /** To a graphic page: load yourself again. */
+  /**
+   * To a page: load yourself again. Sent to one graphic page when an operator reloads it, and
+   * to the pages of a bundle whose files changed while the server watches them.
+   */
   | { readonly t: 'reload' }
   /**
    * To a graphic page: you are no longer the instance of your graphic. `replaced` when the
@@ -136,6 +139,12 @@ export type ServerMessage =
     }
   /** The replicant, or the message topic, was removed; the subscription has ended. */
   | { readonly t: 'rep.gone' | 'msg.gone'; readonly name: string; readonly message: string }
+  /**
+   * A replicant, or a message topic, the client asked for and could not have, or had and
+   * lost, is declared again, as after its bundle was reloaded. Nothing is subscribed by it:
+   * the client asks again with `rep.sub` or `msg.sub`, and is checked like the first time.
+   */
+  | { readonly t: 'rep.back' | 'msg.back'; readonly name: string }
   /** Answers a `rep.op`, or a `rep.sub` that needed no snapshot. */
   | { readonly t: 'ack'; readonly id: number; readonly rev: number }
   /** Answers a request that has nothing to return. */
@@ -268,6 +277,9 @@ export function decodeServerMessage(text: string): Decoded<ServerMessage> {
         return isName(m.name) && typeof m.message === 'string'
           ? { t: m.t, name: m.name, message: m.message }
           : null;
+      case 'rep.back':
+      case 'msg.back':
+        return isName(m.name) ? { t: m.t, name: m.name } : null;
       case 'rep.patch':
         return isName(m.name) && isRev(m.rev) && isPatches(m.patches)
           ? { t: 'rep.patch', name: m.name, rev: m.rev, patches: m.patches }

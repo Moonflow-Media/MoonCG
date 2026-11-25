@@ -63,8 +63,8 @@ async function dataDir(): Promise<string> {
   return dir;
 }
 
-function connect(server: RunningServer, bundle = 'game') {
-  const client = createClient({ bundle, url: `ws://127.0.0.1:${server.port}/ws` });
+function connect(server: RunningServer, bundle = 'game', waitForBundle = true) {
+  const client = createClient({ bundle, url: `ws://127.0.0.1:${server.port}/ws`, waitForBundle });
   cleanup.push(() => client.close());
   return client;
 }
@@ -193,7 +193,21 @@ describe('replay over the wire', () => {
 describe('hello for a bundle that is not running', () => {
   it.each([['nope'], ['crashy'], ['broken']])('refuses "%s" with not_found', async (bundle) => {
     const { server } = await start(fixture('bundles'), await dataDir());
-    const client = connect(server, bundle);
+    const client = connect(server, bundle, false);
     await expect(client.ready).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('keeps a page waiting that does not ask to give up', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { server } = await start(fixture('bundles'), await dataDir());
+    const client = connect(server, 'nope');
+    const settled = vi.fn();
+    client.ready.then(settled, settled);
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(settled).not.toHaveBeenCalled();
+    expect(client.status).toBe('reconnecting');
+    vi.restoreAllMocks();
   });
 });

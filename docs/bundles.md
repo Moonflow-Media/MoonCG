@@ -67,7 +67,7 @@ A bundle is refused at the stage step, with the reason, when
   permissions, panels, dialogs or graphics, and so on),
 - it would make npm do more than fetch packages from the registry, and was not fetched as
   trusted (see [npm dependencies](#npm-dependencies)),
-- `engine.mooncg` does not allow this MoonCG (`engine.mooncg: needs MoonCG >=1.0.0, but this is 0.7.0`),
+- `engine.mooncg` does not allow this MoonCG (`engine.mooncg: needs MoonCG >=1.0.0, but this is 0.8.0`),
 - a bundle it depends on is not installed or has the wrong version, or it would close a
   dependency cycle,
 - a bundle of that name is installed already (install), or its name is not the name of the
@@ -283,8 +283,11 @@ removal says so.
 If the data cannot be purged, the bundle is removed all the same and the job ends as `failed`
 with the reason, so that it can be seen and the purge done by hand.
 
-A bundle that an enabled bundle depends on is not removed without `--force`. The dashboard's
-**Remove** keeps files and data; the flags are for the command line and the API.
+A bundle that an enabled bundle depends on is not removed without `--force`. That is all
+`--force` and `"force"` do: they do not remove a bundle while the installation is on air, which
+takes `--on-air` or `"forceOnAir": true` (see below), and a removal that both stand in the way
+of takes both. The dashboard's **Remove** keeps files and data and never removes a bundle
+others still need; the flags are for the command line and the API.
 
 ## Who may do this
 
@@ -303,20 +306,42 @@ stored, with the rest of the address, in `<data-dir>/bundle-sources.json`, which
 an update fetch again.
 
 An update or removal goes through the same lock as enable, disable and reload, so none of them
-can cross another for the same bundle. A lock for bundles that are on air is planned; update and
-remove will refuse while it holds.
+can cross another for the same bundle.
+
+**On Air.** While the installation is on air (the switch in the dashboard's sidebar, or
+`PUT /api/v1/on-air`), remove and restore are refused with `409` before anything is stopped,
+and so are disable and reload. An update can still be **fetched**: staging and uploading
+interrupt nothing. Putting it in place, the commit, is what is refused, with a message that
+says the new version stays staged. `"forceOnAir": true` in the request, `--on-air` on the
+command line and a second question in the dashboard let one change through. That is its own
+word: `"force"` and `--force` are about a bundle that others still need, and override no
+lock. Installing a new bundle and enabling one are not held. See
+[development.md](development.md#the-on-air-lock).
+
+**The file watcher.** With `--watch` or in dev mode the server watches every bundle folder.
+It lets go of a folder before an update, a restore or a removal moves it, and watches the new
+one afterwards: a watched folder cannot be renamed on Windows.
 
 ## The command line
 
 ```
 mooncg bundle list
 mooncg bundle install <git-url|zip|folder> [--ref <branch|tag|commit>] [--scripts] [--yes]
-mooncg bundle update <name> [<git-url|zip|folder>] [--ref <ref>] [--scripts] [--yes]
-mooncg bundle remove <name> [--force] [--delete-files] [--purge-data] [--yes]
-mooncg bundle enable|disable|reload <name>
+mooncg bundle update <name> [<git-url|zip|folder>] [--ref <ref>] [--scripts] [--yes] [--on-air]
+mooncg bundle remove <name> [--force] [--delete-files] [--purge-data] [--yes] [--on-air]
+mooncg bundle enable <name>
+mooncg bundle disable|reload <name> [--on-air]
 mooncg bundle backups <name>
-mooncg bundle restore <name> <backup> [--yes]
+mooncg bundle restore <name> <backup> [--yes] [--on-air]
+mooncg bundle create <name> [--template html] [--dir <bundles folder>] [--config <file>]
 ```
+
+`--on-air` on `update`, `remove`, `disable`, `reload` and `restore` goes ahead although the
+installation is on air. Without it, `update` asks the server first and stops before anything
+is fetched, saying why and naming the flag. `--force` exists on `remove` only, for a bundle
+that enabled bundles still need. `bundle create` is the odd one out: it writes a new bundle from a
+template into the bundles folder and talks to no server; see
+[development.md](development.md#the-command-line).
 
 | Option    | Environment    | Default                 | Meaning                                         |
 | --------- | -------------- | ----------------------- | ----------------------------------------------- |
@@ -345,18 +370,18 @@ Requests that take time answer `202` with `{ "job": … }`. A job has an `id`, a
 `rollbackError` where there is one. A `stage` job that succeeded carries `staged`, the summary
 with the `id` to commit or discard.
 
-| Request                                            | Body                                         | Answer                                          |
-| -------------------------------------------------- | -------------------------------------------- | ----------------------------------------------- |
-| `POST /api/v1/bundles/-/stage`                     | `{ "source": …, "target"?, "scripts"? }`     | 202, a job; 409 while too much is being fetched |
-| `PUT /api/v1/bundles/-/stage?filename=…&target=…`  | The ZIP archive, as it is                    | 202, a job                                      |
-| `GET /api/v1/bundles/-/staged`                     |                                              | `{ staged: […] }`                               |
-| `POST /api/v1/bundles/-/staged/<id>/commit`        | `{ "scripts"?: true }`                       | 202, a job                                      |
-| `DELETE /api/v1/bundles/-/staged/<id>`             |                                              | 204                                             |
-| `GET /api/v1/bundles/-/jobs`, `…/jobs/<id>`        |                                              | The latest 20 jobs; one job                     |
-| `POST /api/v1/bundles/<name>/update`               | `{ "source"?: … }`                           | 202, a `stage` job                              |
-| `POST /api/v1/bundles/<name>/remove`               | `{ "force"?, "deleteFiles"?, "purgeData"? }` | 202, a job                                      |
-| `GET /api/v1/bundles/<name>/backups`               |                                              | `{ backups: […] }`                              |
-| `POST /api/v1/bundles/<name>/backups/<id>/restore` | `{}`                                         | 202, a job                                      |
+| Request                                            | Body                                                        | Answer                                          |
+| -------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------- |
+| `POST /api/v1/bundles/-/stage`                     | `{ "source": …, "target"?, "scripts"? }`                    | 202, a job; 409 while too much is being fetched |
+| `PUT /api/v1/bundles/-/stage?filename=…&target=…`  | The ZIP archive, as it is                                   | 202, a job                                      |
+| `GET /api/v1/bundles/-/staged`                     |                                                             | `{ staged: […] }`                               |
+| `POST /api/v1/bundles/-/staged/<id>/commit`        | `{ "scripts"?: true, "forceOnAir"?: true }`                 | 202, a job                                      |
+| `DELETE /api/v1/bundles/-/staged/<id>`             |                                                             | 204                                             |
+| `GET /api/v1/bundles/-/jobs`, `…/jobs/<id>`        |                                                             | The latest 20 jobs; one job                     |
+| `POST /api/v1/bundles/<name>/update`               | `{ "source"?: … }`                                          | 202, a `stage` job                              |
+| `POST /api/v1/bundles/<name>/remove`               | `{ "force"?, "forceOnAir"?, "deleteFiles"?, "purgeData"? }` | 202, a job                                      |
+| `GET /api/v1/bundles/<name>/backups`               |                                                             | `{ backups: […] }`                              |
+| `POST /api/v1/bundles/<name>/backups/<id>/restore` | `{ "forceOnAir"?: true }`                                   | 202, a job                                      |
 
 A `source` is `{ "type": "git", "url": …, "ref"?: … }`, `{ "type": "path", "path": … }` or
 `{ "type": "zip", "path": … }`. `target` names the installed bundle the staged one is to
@@ -380,3 +405,4 @@ permitted) is answered as the server's problem, `internal`, not as a fault of th
 - [ ] Bundles pin their npm packages with a `package-lock.json`, so `npm ci` installs the same every time
 - [ ] No installation relies on `--scripts` unless you know which package needs it and why
 - [ ] The data folder is backed up; it holds the settings, the assets and the earlier versions
+- [ ] The server was started with `mooncg start`, not `mooncg dev`, and On Air is switched on for the show

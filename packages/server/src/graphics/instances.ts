@@ -10,7 +10,8 @@ import {
 
 /**
  * The read-only replicant `<bundle>:$instances.<graphic>` lists the pages that show a graphic
- * right now, each with an id and since when. It takes the permission the graphic itself
+ * right now, each with an id and since when, and with `outOfDate: true` once the files of
+ * its bundle changed after the page loaded. It takes the permission the graphic itself
  * takes. Who each page acts as is not in it: that is told by the API to whoever may manage
  * bundles. Names that start with `$` are the server's:
  * a manifest cannot declare one.
@@ -25,6 +26,8 @@ interface Open {
   readonly file: string;
   readonly instance: GraphicInstance;
   readonly since: string;
+  /** The files of the bundle changed since this page loaded them. */
+  outOfDate: boolean;
 }
 
 /**
@@ -84,7 +87,14 @@ export class GraphicInstances implements GraphicPages {
       }
     }
     const id = randomUUID();
-    this.#open.set(id, { id, bundle, file, instance, since: new Date().toISOString() });
+    this.#open.set(id, {
+      id,
+      bundle,
+      file,
+      instance,
+      since: new Date().toISOString(),
+      outOfDate: false,
+    });
     this.#publish(bundle, file);
     return () => {
       if (this.#open.delete(id)) this.#publish(bundle, file);
@@ -105,6 +115,20 @@ export class GraphicInstances implements GraphicPages {
     const open = this.#open.get(id);
     open?.instance.reload();
     return open !== undefined;
+  }
+
+  /**
+   * Marks the connected graphic pages of a bundle as out of date: its files changed, and
+   * outside dev mode no graphic is reloaded by anything but a person. The page that connects
+   * after a reload is a new instance without the mark. Answers how many were marked now.
+   */
+  markOutOfDate(bundle: string): number {
+    const fresh = [...this.#open.values()].filter(
+      (open) => open.bundle === bundle && !open.outOfDate,
+    );
+    for (const open of fresh) open.outOfDate = true;
+    for (const file of new Set(fresh.map((open) => open.file))) this.#publish(bundle, file);
+    return fresh.length;
   }
 
   /**
@@ -153,7 +177,7 @@ export class GraphicInstances implements GraphicPages {
   #list(bundle: string, file: string): Json {
     return [...this.#open.values()]
       .filter((open) => open.bundle === bundle && open.file === file)
-      .map(({ id, since }) => ({ id, since }));
+      .map(({ id, since, outOfDate }) => ({ id, since, ...(outOfDate ? { outOfDate } : {}) }));
   }
 
   #publish(bundle: string, file: string): void {

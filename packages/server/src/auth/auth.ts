@@ -66,6 +66,8 @@ const ADDRESS_LIMIT = { free: 20, baseMs: 5000, maxMs: 15 * MINUTE };
 const NAME_LIMIT = { free: 100, baseMs: 30_000, maxMs: MINUTE };
 
 const ADMIN_ROLE = 'admin';
+/** The names dev mode gives its user: the first that no real person has. */
+const DEV_USER_NAMES = ['dev', 'dev-mode', 'mooncg-dev'];
 const LOCAL = 'local';
 const USER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const ROLE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -106,6 +108,11 @@ export interface UserInfo {
   readonly name: string;
   readonly disabled: boolean;
   readonly roles: readonly string[];
+  /**
+   * `true` for the user dev mode created to act as. It is nobody outside dev mode and
+   * cannot be changed, only deleted. Left out for everyone else.
+   */
+  readonly devMode?: true;
 }
 
 /** What a request brought along to say who it is. */
@@ -126,9 +133,11 @@ export interface Identity {
   readonly policy: Policy;
   /**
    * `session` and `token-session` come from a cookie, which a browser sends by itself, so
-   * state-changing requests authenticated that way need protection against forgery.
+   * state-changing requests authenticated that way need protection against forgery. `dev`
+   * is the sign-in of dev mode, which a request gets for coming from this machine: it needs
+   * that protection all the more.
    */
-  readonly via: 'session' | 'token-session' | 'bearer' | 'none';
+  readonly via: 'session' | 'token-session' | 'bearer' | 'dev' | 'none';
 }
 
 export type LoginResult =
@@ -160,10 +169,35 @@ export interface AuthOptions {
   readonly now?: () => number;
   /** The cost of new password hashes. Tests lower it. */
   readonly scrypt?: ScryptParams;
+  /**
+   * Whether the server these accounts belong to runs in dev mode. Only then does the user
+   * dev mode created act at all: outside it, that user cannot be identified as, its sessions
+   * and tokens are not accepted, and no token can be created for it. The command line tool
+   * never sets this.
+   */
+  readonly devMode?: boolean;
 }
 
 export interface Auth {
   identify(credentials: Credentials): Identity;
+  /**
+   * Makes sure the user dev mode acts as exists, is enabled and is an administrator, and
+   * returns it. It is a user of its own, marked as created by dev mode, and never a real
+   * person: it is called `dev`, or by another name if a real user has that one. It has no
+   * password. Throws outside dev mode.
+   */
+  ensureDevUser(): UserInfo;
+  /**
+   * Who dev mode acts as right now, without any credentials: the user `ensureDevUser`
+   * made, or anonymous if that is gone, or outside dev mode. Nothing a request says ever
+   * reaches this.
+   */
+  devIdentity(): Identity;
+  /**
+   * For a start outside dev mode: deletes the sessions and API tokens of the users dev mode
+   * created, and returns those users. They stay, inert, until someone deletes them.
+   */
+  lockDevUsers(): UserInfo[];
   /** Whether the principal with that id holds the permission right now. */
   check(principalId: string, permission: string): boolean;
   policy(): Policy;
@@ -229,7 +263,10 @@ export interface Auth {
     secret: string,
   ): { readonly session: string; readonly maxAgeSeconds: number } | undefined;
 
-  /** The code that allows creating the first admin; `undefined` once any user exists. */
+  /**
+   * The code that allows creating the first admin; `undefined` once any user exists, not
+   * counting the one dev mode created, and always `undefined` in dev mode.
+   */
   setupCode(): string | undefined;
   setup(code: string, name: string, password: string): Promise<UserInfo>;
 
@@ -322,7 +359,22 @@ export function createAuth(options: AuthOptions): Auth {
     name: user.name,
     disabled: user.disabled,
     roles: users.roles(user.id),
+    ...(user.devMode ? { devMode: true as const } : {}),
   });
+  const devMode = options.devMode === true;
+  /** Whether the user is dev mode's own and this is not dev mode: then it is nobody. */
+  const inert = (user: UserRecord) => user.devMode === true && !devMode;
+  /** The user dev mode created belongs to dev mode: nobody edits it into something else. */
+  const changeable = (id: string): UserRecord => {
+    const user = existing(id);
+    if (user.devMode) {
+      throw new MoonCGError(
+        'conflict',
+        `The user "${user.name}" belongs to dev mode and cannot be changed. It can be deleted; dev mode creates it again when it needs it.`,
+      );
+    }
+    return user;
+  };
   const existing = (id: string): UserRecord => {
     const user = users.get(id);
     if (!user) throw missing('The user');
@@ -356,7 +408,7 @@ export function createAuth(options: AuthOptions): Auth {
   const tokenPrincipal = (token: TokenRecord | undefined): Principal | undefined => {
     if (!token || (token.expires !== null && token.expires <= now())) return undefined;
     const creator = users.get(token.createdBy);
-    if (!creator || creator.disabled) return undefined;
+    if (!creator || creator.disabled || inert(creator)) return undefined;
     return {
       id: `token:${token.id}`,
       kind: 'token',
@@ -380,7 +432,8 @@ export function createAuth(options: AuthOptions): Auth {
       return undefined;
     }
     const user = users.get(session.userId);
-    if (!user || user.disabled) return undefined;
+    // Dev mode's own user never signs in, so a session of it is nothing to honour.
+    if (!user || user.disabled || user.devMode) return undefined;
     if (now() - session.lastSeen >= TOUCH_INTERVAL_MS) sessions.touch(hash, now());
     return userPrincipal(user);
   };
@@ -459,6 +512,60 @@ export function createAuth(options: AuthOptions): Auth {
       );
     },
 
+    ensureDevUser() {
+      if (!devMode) throw new MoonCGError('conflict', 'This is not dev mode');
+      const user = store.transaction(() => {
+        const [found] = users.devMode();
+        if (found) {
+          // Whatever became of it: dev mode needs it enabled and an administrator.
+          if (found.disabled) users.update(found.id, { disabled: false });
+          users.addRole(found.id, ADMIN_ROLE);
+          return users.get(found.id) ?? found;
+        }
+        const name = DEV_USER_NAMES.find((candidate) => !users.byName(candidate));
+        if (name === undefined) {
+          throw new MoonCGError(
+            'conflict',
+            `Dev mode needs a user of its own, and the names ${DEV_USER_NAMES.join(', ')} are all taken by real users. Rename one of them.`,
+          );
+        }
+        // No identity and so no password: nothing can ever sign in as this user.
+        const created: UserRecord = {
+          id: randomUUID(),
+          name,
+          disabled: false,
+          createdAt: now(),
+          devMode: true,
+        };
+        users.create(created);
+        users.addRole(created.id, ADMIN_ROLE);
+        return created;
+      });
+      changed();
+      return info(user);
+    },
+
+    devIdentity() {
+      const policy = roles.policy();
+      const user = devMode ? users.devMode().find((candidate) => !candidate.disabled) : undefined;
+      return user
+        ? { principal: userPrincipal(user), policy, via: 'dev' }
+        : { principal: ANONYMOUS_PRINCIPAL, policy, via: 'none' };
+    },
+
+    lockDevUsers() {
+      const found = users.devMode();
+      if (found.length === 0) return [];
+      store.transaction(() => {
+        for (const user of found) {
+          sessions.deleteForUser(user.id);
+          tokens.deleteForUser(user.id);
+        }
+      });
+      changed();
+      return found.map(info);
+    },
+
     check(principalId, permission) {
       const [kind, ...rest] = principalId.split(':');
       const id = rest.join(':');
@@ -467,7 +574,7 @@ export function createAuth(options: AuthOptions): Auth {
       let principal: Principal | undefined;
       if (kind === 'user') {
         const user = users.get(id);
-        principal = user && !user.disabled ? userPrincipal(user) : undefined;
+        principal = user && !user.disabled && !inert(user) ? userPrincipal(user) : undefined;
       } else if (kind === 'token') principal = tokenPrincipal(tokens.get(id));
       return principal !== undefined && authorize(principal, permission, roles.policy());
     },
@@ -542,7 +649,8 @@ export function createAuth(options: AuthOptions): Auth {
       // given another password meanwhile.
       const current = user && users.get(user.id);
       const unchanged = user && identities.get(LOCAL, user.id)?.secret === stored;
-      if (!matches || !stored || !current || current.disabled || !unchanged) {
+      // The user dev mode created has no password and never signs in with one.
+      if (!matches || !stored || !current || current.disabled || current.devMode || !unchanged) {
         return { ok: false, reason: 'credentials' };
       }
       // Not a failure after all. The name at this address starts afresh.
@@ -610,7 +718,7 @@ export function createAuth(options: AuthOptions): Auth {
     createUser: (input) => create(input, false),
 
     updateUser(id, { name, disabled }) {
-      const user = existing(id);
+      const user = changeable(id);
       if (name !== undefined) {
         checkUserName(name);
         const holder = users.byName(name);
@@ -637,7 +745,7 @@ export function createAuth(options: AuthOptions): Auth {
     },
 
     async setPassword(id, password, { revokeTokens = true } = {}) {
-      const user = existing(id);
+      const user = changeable(id);
       checkPassword(password);
       const secret = await hashPassword(password, scrypt);
       store.transaction(() => {
@@ -653,14 +761,14 @@ export function createAuth(options: AuthOptions): Auth {
     },
 
     assignRole(id, role) {
-      existing(id);
+      changeable(id);
       existingRole(role);
       users.addRole(id, role);
       changed();
     },
 
     unassignRole(id, role) {
-      existing(id);
+      changeable(id);
       existingRole(role);
       keepingAnAdmin(() => users.removeRole(id, role));
       changed();
@@ -721,8 +829,15 @@ export function createAuth(options: AuthOptions): Auth {
       }
       const [kind, id] = [creator.kind ?? 'user', creator.id.slice(creator.id.indexOf(':') + 1)];
       const owner = kind === 'token' ? tokens.get(id)?.createdBy : kind === 'user' ? id : undefined;
-      if (owner === undefined || !users.get(owner)) {
+      const ownedBy = owner === undefined ? undefined : users.get(owner);
+      if (owner === undefined || !ownedBy) {
         throw new MoonCGError('forbidden', 'Only a user or a token can create tokens');
+      }
+      if (inert(ownedBy)) {
+        throw new MoonCGError(
+          'forbidden',
+          `The user "${ownedBy.name}" belongs to dev mode and is nobody outside it: it cannot have tokens`,
+        );
       }
       const policy = roles.policy();
       const beyond = grants.find((permission) => !authorize(creator, permission, policy));
@@ -769,7 +884,9 @@ export function createAuth(options: AuthOptions): Auth {
     },
 
     setupCode() {
-      if (setupClaimed || users.count() > 0) {
+      // Dev mode is no time to set an installation up: it signs in as its own user, which
+      // does not count as one. The first real start offers the setup.
+      if (setupClaimed || devMode || users.count() > 0) {
         if (!setupClaimed) setupCode = undefined;
         return undefined;
       }

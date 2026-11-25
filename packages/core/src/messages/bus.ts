@@ -58,6 +58,7 @@ interface TopicState extends Topic {
 export class MessageBus {
   readonly #topics = new Map<string, TopicState>();
   readonly #options: MessageBusOptions;
+  readonly #declareListeners = new Set<(qualifiedName: string) => void>();
 
   constructor(options: MessageBusOptions) {
     this.#options = options;
@@ -80,7 +81,24 @@ export class MessageBus {
       open: new Set(),
     };
     this.#topics.set(key, topic);
+    for (const listener of [...this.#declareListeners]) this.#guard(() => listener(key));
     return topic;
+  }
+
+  /**
+   * Calls `listener` with the qualified name of every topic declared from now on, until the
+   * returned function is called.
+   */
+  onDeclare(listener: (qualifiedName: string) => void): () => void {
+    this.#declareListeners.add(listener);
+    return () => {
+      this.#declareListeners.delete(listener);
+    };
+  }
+
+  /** How many listeners wait for declarations. */
+  get declareListenerCount(): number {
+    return this.#declareListeners.size;
   }
 
   get(qualifiedName: string): Topic | undefined {

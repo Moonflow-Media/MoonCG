@@ -155,8 +155,9 @@ describe('client.on', () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
-  it('contains a throwing listener and forgets a topic the server removed', async () => {
+  it('contains a throwing listener and asks again for a topic the server removed', async () => {
     const report = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { client, socket } = connected();
     const later = vi.fn();
     const one = client.on('reset', () => {
@@ -177,7 +178,8 @@ describe('client.on', () => {
 
     expect(later).toHaveBeenCalledTimes(1);
     expect(report).toHaveBeenCalledTimes(1);
-    expect(socket().sent.some((msg) => msg.t === 'msg.sub')).toBe(false);
+    // The bundle may be running again by now, so the page asks once more.
+    expect(socket().sent.filter((msg) => msg.t === 'msg.sub')).toHaveLength(1);
   });
 });
 

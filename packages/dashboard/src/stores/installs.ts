@@ -125,6 +125,8 @@ export const useInstalls = defineStore('installs', () => {
     }
   }
 
+  // Fetching interrupts nothing, so none of these three knows about being on air: the
+  // lock is met when what was fetched is put in place, in `commit`.
   const stageGit = (url: string, gitRef: string, target?: string, scripts = false) =>
     start(() =>
       api.request('POST', `${INSTALLS}/stage`, {
@@ -152,11 +154,19 @@ export const useInstalls = defineStore('installs', () => {
   /** Fetches the new version of a bundle from where the bundle came from. */
   const refetch = (name: string, scripts = false) =>
     start(() =>
-      api.request('POST', `/api/v1/bundles/${part(name)}/update`, scripts ? { scripts: true } : {}),
+      api.request('POST', `/api/v1/bundles/${part(name)}/update`, {
+        ...(scripts ? { scripts: true } : {}),
+      }),
     );
 
-  const commit = (id: string, scripts: boolean) =>
-    start(() => api.request('POST', `${INSTALLS}/staged/${part(id)}/commit`, { scripts }));
+  /** `forceOnAir` puts an update in place although the installation is on air. */
+  const commit = (id: string, scripts: boolean, forceOnAir = false) =>
+    start(() =>
+      api.request('POST', `${INSTALLS}/staged/${part(id)}/commit`, {
+        scripts,
+        ...(forceOnAir ? { forceOnAir: true } : {}),
+      }),
+    );
 
   async function discard(id: string): Promise<void> {
     problem.value = '';
@@ -167,8 +177,19 @@ export const useInstalls = defineStore('installs', () => {
     }
   }
 
-  const remove = (name: string) =>
-    start(() => api.request('POST', `/api/v1/bundles/${part(name)}/remove`, {}));
+  /**
+   * `forceOnAir` removes although the installation is on air, and that is all it does. A
+   * bundle that others still need is refused by the server either way: the dashboard has
+   * no way to remove it from under them.
+   */
+  const remove = (name: string, forceOnAir = false) =>
+    start(() =>
+      api.request(
+        'POST',
+        `/api/v1/bundles/${part(name)}/remove`,
+        forceOnAir ? { forceOnAir: true } : {},
+      ),
+    );
 
   /** Whether something is being done to the bundle right now. */
   const busy = (name: string) => jobs.value.some((job) => job.bundle === name && !jobOver(job));

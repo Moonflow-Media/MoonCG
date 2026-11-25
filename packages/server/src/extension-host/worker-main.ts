@@ -32,6 +32,8 @@ const emit = (type: string, event: { data?: unknown }) => {
 const connection = createConnection({
   bundle,
   url: 'worker:',
+  // An extension is started for a bundle that is there; a refusal is final.
+  waitForBundle: false,
   onError: (message, error) => bundleLog.error(`${message}: ${describe(error)}`),
   createSocket: () => ({
     send: (data) => post({ type: 'frame', data }),

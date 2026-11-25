@@ -1,5 +1,6 @@
 import type { IncomingHttpHeaders, IncomingMessage, Server } from 'node:http';
 import {
+  type BundlePages,
   createSession,
   effectiveGrants,
   encodeMessage,
@@ -21,10 +22,15 @@ export interface WebSocketOptions {
   readonly bundleExists: (bundle: string) => boolean;
   /** Finds out who an upgrade request acts as: its session cookie or its bearer token. */
   readonly identify: Identify;
-  /** Origins besides the server's own whose pages may connect. */
-  readonly allowedOrigins: readonly string[];
+  /**
+   * Origins besides the server's own whose pages may connect. A function is asked at every
+   * upgrade: in dev mode the list follows the bundles that run.
+   */
+  readonly allowedOrigins: readonly string[] | (() => readonly string[]);
   /** Where graphic pages are registered as connected instances. */
   readonly graphics?: GraphicPages | undefined;
+  /** Where every page is listed under its bundle, so that it can be told to reload. */
+  readonly pages?: BundlePages | undefined;
   /** Whether a proxy is trusted to say that the server is reached over HTTPS. */
   readonly transport?: Transport | undefined;
   /** How often each socket is asked for a sign of life. Defaults to `HEARTBEAT_MS`. */
@@ -120,7 +126,8 @@ export function attachWebSocket(server: Server, options: WebSocketOptions): WebS
       socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
 
     const https = viaHttps(request.headers, options.transport ?? {});
-    const refusal = upgradeRefusal(request, allowedOrigins, https);
+    const origins = typeof allowedOrigins === 'function' ? allowedOrigins() : allowedOrigins;
+    const refusal = upgradeRefusal(request, origins, https);
     if (refusal !== undefined) {
       refuse(refusal);
       return;
@@ -143,6 +150,7 @@ export function attachWebSocket(server: Server, options: WebSocketOptions): WebS
         timers: { setTimeout, clearTimeout },
         bundleExists,
         graphics: options.graphics,
+        pages: options.pages,
         send: (msg) => ws.send(encodeMessage(msg)),
         onError: (error) => logger.error(`Failed to handle a message: ${errorMessage(error)}`),
       });

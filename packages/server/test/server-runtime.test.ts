@@ -80,8 +80,8 @@ async function start(bundlesDir: string, dataDir: string) {
   return { server, lines, close, post };
 }
 
-function connect(server: RunningServer, bundle = 'board') {
-  const client = createClient({ bundle, url: `ws://127.0.0.1:${server.port}/ws` });
+function connect(server: RunningServer, bundle = 'board', waitForBundle = true) {
+  const client = createClient({ bundle, url: `ws://127.0.0.1:${server.port}/ws`, waitForBundle });
   cleanup.push(() => client.close());
   return client;
 }
@@ -156,7 +156,9 @@ describe('a server with extensions in worker threads', () => {
       );
       expect((await fetch(`${server.url}/b/board/dashboard/panel.html`)).status).toBe(404);
       expect((await fetch(`${server.url}/b/board/api/score`)).status).toBe(404);
-      await expect(connect(server).ready).rejects.toMatchObject({ code: 'not_found' });
+      await expect(connect(server, 'board', false).ready).rejects.toMatchObject({
+        code: 'not_found',
+      });
       await expect(states.set([])).rejects.toMatchObject({ code: 'forbidden' });
       expect(server.host.stats()).toMatchObject({ running: 0, ledger: {} });
 
@@ -165,6 +167,11 @@ describe('a server with extensions in worker threads', () => {
       await again.ready;
 
       expect(again.value).toEqual({ home: 7 });
+      // The page that was connected all along has its replicant back without a reload.
+      await vi.waitFor(() => expect(score.error).toBeUndefined(), WAIT);
+      expect(score.value).toEqual({ home: 7 });
+      await score.set({ home: 8 });
+      await vi.waitFor(() => expect(again.value).toEqual({ home: 8 }), WAIT);
       const panel = await fetch(`${server.url}/b/board/dashboard/panel.html`);
       expect(panel.status).toBe(200);
       expect(await panel.text()).toBe('board panel');

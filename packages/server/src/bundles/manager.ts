@@ -4,6 +4,7 @@ import {
   BUNDLES_MANAGE,
   type BundleEvent,
   type BundleState,
+  type ChangeArea,
   DASHBOARD_VIEW,
   type Json,
   type Manifest,
@@ -21,10 +22,15 @@ import type { BundleConfigs } from '../config/bundle-config.js';
 import type { ExtensionHost, ExtensionSpec } from '../extension-host/extension-host.js';
 import type { GraphicInstances } from '../graphics/instances.js';
 import { errorMessage, type Logger } from '../kernel/logger.js';
-import { declareReplicants } from '../replicants/declare.js';
+import { type CheckedSchemas, checkReplicants, declareReplicants } from '../replicants/declare.js';
 import type { ReplicantPersistence } from '../replicants/persistence.js';
 import type { BundleSettingsStore } from '../storage/replicant-store.js';
-import { type BundleRecord, discoverBundles, readBundle } from './bundles.js';
+import {
+  type BundleRecord,
+  type DiscoveredBundle,
+  discoverBundles,
+  readBundle,
+} from './bundles.js';
 import { type Dependable, dependencyProblem, dependentsOf, planStart } from './dependencies.js';
 import { privateRoots, publicError } from './errors.js';
 
@@ -51,6 +57,30 @@ export const BUNDLES_REPLICANT = 'bundles';
  */
 export const REVISION_REPLICANT = 'revision';
 
+/** What the "On Air" lock is asked about: every change that interrupts a running bundle. */
+export type LockedOperation = 'update' | 'remove' | 'disable' | 'reload' | 'restart';
+
+/**
+ * Lets a change through although the installation is on air. It is its own word, and not
+ * the `force` of a removal, which is about the bundles that still need the one removed:
+ * whoever means the one must not get the other with it.
+ */
+export interface OnAirOverride {
+  readonly forceOnAir?: boolean | undefined;
+}
+
+/**
+ * Whoever watches the folders of the bundles for changes. The manager says when a folder is
+ * to be watched and, before a folder is moved or deleted, when it must be let go of: an open
+ * watch keeps Windows from renaming the folder.
+ */
+export interface BundleWatch {
+  /** Starts watching the folder of a bundle. Does nothing if it is watched already. */
+  open(name: string, dir: string): void;
+  /** Resolves once nothing holds on to the folder of the bundle any more. */
+  close(name: string): Promise<void>;
+}
+
 export interface BundleManagerOptions {
   readonly bundlesDir: string;
   readonly registry: ReplicantRegistry;
@@ -74,13 +104,16 @@ export interface BundleManagerOptions {
   /** For the restart delays. Defaults to real time. */
   readonly timers?: Timers | undefined;
   /**
-   * The "On Air" lock: asked before a bundle is updated or removed. A text answer is the
-   * reason the change is refused with; `undefined` lets it through. Nothing sets it yet:
-   * the lock itself comes with live reload. See `#assertNotOnAir`.
+   * The "On Air" lock: asked before a bundle is updated, removed, disabled, reloaded or its
+   * extension restarted, unless the change overrides the lock (`forceOnAir`). A text answer
+   * is the reason the change is refused with; `undefined` lets it through. See
+   * `#assertNotOnAir`.
    */
   readonly onAirLock?:
-    | ((bundle: string, operation: 'update' | 'remove') => string | undefined)
+    | ((bundle: string, operation: LockedOperation) => string | undefined)
     | undefined;
+  /** Watches the bundle folders for changes. Without it nothing is watched. */
+  readonly watch?: BundleWatch | undefined;
 }
 
 /** Changes the files of an installed bundle, and changes them back. */
@@ -106,6 +139,16 @@ export interface ReplaceResult {
 }
 
 type Mutable = { -readonly [Key in keyof BundleRecord]: BundleRecord[Key] };
+
+/**
+ * A bundle as it was read from disk and found loadable: its manifest and the schemas of its
+ * replicants. A start that is given one reads neither again, so what runs is what was
+ * checked, whatever happened to the files in between.
+ */
+interface Checked {
+  readonly found: DiscoveredBundle;
+  readonly schemas: CheckedSchemas;
+}
 
 interface Restart {
   attempts: number;
@@ -182,6 +225,8 @@ export class BundleManager {
         continue;
       }
       this.#move(record, 'enable');
+      // A bundle that fails is watched too: the fix is a change of its files.
+      this.#options.watch?.open(record.name, record.dir);
       if (plan.order.includes(record.name)) continue;
       const problem = plan.problems.get(record.name);
       this.#fail(record, problem === undefined ? record.errors : [problem]);
@@ -228,6 +273,7 @@ export class BundleManager {
         if (existing) this.#assertCan(existing, 'enable');
         this.#forgetRestarts(name);
         const record = await this.#enable(name);
+        this.#options.watch?.open(name, record.dir);
         await this.#options.settings?.setDisabled(name, false);
         if (record.state === 'running') await this.#startStranded(name, 'came back');
         return record;
@@ -239,9 +285,10 @@ export class BundleManager {
    * Stops a bundle and removes what it exposed. Refused while running bundles depend on it:
    * taking a dependency away under them would break them without anyone having asked.
    */
-  disable(name: string): Promise<BundleRecord> {
+  disable(name: string, options: OnAirOverride = {}): Promise<BundleRecord> {
     return this.#change(name, this.#withDependents(name), async () => {
       const record = this.#known(name);
+      this.#assertNotOnAir(name, 'disable', options.forceOnAir);
       this.#assertCan(record, 'disable');
       const dependents = this.#runningDependents(name);
       if (dependents.length > 0) {
@@ -253,6 +300,9 @@ export class BundleManager {
       this.#forgetRestarts(name);
       this.#stranded.delete(name);
       await this.#disable(record);
+      // A disabled bundle is not watched: nothing would be done about a change anyway.
+      await this.#options.watch?.close(name);
+      this.#annotate(record, { reloadErrors: undefined, pendingChanges: undefined });
       await this.#options.settings?.setDisabled(name, true);
       return record;
     });
@@ -263,26 +313,92 @@ export class BundleManager {
    * bundles that depend on it are stopped first and started again afterwards. A dependent
    * that does not come back stays `failed`, with an error that says so.
    */
-  reload(name: string): Promise<BundleRecord> {
+  reload(name: string, options: OnAirOverride = {}): Promise<BundleRecord> {
     const scope = [name, ...this.#dependencies(name), ...this.#dependents(name)];
     return this.#change(name, scope, async () => {
-      const record = this.#known(name);
-      if (record.state === 'disabled') {
-        throw new MoonCGError('conflict', `Bundle "${name}" is disabled`);
+      const record = this.#reloadable(name, options);
+      return this.#reload(record);
+    });
+  }
+
+  /**
+   * Reloads a bundle whose files changed, if what is on disk now can be loaded at all. With
+   * a manifest that is invalid, a schema that is unusable or a default that does not fit its
+   * schema, nothing is stopped: the version that ran before keeps running, and the bundle
+   * says why in `reloadErrors` until a reload works. A bundle that failed before gets its
+   * try either way; there is nothing running to protect.
+   *
+   * The files are read once: the manifest and schemas that were checked are the ones the
+   * bundle is started with. Files that are still being written, and are broken again by the
+   * time the old version is stopped, cannot turn a running bundle into a failed one; the
+   * change that broke them is seen like any other and then stops nothing.
+   */
+  reloadIfValid(name: string, options: OnAirOverride = {}): Promise<BundleRecord> {
+    const scope = [name, ...this.#dependencies(name), ...this.#dependents(name)];
+    return this.#change(name, scope, async () => {
+      const record = this.#reloadable(name, options);
+      if (record.state !== 'running') return this.#reload(record);
+      const found = await readBundle(this.#options.bundlesDir, name);
+      const errors = [...(found?.errors ?? ['mooncg.json not found'])];
+      let schemas: CheckedSchemas = new Map();
+      if (found?.manifest) {
+        const checked = await checkReplicants({ dir: record.dir, manifest: found.manifest });
+        errors.push(...checked.errors);
+        schemas = checked.schemas;
       }
-      this.#forgetRestarts(name);
-      const dependents = this.#runningDependents(name);
-      for (const dependent of [...dependents].reverse()) {
-        await this.#disable(this.#known(dependent));
+      if (found && errors.length === 0) return this.#reload(record, { found, schemas });
+      const log = this.#options.logger.child(`bundle:${name}`);
+      for (const error of errors) {
+        log.warn(`Not reloaded, the version that ran before keeps running: ${error}`);
       }
-      await this.#disable(record);
-      await this.#enable(name);
-      const stranded = this.#stranded.get(name) ?? [];
-      this.#stranded.set(name, [...new Set([...dependents, ...stranded])]);
-      if (record.state === 'running') await this.#startStranded(name, 'was reloaded');
-      else this.#failStranded(name, `Not started: bundle "${name}" failed to reload`);
+      // Published like the errors of a bundle that failed: without secrets or server paths.
+      this.#annotate(record, {
+        reloadErrors: errors.map((error) =>
+          publicError(this.#options.config?.scrub(error) ?? error, record.dir, this.#roots),
+        ),
+      });
       return record;
     });
+  }
+
+  /** The bundle a reload was asked for, once it is known that it may be reloaded. */
+  #reloadable(name: string, options: OnAirOverride): Mutable {
+    const record = this.#known(name);
+    if (record.state === 'disabled') {
+      throw new MoonCGError('conflict', `Bundle "${name}" is disabled`);
+    }
+    this.#assertNotOnAir(name, 'reload', options.forceOnAir);
+    return record;
+  }
+
+  /** Stops and starts a bundle: from `checked` if given, else from what is on disk then. */
+  async #reload(record: Mutable, checked?: Checked): Promise<Mutable> {
+    const { name } = record;
+    // What is on disk is about to be loaded; what was wrong with it earlier is history.
+    delete record.reloadErrors;
+    this.#forgetRestarts(name);
+    const dependents = this.#runningDependents(name);
+    for (const dependent of [...dependents].reverse()) {
+      await this.#disable(this.#known(dependent));
+    }
+    await this.#disable(record);
+    await this.#enable(name, checked);
+    const stranded = this.#stranded.get(name) ?? [];
+    this.#stranded.set(name, [...new Set([...dependents, ...stranded])]);
+    if (record.state === 'running') await this.#startStranded(name, 'was reloaded');
+    else this.#failStranded(name, `Not started: bundle "${name}" failed to reload`);
+    return record;
+  }
+
+  /**
+   * Says which changes on disk wait for the "On Air" lock to be released, as the areas they
+   * belong to. An empty list takes the note away. A bundle that is not there has none.
+   */
+  notePending(name: string, areas: readonly ChangeArea[]): void {
+    const record = this.#records.get(name);
+    if (!record) return;
+    const sorted = [...new Set(areas)].sort();
+    this.#annotate(record, { pendingChanges: sorted.length > 0 ? sorted : undefined });
   }
 
   /**
@@ -292,13 +408,14 @@ export class BundleManager {
    * A bundle whose extension does not start again ends up `failed`, like after a crash, and
    * is not restarted on its own.
    */
-  restartExtension(name: string): Promise<BundleRecord> {
+  restartExtension(name: string, options: OnAirOverride = {}): Promise<BundleRecord> {
     return this.#change(name, this.#withDependents(name), async () => {
       const record = this.#known(name);
       const { manifest } = record;
       if (record.state !== 'running' || !manifest) {
         throw new MoonCGError('conflict', `Bundle "${name}" is ${record.state}`);
       }
+      this.#assertNotOnAir(name, 'restart', options.forceOnAir);
       this.#forgetRestarts(name);
       const { host, config: configs } = this.#options;
       const config = await configs?.load({ name, dir: record.dir, manifest });
@@ -349,6 +466,7 @@ export class BundleManager {
       this.#move(record, 'placed');
       // A bundle of this name may have been disabled before it was removed.
       await this.#options.settings?.setDisabled(name, false);
+      this.#options.watch?.open(name, dir);
       return this.#start(record);
     });
   }
@@ -361,11 +479,11 @@ export class BundleManager {
    * started instead. A disabled bundle is swapped and stays disabled: nothing is started,
    * so nothing can show that it should be rolled back.
    */
-  replace(name: string, swap: BundleSwap): Promise<ReplaceResult> {
+  replace(name: string, swap: BundleSwap, options: OnAirOverride = {}): Promise<ReplaceResult> {
     const scope = [name, ...this.#dependencies(name), ...this.#dependents(name)];
     return this.#change(name, scope, async (): Promise<ReplaceResult> => {
       const record = this.#known(name);
-      this.#assertNotOnAir(name, 'update');
+      this.#assertNotOnAir(name, 'update', options.forceOnAir);
       const wasDisabled = record.state === 'disabled';
       if (!wasDisabled) this.#assertCan(record, 'disable');
       this.#forgetRestarts(name);
@@ -407,42 +525,59 @@ export class BundleManager {
         return { outcome: 'broken', record, error, rollbackError };
       };
 
-      this.#move(record, 'update');
-      this.#publish();
+      /** Swaps the files and starts what is in place then. */
+      const swapped = async (): Promise<ReplaceResult> => {
+        this.#move(record, 'update');
+        this.#publish();
+        try {
+          await swap.apply();
+        } catch (applying) {
+          return restore(errorMessage(applying));
+        }
+        this.#move(record, 'placed');
+        await settle();
+        if (wasDisabled || record.state === 'running') {
+          await this.#startStranded(name, 'was updated');
+          return { outcome: 'replaced', record };
+        }
+        // The new version is in place and does not run: out with it.
+        const error = record.errors.join('; ');
+        await this.#disable(record);
+        this.#move(record, 'update');
+        this.#publish();
+        return restore(error);
+      };
+
+      // Nothing may hold on to the folder while it is moved, and what the old files were
+      // noted for says nothing about the new ones.
+      await this.#options.watch?.close(name);
+      this.#annotate(record, { reloadErrors: undefined, pendingChanges: undefined });
       try {
-        await swap.apply();
-      } catch (applying) {
-        return restore(errorMessage(applying));
+        return await swapped();
+      } finally {
+        if (!wasDisabled) this.#options.watch?.open(name, record.dir);
       }
-      this.#move(record, 'placed');
-      await settle();
-      if (wasDisabled || record.state === 'running') {
-        await this.#startStranded(name, 'was updated');
-        return { outcome: 'replaced', record };
-      }
-      // The new version is in place and does not run: out with it.
-      const error = record.errors.join('; ');
-      await this.#disable(record);
-      this.#move(record, 'update');
-      this.#publish();
-      return restore(error);
     });
   }
 
   /**
    * Takes a bundle away: stops it, lets `erase` remove its folder while the bundle shows as
    * `removing`, and forgets it. Refused while enabled bundles depend on it, unless `force`
-   * is given; then those are stopped and say why. If the folder cannot be removed the
-   * bundle stays, `failed` with the reason.
+   * is given; then those are stopped and say why. Refused while the installation is on air,
+   * unless `forceOnAir` is given. Neither stands in for the other. If the folder cannot be
+   * removed the bundle stays, `failed` with the reason.
    */
   remove(
     name: string,
-    options: { readonly force?: boolean | undefined },
+    options: OnAirOverride & {
+      /** Remove although enabled bundles need this one. */
+      readonly force?: boolean | undefined;
+    },
     erase: () => Promise<void>,
   ): Promise<void> {
     return this.#change(name, this.#withDependents(name), async () => {
       const record = this.#known(name);
-      this.#assertNotOnAir(name, 'remove');
+      this.#assertNotOnAir(name, 'remove', options.forceOnAir);
       const blockers = removalBlockers(
         name,
         [...this.#records.values()].map((other) => ({
@@ -465,13 +600,17 @@ export class BundleManager {
         this.#fail(this.#known(dependent), [`Stopped because bundle "${name}" was removed`]);
       }
       this.#stranded.delete(name);
-      if (record.state !== 'disabled') await this.#disable(record);
+      const wasDisabled = record.state === 'disabled';
+      if (!wasDisabled) await this.#disable(record);
       this.#move(record, 'remove');
       this.#publish();
+      // Nothing may hold on to the folder while it is taken away.
+      await this.#options.watch?.close(name);
       try {
         await erase();
       } catch (error) {
         this.#fail(record, [`Could not be removed: ${errorMessage(error)}`]);
+        if (!wasDisabled) this.#options.watch?.open(name, record.dir);
         throw error;
       }
       this.#move(record, 'removed');
@@ -482,14 +621,30 @@ export class BundleManager {
   }
 
   /**
-   * THE ON AIR CHECK POINT. Every update and every removal of a bundle passes here before
-   * anything of the bundle is stopped or moved. Today nothing is ever locked. When bundles
-   * can be marked as on air, the lock answers through `onAirLock` with the reason, and the
-   * change is refused as a `conflict`.
+   * THE ON AIR CHECK POINT. Every change that interrupts a bundle someone asked for passes
+   * here before anything of the bundle is stopped or moved: update, removal, disabling,
+   * reload and restart of the extension. While the installation is on air the lock answers
+   * through `onAirLock` with the reason, and the change is refused as a `conflict`, unless
+   * it overrides the lock. Starting a bundle and the automatic restart after a crash do not
+   * pass here: they bring something back, they take nothing away.
    */
-  #assertNotOnAir(name: string, operation: 'update' | 'remove'): void {
+  #assertNotOnAir(name: string, operation: LockedOperation, forceOnAir?: boolean): void {
+    if (forceOnAir === true) return;
     const reason = this.#options.onAirLock?.(name, operation);
     if (reason !== undefined) throw new MoonCGError('conflict', reason);
+  }
+
+  /** Sets or takes away what is noted about a bundle besides its state, and publishes it. */
+  #annotate(
+    record: Mutable,
+    notes: Partial<Pick<Mutable, 'reloadErrors' | 'pendingChanges'>>,
+  ): void {
+    for (const key of ['reloadErrors', 'pendingChanges'] as const) {
+      if (!(key in notes)) continue;
+      if (notes[key] === undefined) delete record[key];
+      else Object.assign(record, { [key]: notes[key] });
+    }
+    this.#publish();
   }
 
   /** Resolves once no change of state is running or waiting. */
@@ -564,7 +719,7 @@ export class BundleManager {
   }
 
   /** Brings a bundle from wherever it rests to `enabling` and starts it. */
-  async #enable(name: string): Promise<Mutable> {
+  async #enable(name: string, checked?: Checked): Promise<Mutable> {
     let record = this.#records.get(name);
     if (!record) {
       // Only a real folder directly inside the bundles directory becomes a bundle.
@@ -573,21 +728,24 @@ export class BundleManager {
       record = { ...found, state: 'installed' };
       this.#records.set(name, record);
     }
-    return this.#start(record);
+    return this.#start(record, checked);
   }
 
   /** Brings a bundle that rests to `enabling` and starts it from what is on disk now. */
-  #start(record: Mutable): Promise<Mutable> {
+  #start(record: Mutable, checked?: Checked): Promise<Mutable> {
     this.#move(record, 'enable');
     this.#publish();
-    return this.#run(record);
+    return this.#run(record, checked);
   }
 
-  /** Starts a bundle that is `enabling`, from what is on disk now. */
-  async #run(record: Mutable): Promise<Mutable> {
+  /**
+   * Starts a bundle that is `enabling`: from what is on disk now, or from `checked`, the
+   * manifest and schemas that were read and checked just before.
+   */
+  async #run(record: Mutable, checked?: Checked): Promise<Mutable> {
     const { bundlesDir, registry, bus, host, persistence, logger } = this.#options;
     const { name } = record;
-    const found = await readBundle(bundlesDir, name);
+    const found = checked?.found ?? (await readBundle(bundlesDir, name));
     record.manifest = found?.manifest;
     record.errors = found?.errors ?? ['mooncg.json not found'];
     const { manifest } = record;
@@ -610,6 +768,7 @@ export class BundleManager {
     const replicants = await declareReplicants(
       { name, dir: record.dir, manifest },
       { registry, persistence, logger: logger.child(`bundle:${name}`) },
+      checked?.schemas,
     );
     if (replicants.errors.length > 0) return this.#fail(record, replicants.errors);
     this.#options.instances?.declare(name, manifest);
@@ -630,6 +789,8 @@ export class BundleManager {
     this.#move(record, 'started');
     record.errors = [];
     record.lastError = undefined;
+    // What is on disk now runs: whatever was wrong with it before no longer is.
+    delete record.reloadErrors;
     this.#publish();
     return record;
   }
@@ -810,14 +971,19 @@ export class BundleManager {
   }
 
   #publish(): void {
-    const value: Json = this.list().map(({ name, state, manifest, errors, lastError }) => ({
-      name,
-      state,
-      ...(manifest?.title === undefined ? {} : { title: manifest.title }),
-      ...(manifest === undefined ? {} : { version: manifest.version }),
-      errors: [...errors],
-      ...(lastError === undefined ? {} : { lastError }),
-    }));
+    const value: Json = this.list().map((record) => {
+      const { name, state, manifest, errors, lastError, reloadErrors, pendingChanges } = record;
+      return {
+        name,
+        state,
+        ...(manifest?.title === undefined ? {} : { title: manifest.title }),
+        ...(manifest === undefined ? {} : { version: manifest.version }),
+        errors: [...errors],
+        ...(lastError === undefined ? {} : { lastError }),
+        ...(reloadErrors === undefined ? {} : { reloadErrors: [...reloadErrors] }),
+        ...(pendingChanges === undefined ? {} : { pendingChanges: [...pendingChanges] }),
+      };
+    });
     if (JSON.stringify(value) === JSON.stringify(this.#summary.value)) return;
     this.#summary.applyOp({ patches: [{ op: 'replace', path: '', value }] });
     const { bundles } = this.#revision.value as { bundles: number };

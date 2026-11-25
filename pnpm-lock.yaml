@@ -109,6 +109,9 @@ importers:
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
+      chokidar:
+        specifier: ^6.0.0
+        version: 6.0.0
       fastify:
         specifier: ^5.12.8
         version: 5.12.8

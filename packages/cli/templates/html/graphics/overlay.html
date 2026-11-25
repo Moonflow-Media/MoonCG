@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{title}} overlay</title>
+    <style>
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+      }
+      #message {
+        position: absolute;
+        left: 80px;
+        bottom: 120px;
+        padding: 20px 36px;
+        border-radius: 12px;
+        background: rgba(16, 18, 24, 0.85);
+        color: #fff;
+        font: 600 48px system-ui, sans-serif;
+        transition: opacity 0.3s;
+      }
+      #message.hidden {
+        opacity: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="message" class="hidden"></div>
+
+    <script type="module">
+      import { createClient } from '/sdk/mooncg.js';
+
+      // In OBS, add this page as a browser source with an API token: ...?token=mcg_...
+      const mc = createClient();
+      const box = document.getElementById('message');
+      mc.replicant('message').subscribe((value) => {
+        box.textContent = value.text;
+        box.classList.toggle('hidden', !value.visible);
+      });
+    </script>
+  </body>
+</html>

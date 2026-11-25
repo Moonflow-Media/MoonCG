@@ -7,6 +7,8 @@ import { useBundles } from './bundles.js';
 export interface Instance {
   readonly id: string;
   readonly since: string;
+  /** The files of its bundle changed since the page loaded them. */
+  readonly outOfDate?: boolean | undefined;
 }
 
 /**

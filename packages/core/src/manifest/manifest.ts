@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { jsonProblem } from '../json.js';
 import { BUNDLE_NAME_PATTERN, isReservedDeviceName } from '../names.js';
+import { isLoopbackHost } from '../net.js';
 import { isSafeRelativePath } from '../paths.js';
 
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
@@ -33,6 +34,22 @@ const fileIn = (dir: string) =>
       `Must be a file under ${dir}/, without ".." or "\\"`,
     );
 const positiveInt = z.int().positive();
+
+/**
+ * The address of a bundle's development server. Requests for the bundle's pages are sent
+ * there in dev mode, so it may only ever be this machine: no other host, no credentials, and
+ * nothing after the path.
+ */
+const DEV_URL =
+  /^https?:\/\/(localhost|\d{1,3}(?:\.\d{1,3}){3}|\[::1\])(?::(\d{1,5}))?(\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?$/i;
+
+function isDevUrl(text: string): boolean {
+  // Read by hand: this package has no `URL`, and nothing but this exact shape is wanted.
+  const match = DEV_URL.exec(text);
+  if (!match) return false;
+  const [, host = '', port] = match;
+  return isLoopbackHost(host) && (port === undefined || Number(port) <= 65535);
+}
 
 /**
  * A manifest is shown to people before its bundle is trusted: in the dashboard, on a
@@ -157,7 +174,17 @@ export const manifestSchema = z.strictObject({
   assets: z.array(asset).max(200, few.message).default([]),
   config: z.strictObject({ schema: file }).optional(),
   capabilities: z.array(shown(200)).max(200, few.message).default([]),
-  dev: z.strictObject({ url: z.url() }).optional(),
+  dev: z
+    .strictObject({
+      url: z
+        .string()
+        .max(500)
+        .refine(
+          isDevUrl,
+          'Must be an http:// or https:// address on this machine (localhost, 127.0.0.1 or [::1]), without credentials, query or fragment',
+        ),
+    })
+    .optional(),
 });
 
 /** A validated manifest with every collection present. `$schema` is dropped. */

@@ -5,19 +5,22 @@ A **bundle** brings dashboard panels, graphics for OBS or vMix, and an optional 
 extension. Bundles share state through **replicants**: values the server owns and syncs to every
 panel and graphic over a WebSocket.
 
-This repository is at milestone 7 of its plan. It loads bundles from a folder, serves their
+This repository has finished milestones 1 to 7 of its plan. It loads bundles from a folder, serves their
 panels and graphics, syncs replicants and messages, runs each bundle's extension in its own
 worker thread, can enable, disable and reload bundles while it runs, and has users, roles,
 permissions and API tokens. Its dashboard has workspaces, pages for bundles, graphics, users,
 roles, tokens and logs, dialogs that panels open, a settings form for each bundle's
 configuration, and uploaded assets. Bundles are installed, updated and removed while the server
 runs, from a Git repository, a ZIP archive or a folder, with a rollback when a new version does
-not start: see [docs/bundles.md](docs/bundles.md). Live reload on file changes and a lock for
-bundles that are on air (milestone 6) come later.
+not start: see [docs/bundles.md](docs/bundles.md). For writing bundles there is `mooncg dev`,
+which watches the bundle folders and reloads what changes, templates for a new installation
+and a new bundle, and an **On Air** lock that keeps all of that away from a running show: see
+[docs/development.md](docs/development.md).
 
 ## Run the example
 
-Requires Node.js 22 or newer and pnpm.
+Requires Node.js 22.22 or newer and pnpm. (The file watcher behind `--watch` and `mooncg dev`,
+chokidar 6, needs that version, so the server and the command line ask for it.)
 
 ```sh
 pnpm install
@@ -55,6 +58,21 @@ node packages/cli/dist/main.js token create OBS --user <you> --grant bundle:scor
 [docs/permissions.md](docs/permissions.md) describes users, roles, permissions, tokens and the
 setup. The server listens on loopback unless started with `--host`.
 
+### Working on a bundle
+
+```sh
+pnpm dev
+```
+
+`pnpm dev` builds and starts the server in **dev mode** with the bundles in `examples/`: it
+watches the bundle folders, and it signs in every request from this machine that brings no
+credentials as the administrator `dev`, so <http://127.0.0.1:9090/> opens without a password. Save
+`examples/scoreboard/dashboard/control.html` and the panel reloads; save
+`extension/index.js` and the extension restarts; break `mooncg.json` and the bundle keeps
+running while the Bundles page says what is wrong. Dev mode listens on loopback only, must
+never sit behind a proxy or a tunnel, and is never for a show. [docs/development.md](docs/development.md) has all of it, with
+`mooncg init` and `mooncg bundle create` for a folder and a bundle of your own.
+
 ## Configuration
 
 | Flag                               | Environment variable                    | Default     | Meaning                                            |
@@ -79,10 +97,20 @@ setup. The server listens on loopback unless started with `--host`.
 | `--extension-heartbeat-timeout-ms` | `MOONCG_EXTENSION_HEARTBEAT_TIMEOUT_MS` | `10000`     | How long a running extension may stay unresponsive |
 | `--secure-cookies`                 | `MOONCG_SECURE_COOKIES`                 | off         | Marks session cookies `Secure` (HTTPS only)        |
 | `--trust-proxy`                    | `MOONCG_TRUST_PROXY`                    | off         | Believes `X-Forwarded-Proto` and `X-Forwarded-For` |
+| `--watch`, `--no-watch`            | `MOONCG_WATCH`                          | off         | Watches the bundle folders and applies changes     |
+| `--dev`                            | none, on purpose                        | off         | Dev mode: watcher, `dev.url`, sign-in on loopback  |
+| `--config`                         | `MOONCG_CONFIG`                         | see below   | The configuration file to read                     |
 
 Flags win over environment variables. Relative paths resolve against the working directory.
 `--allowed-origin` can be repeated; the environment variable takes a comma-separated list.
-The two switches are on in the environment as `1` or `true`.
+The switches are on in the environment as `1` or `true`, and each can be turned off on the
+command line with `--no-` in front, such as `--no-watch`. For `watch`, the flag wins over
+`MOONCG_WATCH` (where `0` turns it off), which wins over the file.
+
+`port`, `host`, `bundlesDir`, `dataDir`, `allowedOrigins` and `watch` can also be set in
+`mooncg.config.json` in the directory the server is started in; `mooncg init` writes one.
+Flags and environment variables win over the file, and relative paths in it start at the
+file's own folder. See [docs/development.md](docs/development.md#the-configuration-file).
 
 `--host 0.0.0.0` opens the server to the network. It speaks plain HTTP, so on a network you do
 not fully trust put an HTTPS reverse proxy in front and start with `--secure-cookies
@@ -94,7 +122,8 @@ A browser page may open the WebSocket, or send a request that changes something 
 it connects to) or from an allowed origin. Clients that send no `Origin`, such as Node scripts,
 curl and OBS, pass this check; they still need a session or a token. A request that changes
 something and is authenticated by a cookie must also carry JSON or the header `X-MoonCG-CSRF`.
-A WebSocket frame may be at most 1 MiB.
+A WebSocket frame may be at most 1 MiB. Dev mode does not start with an allowed origin that is
+not on this machine.
 
 The server listens as soon as it knows its bundles; their extensions start in the background,
 and a bundle shows as `enabling` until its extension has started.
@@ -112,6 +141,8 @@ To run the built server yourself:
 ```sh
 pnpm build
 node packages/server/dist/main.js --bundles-dir examples --port 9090
+# or, the same through the command line tool:
+node packages/cli/dist/main.js start --bundles-dir examples --port 9090
 ```
 
 ## Development
@@ -123,21 +154,22 @@ node packages/server/dist/main.js --bundles-dir examples --port 9090
 | `pnpm lint`      | Checks formatting and lint rules with Biome (`pnpm format` to fix)                            |
 | `pnpm build`     | Compiles every package, bundles the browser SDK, builds the dashboard                         |
 | `pnpm test:e2e`  | Builds, then runs the browser smoke test (needs `pnpm exec playwright install chromium` once) |
+| `pnpm dev`       | Builds, then starts the server in dev mode with the bundles in `examples/`                    |
 
 TypeScript is compiled with `tsc -b` and the server runs the JavaScript in `dist/`. Nothing runs
 TypeScript directly, so rebuild after changing sources. Tests need no build.
 
 ## Repository layout
 
-| Path                  | Content                                                                                                                                                      |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `packages/core`       | Pure logic without IO: manifest parser, replicant engine, message bus, route table, bundle state machine, wire protocol, permissions, session handler        |
-| `packages/server`     | Config, logger and lifecycle, bundle manager and installer, schema validation, storage, accounts, worker-thread extension host, HTTP and WebSocket transport |
-| `packages/sdk`        | What bundle authors use: `@mooncg/sdk/client` (browser and Node client), `/extension` (extension context), `/vue` and `/react` adapters                      |
-| `docs/`               | `permissions.md` (accounts, roles, tokens, setup), `bundles.md` (installing, updating, removing), `extensions.md`, `dashboard.md` and `folder-structure.md`  |
-| `packages/cli`        | The `mooncg` command line: `mooncg types`, `mooncg user`, `mooncg token` and `mooncg bundle`                                                                 |
-| `packages/dashboard`  | The dashboard: a Vue application the server serves at `/`; see [docs/dashboard.md](docs/dashboard.md)                                                        |
-| `examples/scoreboard` | A reference bundle with a panel, a dialog, a graphic, an extension, an asset category and a config schema with a secret                                      |
+| Path                  | Content                                                                                                                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/core`       | Pure logic without IO: manifest parser, replicant engine, message bus, route table, bundle state machine, wire protocol, permissions, session handler                                                         |
+| `packages/server`     | Config, logger and lifecycle, bundle manager and installer, schema validation, storage, accounts, worker-thread extension host, HTTP and WebSocket transport                                                  |
+| `packages/sdk`        | What bundle authors use: `@mooncg/sdk/client` (browser and Node client), `/extension` (extension context), `/vue` and `/react` adapters                                                                       |
+| `docs/`               | `permissions.md` (accounts, roles, tokens, setup), `bundles.md` (installing, updating, removing), `development.md` (live reload, dev mode, On Air), `extensions.md`, `dashboard.md` and `folder-structure.md` |
+| `packages/cli`        | The `mooncg` command line: `mooncg init`, `start`, `dev`, `types`, `user`, `token` and `bundle`, with the bundle templates                                                                                    |
+| `packages/dashboard`  | The dashboard: a Vue application the server serves at `/`; see [docs/dashboard.md](docs/dashboard.md)                                                                                                         |
+| `examples/scoreboard` | A reference bundle with a panel, a dialog, a graphic, an extension, an asset category and a config schema with a secret                                                                                       |
 
 ## Writing a bundle
 
@@ -180,6 +212,7 @@ A manifest can declare more, each described in [docs/dashboard.md](docs/dashboar
 | `"singleInstance": true` on a graphic           | A graphic that one page shows at a time; a second page is told so                            |
 | `"config": { "schema": "schemas/config.json" }` | A settings form in the dashboard and `ctx.config` in the extension, with write-only secrets  |
 | `assets`                                        | Categories of uploaded files, served under `/b/<bundle>/assets/` and listed in a replicant   |
+| `"dev": { "url": "http://localhost:5173" }`     | In dev mode only: the bundle's pages are served by that development server on this machine   |
 
 ### Bundle states
 
@@ -196,14 +229,19 @@ curl -X POST http://127.0.0.1:9090/api/v1/bundles/scoreboard/enable
 - `reload` stops the bundle and starts it from what is on disk now: manifest and extension
   code. A broken manifest or a failing extension leaves it `failed` with the error.
 - `disable` stops the extension, saves and removes the bundle's replicants, and takes its
-  pages, routes and messages away. Connected pages are told that the replicants are gone. A
-  disabled bundle stays disabled across restarts until it is enabled.
+  pages, routes and messages away. Connected pages are told that the replicants are gone,
+  and told again when the bundle is back: they subscribe anew by themselves and go on
+  without being reloaded. A disabled bundle stays disabled across restarts until it is
+  enabled.
 - `enable` reads the manifest again, restores persistent replicants and starts the extension.
 - A bundle that other running bundles depend on cannot be disabled; reloading it restarts them.
 - A change to one bundle does not wait for an unrelated bundle that is busy, for example one
   whose extension is slow to start.
 - Only real bundle names are accepted: lowercase letters, digits and dashes.
 - These calls need the permission `system:bundles.manage`.
+- While the installation is **On Air**, `reload` and `disable` are refused with `409` unless
+  the JSON body says `"forceOnAir": true`. See
+  [docs/development.md](docs/development.md#the-on-air-lock).
 - The states are also a read-only replicant, `system:bundles`, for whoever may manage bundles.
   The dashboard follows `system:revision`, which only counts changes, and asks for the list.
 

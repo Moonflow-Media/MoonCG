@@ -3,9 +3,29 @@ import { parseArgs } from 'node:util';
 import type { ScryptParams } from '@mooncg/server/accounts';
 import { type AccountArgs, tokenCommand, UsageError, userCommand } from './accounts-command.js';
 import { bundleCommand } from './bundle-command.js';
+import { createBundle, initInstallation, shownPath } from './create-command.js';
 import { writeTypes } from './types-command.js';
 
 const USAGE = `Usage: mooncg <command>
+
+  init [folder]
+      Create an installation folder: bundles/, data/ and mooncg.config.json. The folder
+      defaults to the current directory. Nothing that exists is overwritten.
+
+  start [server flags]
+  dev [server flags]
+      Start the server in the current directory. It reads mooncg.config.json there (or the
+      file --config names), then the MOONCG_* environment variables, then the flags, such
+      as --port, --host, --bundles-dir, --data-dir, --allowed-origin and --watch; the later
+      one wins. dev is for writing bundles on your own machine: it watches the bundle
+      folders and reloads what changes, honours the dev.url of a manifest, and signs in
+      every request from this machine as an administrator without a password. It listens
+      on loopback only and refuses any other host. Never use it for a show.
+
+  bundle create <name> [--template html] [--dir <bundles folder>] [--config <file>]
+      Create a bundle from a template in the bundles folder: the one --dir names, else the
+      one of the configuration file (mooncg.config.json, or the file --config or
+      MOONCG_CONFIG names), else ./bundles. Needs no running server.
 
   types [bundleDir] [--out <file>]
       Generate mooncg-env.d.ts for a bundle from its replicant schemas, so that
@@ -28,13 +48,13 @@ const USAGE = `Usage: mooncg <command>
 
   bundle list
   bundle install <git-url|zip|folder> [--ref <branch|tag|commit>] [--scripts] [--yes]
-  bundle update <name> [<git-url|zip|folder>] [--ref <ref>] [--scripts] [--yes]
-  bundle remove <name> [--force] [--delete-files] [--purge-data] [--yes]
+  bundle update <name> [<git-url|zip|folder>] [--ref <ref>] [--scripts] [--yes] [--on-air]
+  bundle remove <name> [--force] [--delete-files] [--purge-data] [--yes] [--on-air]
   bundle enable <name>
-  bundle disable <name>
-  bundle reload <name>
+  bundle disable <name> [--on-air]
+  bundle reload <name> [--on-air]
   bundle backups <name>
-  bundle restore <name> <backup> [--yes]
+  bundle restore <name> <backup> [--yes] [--on-air]
       Manage the bundles of a running server through its API. install and update fetch
       the bundle, show what it declares and ask before anything is installed; --yes
       skips the question. update without a source fetches from where the bundle came
@@ -43,7 +63,10 @@ const USAGE = `Usage: mooncg <command>
       of its npm packages, its .npmrc and dependencies fetched from elsewhere than the
       registry. Without it a bundle that needs any of that is refused. remove keeps the
       files as a backup and keeps the bundle's data, unless --delete-files and
-      --purge-data say otherwise; --force removes a bundle others still need.
+      --purge-data say otherwise; --force removes a bundle others still need, and
+      overrides nothing else. While the installation is on air, update, remove, disable,
+      reload and restore are refused unless --on-air is given, which takes the same
+      permission as the change itself. A removal that both stand in the way of takes both.
 
   bundle commands take --url <url> (default: http://127.0.0.1:9090, or MOONCG_URL) and an
   API token that holds system:bundles.manage, from MOONCG_TOKEN or --token <token>.
@@ -62,6 +85,11 @@ export interface CliIo {
   confirm?(question: string): Promise<boolean>;
   /** For tests: stands in for `fetch`. */
   fetch?: typeof fetch;
+  /**
+   * Runs the server with these flags and resolves when it has stopped. For tests: stands
+   * in for starting a real one.
+   */
+  serve?(argv: readonly string[]): Promise<void>;
 }
 
 export interface CliOptions {
@@ -81,6 +109,19 @@ export async function run(
     io.error(USAGE);
     return 1;
   };
+  const env = io.env ?? {};
+  // The flags of these two are the server's own, which only the server knows how to read.
+  if (argv[0] === 'start' || argv[0] === 'dev') {
+    // Dev mode exists as this one flag, and nothing but `mooncg dev` adds it.
+    const flags = argv[0] === 'dev' ? ['--dev', ...argv.slice(1)] : argv.slice(1);
+    try {
+      await (io.serve?.(flags) ?? serve(flags, env, io.cwd));
+      return 0;
+    } catch (error) {
+      io.error(error instanceof Error ? error.message : String(error));
+      return 1;
+    }
+  }
   let parsed: ReturnType<typeof parse>;
   try {
     parsed = parse(argv);
@@ -89,8 +130,29 @@ export async function run(
   }
   const { values, positionals } = parsed;
   const [command, first, second, ...rest] = positionals;
-  const env = io.env ?? {};
   try {
+    if (command === 'init') {
+      if (second !== undefined) return usage();
+      const dir = resolve(io.cwd, first ?? '.');
+      const created = await initInstallation(dir);
+      io.log(`Created in ${dir}: ${created.join(', ')}`);
+      io.log(
+        `Next: "mooncg bundle create <name>" for a first bundle, then "mooncg dev" in ${shownPath(io.cwd, dir)} to work on it, or "mooncg start" to run it.`,
+      );
+      return 0;
+    }
+    if (command === 'bundle' && first === 'create') {
+      if (second === undefined || rest.length > 0) return usage();
+      const { dir, files } = await createBundle({
+        name: second,
+        bundlesDir: await bundlesDir(values.dir, values.config, env, io.cwd),
+        template: values.template,
+      });
+      io.log(`Created the bundle "${second}" in ${dir}:`);
+      for (const file of files) io.log(`  ${file}`);
+      io.log('Start "mooncg dev" in the installation folder to work on it.');
+      return 0;
+    }
     if (command === 'types') {
       if (second !== undefined) return usage();
       const file = await writeTypes({
@@ -111,6 +173,7 @@ export async function run(
           ref: values.ref,
           scripts: values.scripts ?? false,
           force: values.force ?? false,
+          onAir: values['on-air'] ?? false,
           deleteFiles: values['delete-files'] ?? false,
           purgeData: values['purge-data'] ?? false,
           insecure: values.insecure ?? false,
@@ -151,6 +214,35 @@ export async function run(
   }
 }
 
+/** Starts the server and resolves when it has stopped. Loaded only when it is needed. */
+async function serve(
+  argv: readonly string[],
+  env: Readonly<Record<string, string | undefined>>,
+  cwd: string,
+): Promise<void> {
+  const { runServer } = await import('@mooncg/server');
+  const { stopped } = await runServer({ argv, env, cwd });
+  await stopped;
+}
+
+/**
+ * The bundles folder a new bundle goes to: `--dir`, else what the server would use when
+ * started in the working directory, which is `./bundles` unless the configuration file or
+ * `MOONCG_BUNDLES_DIR` says otherwise. `config` names the configuration file, as `--config`
+ * does for the server.
+ */
+async function bundlesDir(
+  given: string | undefined,
+  config: string | undefined,
+  env: Readonly<Record<string, string | undefined>>,
+  cwd: string,
+): Promise<string> {
+  if (given !== undefined) return resolve(cwd, given);
+  const { loadConfig, readConfigFile } = await import('@mooncg/server');
+  const sources = { argv: config === undefined ? [] : ['--config', config], env, cwd };
+  return loadConfig({ ...sources, file: await readConfigFile(sources) }).bundlesDir;
+}
+
 function parse(argv: readonly string[]) {
   return parseArgs({
     args: [...argv],
@@ -171,9 +263,13 @@ function parse(argv: readonly string[]) {
       ref: { type: 'string' },
       scripts: { type: 'boolean' },
       force: { type: 'boolean' },
+      'on-air': { type: 'boolean' },
       'delete-files': { type: 'boolean' },
       'purge-data': { type: 'boolean' },
       insecure: { type: 'boolean' },
+      template: { type: 'string' },
+      dir: { type: 'string' },
+      config: { type: 'string' },
     },
   });
 }

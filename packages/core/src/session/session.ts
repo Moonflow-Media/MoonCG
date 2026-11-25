@@ -39,6 +39,27 @@ export const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
  */
 export const MAX_PENDING_CALLS = 100;
 
+/**
+ * How many names one connection may wait for at a time: replicants and topics it asked for
+ * while they were not declared, or lost with their bundle. Further ones are not remembered,
+ * so a client cannot make the server keep a list without end.
+ */
+export const MAX_AWAITED_NAMES = 500;
+
+/** One connected page of a bundle, as its session describes it. */
+export interface ConnectedPage {
+  /** Whether the page said in `hello` that it is a graphic. Any other is a panel or dialog. */
+  readonly graphic: boolean;
+  /** Tells the page to load itself again. */
+  reload(): void;
+}
+
+/** Where the connected pages of each bundle are listed, so that they can be told to reload. */
+export interface BundlePages {
+  /** Lists a page under its bundle and returns the function that takes it off again. */
+  join(bundle: string, page: ConnectedPage): () => void;
+}
+
 /** What makes a session the connection of a bundle's extension, not of a page. */
 export interface ExtensionAccess {
   /** The bundle manifest's `capabilities`. They limit what the extension reaches. */
@@ -97,6 +118,8 @@ export interface SessionOptions {
   readonly checkPermission?: ((principal: string, permission: string) => boolean) | undefined;
   /** Where graphic pages are registered. Without it no page counts as an instance. */
   readonly graphics?: GraphicPages | undefined;
+  /** Where every page is listed under its bundle. Without it no page is told to reload. */
+  readonly pages?: BundlePages | undefined;
 }
 
 /** What a connection currently holds on the server. All of it is released by `close()`. */
@@ -148,7 +171,33 @@ export function createSession(options: SessionOptions): Session {
   let bundle: string | undefined;
   /** Takes this connection out of the instances of its graphic, if it is one. */
   let leaveGraphic: (() => void) | undefined;
+  /** Takes this connection off the pages of its bundle. */
+  let leavePages: (() => void) | undefined;
   let closed = false;
+  /**
+   * The replicants and topics this connection waits for: it is told when one is declared.
+   * Each kind has one listener for declarations, added when the first name is awaited.
+   */
+  const awaitedReplicants = new Set<string>();
+  const awaitedTopics = new Set<string>();
+  let stopAwaitingReplicants: (() => void) | undefined;
+  let stopAwaitingTopics: (() => void) | undefined;
+  const mayAwait = () => !closed && awaitedReplicants.size + awaitedTopics.size < MAX_AWAITED_NAMES;
+
+  const awaitReplicant = (name: string) => {
+    if (!mayAwait()) return;
+    awaitedReplicants.add(name);
+    stopAwaitingReplicants ??= registry.onDeclare((declared) => {
+      if (awaitedReplicants.delete(declared)) send({ t: 'rep.back', name: declared });
+    });
+  };
+  const awaitTopic = (name: string, messageBus: MessageBus) => {
+    if (!mayAwait()) return;
+    awaitedTopics.add(name);
+    stopAwaitingTopics ??= messageBus.onDeclare((declared) => {
+      if (awaitedTopics.delete(declared)) send({ t: 'msg.back', name: declared });
+    });
+  };
 
   const fail = (code: ErrorCode, message: string, id?: number) =>
     send(id === undefined ? { t: 'err', code, message } : { t: 'err', id, code, message });
@@ -202,6 +251,8 @@ export function createSession(options: SessionOptions): Session {
     const name = qualifyReplicantName(request.name, ownBundle);
     const entry = registry.get(name);
     if (!entry || !sees(name)) {
+      // Whoever may see the bundle and asked to follow is told when the replicant is there.
+      if (request.t === 'rep.sub' && sees(name)) awaitReplicant(name);
       fail('not_found', `Replicant "${name}" is not declared`, request.id);
       return undefined;
     }
@@ -218,6 +269,7 @@ export function createSession(options: SessionOptions): Session {
     const target = replicantFor(request, ownBundle, 'read');
     if (!target) return;
     const { name, entry } = target;
+    awaitedReplicants.delete(name);
     if (!replicants.has(name)) {
       const stopPatches = entry.replicant.onCommit(({ rev, patches }) =>
         send({ t: 'rep.patch', name, rev, patches }),
@@ -225,6 +277,7 @@ export function createSession(options: SessionOptions): Session {
       const stopClose = entry.replicant.onClose(() => {
         replicants.delete(name);
         send({ t: 'rep.gone', name, message: `Replicant "${name}" was removed` });
+        awaitReplicant(name);
       });
       replicants.set(name, () => {
         stopPatches();
@@ -298,7 +351,9 @@ export function createSession(options: SessionOptions): Session {
     const { id } = request;
     const name = qualifyReplicantName(request.name, ownBundle);
     const topic = messageBus.get(name);
+    if (request.t === 'msg.unsub') awaitedTopics.delete(name);
     if (!topic || !sees(name)) {
+      if (request.t === 'msg.sub' && sees(name)) awaitTopic(name, messageBus);
       fail('not_found', `Message "${name}" is not declared`, id);
       return;
     }
@@ -310,6 +365,7 @@ export function createSession(options: SessionOptions): Session {
     switch (request.t) {
       case 'msg.sub':
         if (!reaches(name, 'read', ownBundle, id) || !permits(topic.listenPermission, id)) return;
+        awaitedTopics.delete(name);
         if (!listeners.has(name)) {
           listeners.set(
             name,
@@ -319,6 +375,7 @@ export function createSession(options: SessionOptions): Session {
               () => {
                 listeners.delete(name);
                 send({ t: 'msg.gone', name, message: `Message "${name}" was removed` });
+                awaitTopic(name, messageBus);
               },
             ),
           );
@@ -457,6 +514,15 @@ export function createSession(options: SessionOptions): Session {
         fail('not_found', `Bundle "${msg.bundle}" is not running`);
       } else if (enterGraphic(msg.bundle, msg.graphic)) {
         bundle = msg.bundle;
+        // An extension is no page: nothing ever tells it to load itself again.
+        if (!extension) {
+          leavePages = options.pages?.join(msg.bundle, {
+            graphic: msg.graphic !== undefined,
+            reload: () => {
+              if (!closed) send({ t: 'reload' });
+            },
+          });
+        }
         send({ t: 'welcome', v: PROTOCOL_VERSION });
       }
       return;
@@ -497,6 +563,12 @@ export function createSession(options: SessionOptions): Session {
       closed = true;
       leaveGraphic?.();
       leaveGraphic = undefined;
+      leavePages?.();
+      leavePages = undefined;
+      stopAwaitingReplicants?.();
+      stopAwaitingTopics?.();
+      awaitedReplicants.clear();
+      awaitedTopics.clear();
       for (const release of [
         ...replicants.values(),
         ...listeners.values(),

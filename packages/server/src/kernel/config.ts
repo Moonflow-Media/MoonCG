@@ -1,10 +1,19 @@
-import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { DEFAULT_BACKUPS_KEPT } from '@mooncg/core';
+import {
+  DEFAULT_BACKUPS_KEPT,
+  isLoopbackHost,
+  isLoopbackOrigin,
+  isPlainObject,
+} from '@mooncg/core';
 import { DEFAULT_INSTALL_LIMITS } from '../install/files.js';
 
 /** How long Git and npm may each take while a bundle is installed, unless configured. */
 export const DEFAULT_BUNDLE_INSTALL_TIMEOUT_MS = 5 * 60_000;
+
+/** The name of the configuration file an installation folder may hold. */
+export const CONFIG_FILE = 'mooncg.config.json';
 
 /** The largest asset file unless configured otherwise: 50 MiB. */
 export const DEFAULT_ASSET_MAX_FILE_BYTES = 50 * 1024 * 1024;
@@ -67,6 +76,28 @@ export interface ServerConfig {
    * HTTPS requests and for telling clients apart when logins are throttled.
    */
   readonly trustProxy: boolean;
+  /**
+   * Dev mode, for writing bundles on one's own machine: the watcher is on, graphics reload
+   * with their files, the `dev.url` of a manifest is honoured, and every request from this
+   * machine is signed in as an administrator without a password. It exists only with
+   * `--dev` (which `mooncg dev` passes): no environment variable and no file turns it on,
+   * and it refuses any host but loopback.
+   */
+  readonly dev: boolean;
+  /**
+   * Watches the bundle folders and applies what changes. `--watch` or `--no-watch` wins over
+   * `MOONCG_WATCH`, which wins over `watch` in the configuration file. Always on in dev mode.
+   */
+  readonly watch: boolean;
+}
+
+/** A configuration file as it was read: its content, not yet checked. */
+export interface ConfigFile {
+  readonly values: unknown;
+  /** The folder the file lies in. Relative paths in the file start there. */
+  readonly dir: string;
+  /** The file itself, for error messages. */
+  readonly path: string;
 }
 
 export interface ConfigSources {
@@ -74,54 +105,194 @@ export interface ConfigSources {
   readonly argv: readonly string[];
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly cwd: string;
+  /** The configuration file, if there is one. See `readConfigFile`. */
+  readonly file?: ConfigFile | undefined;
+}
+
+const FLAGS = {
+  config: { type: 'string' },
+  dev: { type: 'boolean' },
+  watch: { type: 'boolean' },
+  port: { type: 'string' },
+  host: { type: 'string' },
+  'bundles-dir': { type: 'string' },
+  'data-dir': { type: 'string' },
+  'extension-memory-mb': { type: 'string' },
+  'extension-start-timeout-ms': { type: 'string' },
+  'extension-heartbeat-timeout-ms': { type: 'string' },
+  'max-body-bytes': { type: 'string' },
+  'asset-max-file-bytes': { type: 'string' },
+  'asset-quota-bytes': { type: 'string' },
+  'asset-max-files': { type: 'string' },
+  'bundle-max-archive-bytes': { type: 'string' },
+  'bundle-max-unpacked-bytes': { type: 'string' },
+  'bundle-max-files': { type: 'string' },
+  'bundle-backups-kept': { type: 'string' },
+  'bundle-install-timeout-ms': { type: 'string' },
+  'bundle-npm-registry': { type: 'string' },
+  'allowed-origin': { type: 'string', multiple: true },
+  'secure-cookies': { type: 'boolean' },
+  'trust-proxy': { type: 'boolean' },
+} as const;
+
+/**
+ * Reads the command line. Every switch can also be turned off by name, such as
+ * `--no-watch`, which is how a flag wins over an environment variable or a file that turns
+ * it on.
+ */
+const parseFlags = (argv: readonly string[]) =>
+  parseArgs({ args: [...argv], options: FLAGS, allowNegative: true });
+
+/**
+ * Reads the configuration file: the one `--config` names, else the one `MOONCG_CONFIG`
+ * names, else `mooncg.config.json` in the working directory if there is one. A file that was
+ * named must exist. What is in it is checked by `loadConfig`.
+ */
+export async function readConfigFile({
+  argv,
+  env,
+  cwd,
+}: Omit<ConfigSources, 'file'>): Promise<ConfigFile | undefined> {
+  const { values } = parseFlags(argv);
+  const named = values.config ?? (env.MOONCG_CONFIG || undefined);
+  const path = resolve(cwd, named ?? CONFIG_FILE);
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (error) {
+    if (named === undefined && (error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new Error(
+      `The configuration file ${path} could not be read: ${(error as Error).message}`,
+    );
+  }
+  try {
+    return { values: JSON.parse(text), dir: dirname(path), path };
+  } catch (error) {
+    throw new Error(
+      `The configuration file ${path} is not valid JSON: ${(error as Error).message}`,
+    );
+  }
+}
+
+/** What a configuration file may set. */
+interface FileValues {
+  readonly port?: string;
+  readonly host?: string;
+  readonly dataDir?: string;
+  readonly bundlesDir?: string;
+  readonly allowedOrigins?: readonly string[];
+  readonly watch?: boolean;
+}
+
+/** Checks the content of a configuration file. Every complaint names the file. */
+function fileValues(file: ConfigFile | undefined): FileValues {
+  if (file === undefined) return {};
+  const wrong = (problem: string) =>
+    new Error(`Invalid configuration file ${file.path}: ${problem}`);
+  const { values } = file;
+  if (!isPlainObject(values)) throw wrong('expected a JSON object');
+  const known = ['$schema', 'port', 'host', 'dataDir', 'bundlesDir', 'allowedOrigins', 'watch'];
+  for (const key of Object.keys(values)) {
+    if (key === 'dev') {
+      throw wrong(
+        '"dev" cannot be set in a file: dev mode signs in without a password, so it is only started on purpose, with "mooncg dev" or --dev',
+      );
+    }
+    if (!known.includes(key))
+      throw wrong(`unknown setting "${key}" (known: ${known.slice(1).join(', ')})`);
+  }
+  const path = (key: 'dataDir' | 'bundlesDir') => {
+    const value = values[key];
+    if (value === undefined) return undefined;
+    if (typeof value !== 'string' || value === '') throw wrong(`"${key}" must be a path`);
+    return resolve(file.dir, value);
+  };
+  const { port, host, allowedOrigins, watch } = values;
+  if (
+    port !== undefined &&
+    (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65535)
+  ) {
+    throw wrong('"port" must be a whole number from 0 to 65535');
+  }
+  if (host !== undefined && (typeof host !== 'string' || host === '')) {
+    throw wrong('"host" must be a host name or an address');
+  }
+  if (
+    allowedOrigins !== undefined &&
+    (!Array.isArray(allowedOrigins) || !allowedOrigins.every((item) => typeof item === 'string'))
+  ) {
+    throw wrong('"allowedOrigins" must be a list of origins such as "http://localhost:5173"');
+  }
+  for (const origin of (allowedOrigins as string[] | undefined) ?? []) {
+    if (!URL.canParse(origin) || new URL(origin).origin === 'null') {
+      throw wrong(
+        `"allowedOrigins" holds "${origin}", which is no allowed origin such as http://host:port`,
+      );
+    }
+  }
+  if (watch !== undefined && typeof watch !== 'boolean') {
+    throw wrong('"watch" must be true or false');
+  }
+  const dataDir = path('dataDir');
+  const bundlesDir = path('bundlesDir');
+  return {
+    ...(port === undefined ? {} : { port: String(port) }),
+    ...(host === undefined ? {} : { host }),
+    ...(dataDir === undefined ? {} : { dataDir }),
+    ...(bundlesDir === undefined ? {} : { bundlesDir }),
+    ...(allowedOrigins === undefined ? {} : { allowedOrigins: allowedOrigins as string[] }),
+    ...(watch === undefined ? {} : { watch }),
+  };
 }
 
 /**
- * Builds the configuration. Each flag (`--port`, `--host`, `--bundles-dir`, `--data-dir`,
+ * Builds the configuration from four places, the earlier one winning: command line flags,
+ * environment variables, the configuration file (`port`, `host`, `dataDir`, `bundlesDir`,
+ * `allowedOrigins`, `watch`; see `readConfigFile`) and the defaults. `--dev` turns dev mode
+ * on and exists as a flag only; `--watch` (`MOONCG_WATCH`) turns on the watcher alone, and
+ * `--no-watch` (`MOONCG_WATCH=0`) turns it off whatever the later places say.
+ *
+ * Each flag (`--port`, `--host`, `--bundles-dir`, `--data-dir`,
  * `--extension-memory-mb`, `--extension-start-timeout-ms`, `--extension-heartbeat-timeout-ms`,
  * `--max-body-bytes`, `--asset-max-file-bytes`, `--asset-quota-bytes`, `--asset-max-files`,
  * `--bundle-max-archive-bytes`, `--bundle-max-unpacked-bytes`, `--bundle-max-files`,
  * `--bundle-backups-kept`, `--bundle-install-timeout-ms`, `--bundle-npm-registry`, repeatable `--allowed-origin`, and the switches `--secure-cookies` and
  * `--trust-proxy`) wins over its environment variable: the flag in capitals with `MOONCG_` in
  * front and underscores for dashes, such as `MOONCG_DATA_DIR`, and `MOONCG_ALLOWED_ORIGINS` as
- * a comma-separated list. A switch is on in the environment as `1` or `true`. That wins over
- * the default.
+ * a comma-separated list. A switch is on in the environment as `1` or `true`, and can be
+ * turned off on the command line with `--no-` in front. That wins over the default.
  */
-export function loadConfig({ argv, env, cwd }: ConfigSources): ServerConfig {
-  const { values } = parseArgs({
-    args: [...argv],
-    options: {
-      port: { type: 'string' },
-      host: { type: 'string' },
-      'bundles-dir': { type: 'string' },
-      'data-dir': { type: 'string' },
-      'extension-memory-mb': { type: 'string' },
-      'extension-start-timeout-ms': { type: 'string' },
-      'extension-heartbeat-timeout-ms': { type: 'string' },
-      'max-body-bytes': { type: 'string' },
-      'asset-max-file-bytes': { type: 'string' },
-      'asset-quota-bytes': { type: 'string' },
-      'asset-max-files': { type: 'string' },
-      'bundle-max-archive-bytes': { type: 'string' },
-      'bundle-max-unpacked-bytes': { type: 'string' },
-      'bundle-max-files': { type: 'string' },
-      'bundle-backups-kept': { type: 'string' },
-      'bundle-install-timeout-ms': { type: 'string' },
-      'bundle-npm-registry': { type: 'string' },
-      'allowed-origin': { type: 'string', multiple: true },
-      'secure-cookies': { type: 'boolean' },
-      'trust-proxy': { type: 'boolean' },
-    },
-  });
+export function loadConfig({ argv, env, cwd, file }: ConfigSources): ServerConfig {
+  const { values } = parseFlags(argv);
+  const fromFile = fileValues(file);
   const on = (value: string | undefined) => value === '1' || value === 'true';
-  const origins = values['allowed-origin'] ?? env.MOONCG_ALLOWED_ORIGINS?.split(',') ?? [];
+  const origins =
+    values['allowed-origin'] ??
+    env.MOONCG_ALLOWED_ORIGINS?.split(',') ??
+    fromFile.allowedOrigins ??
+    [];
+  // Loopback unless asked otherwise: `--host 0.0.0.0` opens the server to the network.
+  const host = values.host ?? env.MOONCG_HOST ?? fromFile.host ?? '127.0.0.1';
+  const trustProxy = values['trust-proxy'] ?? on(env.MOONCG_TRUST_PROXY);
+  // A flag only, on purpose. See `ServerConfig.dev`.
+  const dev = values.dev === true;
+  const allowedOrigins = origins.map((origin) => parseOrigin(origin.trim()));
+  const problem = devModeProblem({ dev, host, trustProxy, allowedOrigins });
+  if (problem !== undefined) throw new Error(problem);
+  // A variable that is set says so either way: `MOONCG_WATCH=0` turns off what the file
+  // turns on. One that is empty is not set.
+  const watchFromEnv = env.MOONCG_WATCH ? on(env.MOONCG_WATCH) : undefined;
   return {
-    port: parsePort(values.port ?? env.MOONCG_PORT ?? '9090'),
-    // Loopback unless asked otherwise: `--host 0.0.0.0` opens the server to the network.
-    host: values.host ?? env.MOONCG_HOST ?? '127.0.0.1',
-    bundlesDir: resolve(cwd, values['bundles-dir'] ?? env.MOONCG_BUNDLES_DIR ?? 'bundles'),
-    allowedOrigins: origins.map((origin) => parseOrigin(origin.trim())),
-    dataDir: resolve(cwd, values['data-dir'] ?? env.MOONCG_DATA_DIR ?? 'data'),
+    dev,
+    watch: dev || (values.watch ?? watchFromEnv ?? fromFile.watch ?? false),
+    port: parsePort(values.port ?? env.MOONCG_PORT ?? fromFile.port ?? '9090'),
+    host,
+    bundlesDir: resolve(
+      cwd,
+      values['bundles-dir'] ?? env.MOONCG_BUNDLES_DIR ?? fromFile.bundlesDir ?? 'bundles',
+    ),
+    allowedOrigins,
+    dataDir: resolve(cwd, values['data-dir'] ?? env.MOONCG_DATA_DIR ?? fromFile.dataDir ?? 'data'),
     extensionMemoryMb: parsePositive(
       'extension memory',
       values['extension-memory-mb'] ?? env.MOONCG_EXTENSION_MEMORY_MB ?? '256',
@@ -190,8 +361,35 @@ export function loadConfig({ argv, env, cwd }: ConfigSources): ServerConfig {
       values['bundle-npm-registry'] ?? env.MOONCG_BUNDLE_NPM_REGISTRY,
     ),
     secureCookies: values['secure-cookies'] ?? on(env.MOONCG_SECURE_COOKIES),
-    trustProxy: values['trust-proxy'] ?? on(env.MOONCG_TRUST_PROXY),
+    trustProxy,
   };
+}
+
+/**
+ * Why a configuration may not run in dev mode, or `undefined` if it may, or does not ask
+ * to. Dev mode signs in whoever connects from this machine, so it must not listen beyond
+ * it, must not sit behind a proxy, through which everyone would come from this machine, and
+ * must not let the pages of a site elsewhere talk to it: an allowed origin may open the
+ * socket and send requests, and in dev mode nothing would ask it for credentials.
+ */
+export function devModeProblem(
+  config: Pick<ServerConfig, 'dev' | 'host' | 'trustProxy' | 'allowedOrigins'>,
+): string | undefined {
+  if (!config.dev) return undefined;
+  if (!isLoopbackHost(config.host)) {
+    return `Dev mode signs in everyone on this machine as an administrator, so it listens on loopback only: the host must be localhost, 127.0.0.1 or ::1, not "${config.host}"`;
+  }
+  if (config.trustProxy) {
+    return 'Dev mode cannot run behind a proxy (--trust-proxy): every request would seem to come from this machine';
+  }
+  const foreign = config.allowedOrigins.filter((origin) => !isLoopbackOrigin(origin));
+  if (foreign.length > 0) {
+    return (
+      `Dev mode signs in without a password, so every allowed origin must be on this machine (loopback: localhost, 127.0.0.1 or [::1]), not ${foreign.map((origin) => `"${origin}"`).join(', ')}. ` +
+      'Remove it from --allowed-origin, MOONCG_ALLOWED_ORIGINS and "allowedOrigins" of the configuration file, or start without dev mode.'
+    );
+  }
+  return undefined;
 }
 
 function parsePort(text: string): number {

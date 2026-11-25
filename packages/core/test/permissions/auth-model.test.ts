@@ -170,7 +170,7 @@ describe('a principal limited to its own grants (an API token)', () => {
 
 describe('the protocol', () => {
   it('has a version', () => {
-    expect(PROTOCOL_VERSION).toBe(5);
+    expect(PROTOCOL_VERSION).toBe(6);
   });
 
   it('carries the kind of principal in a sender', () => {

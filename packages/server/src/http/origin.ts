@@ -1,4 +1,27 @@
 import type { IncomingHttpHeaders } from 'node:http';
+import type { Manifest } from '@mooncg/core';
+
+/**
+ * The origins of the development servers the running bundles name in `dev.url`. In dev mode
+ * a bundle's pages are served from there, so pages of these origins may open a socket, send
+ * requests and be framed by the dashboard. Outside dev mode nobody asks for this list.
+ */
+export function devOrigins(
+  bundles: readonly { readonly state: string; readonly manifest: Manifest | undefined }[],
+): string[] {
+  const origins = bundles.flatMap(({ state, manifest }) =>
+    state === 'running' && manifest?.dev ? [new URL(manifest.dev.url).origin] : [],
+  );
+  return [...new Set(origins)].sort();
+}
+
+/** The address a request for a file of a bundle is sent on to: the same file on `devUrl`. */
+export function devServerUrl(devUrl: string, file: string, query: string | undefined): string {
+  const base = new URL(devUrl);
+  const prefix = base.pathname.endsWith('/') ? base.pathname : `${base.pathname}/`;
+  const path = file.split('/').map(encodeURIComponent).join('/');
+  return `${base.origin}${prefix}${path}${query === undefined ? '' : `?${query}`}`;
+}
 
 /**
  * Whether a request may come from where it says it comes from. A browser page states its

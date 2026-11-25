@@ -81,6 +81,27 @@ describe.each(Object.entries(stores))('the %s auth store', (_name, open) => {
     expect(users.get('u2')).toEqual({ ...user('u2', 'Robert'), disabled: true });
   });
 
+  it('keeps the users dev mode created apart: they count neither as users nor as admins', async () => {
+    const { users } = await open();
+    users.create({ ...user('d1', 'dev'), devMode: true });
+    users.addRole('d1', 'admin');
+
+    expect(users.count()).toBe(0);
+    expect(users.admins()).toBe(0);
+    expect(users.devMode()).toEqual([{ ...user('d1', 'dev'), devMode: true }]);
+    expect(users.get('d1')).toEqual({ ...user('d1', 'dev'), devMode: true });
+    expect(users.list().map((entry) => entry.name)).toEqual(['dev']);
+
+    users.create(user('u1', 'ada'));
+    users.addRole('u1', 'admin');
+    expect(users.count()).toBe(1);
+    expect(users.admins()).toBe(1);
+    expect(users.get('u1')).toEqual(user('u1', 'ada'));
+    // Nothing takes the mark away.
+    users.update('d1', { name: 'dominik', disabled: false });
+    expect(users.devMode().map((entry) => entry.name)).toEqual(['dominik']);
+  });
+
   it('assigns roles and counts the enabled admins', async () => {
     const { users } = await open();
     users.create(user('u1', 'ada'));
@@ -240,6 +261,26 @@ describe('the auth migration', () => {
       'operator',
       'viewer',
     ]);
+  });
+
+  it('marks no user of an earlier version as created by dev mode', async () => {
+    const dir = await temporaryDir();
+    const db = await openSqliteDb(join(dir, DATABASE_FILE));
+    // The version before users could be marked.
+    migrate(db, MIGRATIONS.slice(0, 5));
+    db.run('INSERT INTO users (id, name, disabled, created_at) VALUES (?, ?, 0, 1)', 'u1', 'dev');
+    db.close();
+
+    const storage = await openSqliteStorage(dir);
+    cleanup.push(() => storage.close());
+    expect(storage.auth.users.byName('dev')).toEqual({
+      id: 'u1',
+      name: 'dev',
+      disabled: false,
+      createdAt: 1,
+    });
+    expect(storage.auth.users.count()).toBe(1);
+    expect(storage.auth.users.devMode()).toEqual([]);
   });
 
   it('keeps users across a restart', async () => {

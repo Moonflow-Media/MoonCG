@@ -8,6 +8,7 @@ import { grouped, type NavItem, navigation } from './nav.js';
 import { useBundles } from './stores/bundles.js';
 import { useInstances } from './stores/instances.js';
 import { useLogs } from './stores/logs.js';
+import { useOnAir } from './stores/onAir.js';
 import { useSession } from './stores/session.js';
 import { DialogHost } from './views/DialogHost.js';
 
@@ -25,6 +26,7 @@ export const App = defineComponent({
     const bundles = useBundles();
     const instances = useInstances();
     const logs = useLogs();
+    const onAir = useOnAir();
     const problem = ref('');
     const connection = ref<ConnectionStatus>('reconnecting');
     /** What a screen reader is told: a change of the connection, not where it stood at first. */
@@ -45,6 +47,23 @@ export const App = defineComponent({
     });
     // For the count of graphics that are open.
     const stopInstances = instances.follow();
+    const stopOnAir = onAir.follow();
+    /** Switches On Air. Ending it applies what waited, so that is asked about first. */
+    const switchOnAir = () => {
+      const waiting = bundles.list
+        .filter((bundle) => bundle.pendingChanges?.length)
+        .map((bundle) => bundle.name);
+      if (
+        onAir.onAir &&
+        waiting.length > 0 &&
+        !globalThis.confirm(
+          `End On Air? The changes that waited are applied now: ${waiting.join(', ')}.`,
+        )
+      ) {
+        return;
+      }
+      void onAir.set(!onAir.onAir);
+    };
     // The log is followed for its count, by whoever may read it. Nobody else even asks.
     watch(
       () => session.can('system:logs.view'),
@@ -56,6 +75,8 @@ export const App = defineComponent({
     );
 
     onMounted(async () => {
+      // Where the switch stands is its own question: a server without it is no problem.
+      void onAir.refresh();
       try {
         await Promise.all([session.load(), bundles.refresh()]);
       } catch (error) {
@@ -73,6 +94,7 @@ export const App = defineComponent({
       stop();
       stopStatus();
       stopInstances();
+      stopOnAir();
       stopLogs();
     });
 
@@ -131,6 +153,39 @@ export const App = defineComponent({
             ),
           ),
           h('div', { class: 'sidebar-foot' }, [
+            onAir.known
+              ? h(
+                  'div',
+                  {
+                    class: ['on-air', { on: onAir.onAir }],
+                    'data-on-air': String(onAir.onAir),
+                    title: onAir.onAir
+                      ? `On Air${onAir.by ? `, switched on by ${onAir.by}` : ''}: updates, removals, disabling and reloads are blocked unless you confirm them one by one, and changed files wait.`
+                      : 'Off air: bundles can be changed freely.',
+                  },
+                  [
+                    h('span', { class: 'on-air-state', role: 'status' }, [
+                      h('span', { class: 'dot' }),
+                      onAir.onAir ? 'On Air' : 'Off air',
+                    ]),
+                    // No button the server would refuse.
+                    onAir.canSwitch
+                      ? h(
+                          'button',
+                          {
+                            type: 'button',
+                            id: 'on-air-switch',
+                            class: onAir.onAir ? 'small ghost' : 'small danger',
+                            'aria-pressed': String(onAir.onAir),
+                            'aria-label': onAir.onAir ? 'End On Air' : 'Go on air',
+                            onClick: switchOnAir,
+                          },
+                          onAir.onAir ? 'End' : 'Go on air',
+                        )
+                      : null,
+                  ],
+                )
+              : null,
             h('div', { class: 'conn', 'data-status': connection.value }, [
               h('span', { class: 'dot' }),
               CONNECTION[connection.value],
@@ -159,6 +214,7 @@ export const App = defineComponent({
         ]),
         h('div', { class: 'content' }, [
           problem.value ? h('p', { class: 'problem', role: 'alert' }, problem.value) : null,
+          onAir.problem ? h('p', { class: 'problem', role: 'alert' }, onAir.problem) : null,
           h('main', h(RouterView)),
         ]),
         h(DialogHost),

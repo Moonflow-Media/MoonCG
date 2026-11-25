@@ -65,7 +65,12 @@ export async function userCommand(
     return withAccounts(args, deps, ({ auth }) => {
       for (const user of auth.listUsers()) {
         const roles = user.roles.join(',') || '-';
-        deps.log([user.name, roles, ...(user.disabled ? ['disabled'] : [])].join('  '));
+        const notes = [
+          ...(user.disabled ? ['disabled'] : []),
+          // The user "mooncg dev" acts as. It is nobody when the server runs without it.
+          ...(user.devMode ? ['dev mode only (cannot sign in; inert outside "mooncg dev")'] : []),
+        ];
+        deps.log([user.name, roles, ...notes].join('  '));
       }
     });
   }

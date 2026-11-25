@@ -512,7 +512,12 @@ export class BundleInstaller {
    */
   commit(
     id: string,
-    options: { readonly scripts?: boolean | undefined; readonly by: string },
+    options: {
+      readonly scripts?: boolean | undefined;
+      readonly by: string;
+      /** Put an update in place although the installation is on air. */
+      readonly forceOnAir?: boolean | undefined;
+    },
   ): InstallJob {
     const entry = STAGING_ID.test(id) ? this.#entries.get(id) : undefined;
     if (!entry) throw new MoonCGError('not_found', 'There is no staged bundle with this id');
@@ -540,7 +545,7 @@ export class BundleInstaller {
         };
         return target === undefined
           ? await this.#install(entry, record, used, step)
-          : await this.#update(entry, record, used, step);
+          : await this.#update(entry, record, used, step, options.forceOnAir === true);
       } finally {
         if (used.up) await this.#drop(entry);
         else {
@@ -593,12 +598,15 @@ export class BundleInstaller {
    * Removes a bundle: stops it and moves its folder to the backups, or deletes it with
    * `deleteFiles` and where no backups are kept. What the bundle stored stays unless
    * `purgeData` is given. Throws at once for a bundle that is not there or that enabled
-   * bundles need, unless `force` is given.
+   * bundles need, unless `force` is given. `forceOnAir` is the other override, for a
+   * removal while the installation is on air; neither stands in for the other.
    */
   remove(
     name: string,
     options: {
       readonly force?: boolean | undefined;
+      /** Remove although the installation is on air. */
+      readonly forceOnAir?: boolean | undefined;
       readonly deleteFiles?: boolean | undefined;
       readonly purgeData?: boolean | undefined;
       readonly by: string;
@@ -629,7 +637,7 @@ export class BundleInstaller {
       const version = manager.get(name)?.manifest?.version ?? 'unknown';
       const live = join(bundlesDir, name);
       step('disable');
-      await manager.remove(name, { force }, async () => {
+      await manager.remove(name, { force, forceOnAir: options.forceOnAir }, async () => {
         step('erase');
         if (deleteFiles) {
           // Out of the bundles folder in one move, so that it is gone whole or not at all.
@@ -701,7 +709,12 @@ export class BundleInstaller {
    * the backups in turn, and comes back if the restored one does not start; a bundle that
    * was removed is installed again. Rejects for a backup that is not there.
    */
-  async restore(name: string, backup: string, by: string): Promise<InstallJob> {
+  async restore(
+    name: string,
+    backup: string,
+    by: string,
+    options: { readonly forceOnAir?: boolean | undefined } = {},
+  ): Promise<InstallJob> {
     const { manager, bundlesDir } = this.#options;
     const missing = () => new MoonCGError('not_found', `Bundle "${name}" has no such backup`);
     if (!BUNDLE_NAME_PATTERN.test(name) || parseBackupId(backup) === undefined) throw missing();
@@ -747,29 +760,33 @@ export class BundleInstaller {
       let aside: string | undefined;
       let moved = false;
       step('disable');
-      const result = await manager.replace(name, {
-        apply: async () => {
-          step('backup');
-          await this.#backup(name, before, 'restore', source, async (folder) => {
-            aside = folder;
-            await this.#move(live, join(folder, 'bundle'));
-          });
-          step('place');
-          await this.#move(kept, live);
-          moved = true;
-          step('enable');
+      const result = await manager.replace(
+        name,
+        {
+          apply: async () => {
+            step('backup');
+            await this.#backup(name, before, 'restore', source, async (folder) => {
+              aside = folder;
+              await this.#move(live, join(folder, 'bundle'));
+            });
+            step('place');
+            await this.#move(kept, live);
+            moved = true;
+            step('enable');
+          },
+          revert: async () => {
+            step('rollback');
+            if (aside === undefined) return;
+            if (await exists(join(aside, 'bundle'))) {
+              // What was restored and does not run goes back to being a backup.
+              if (moved && (await exists(live))) await this.#move(live, kept);
+              await this.#move(join(aside, 'bundle'), live);
+            }
+            await removeDir(aside);
+          },
         },
-        revert: async () => {
-          step('rollback');
-          if (aside === undefined) return;
-          if (await exists(join(aside, 'bundle'))) {
-            // What was restored and does not run goes back to being a backup.
-            if (moved && (await exists(live))) await this.#move(live, kept);
-            await this.#move(join(aside, 'bundle'), live);
-          }
-          await removeDir(aside);
-        },
-      });
+        options,
+      );
       if (result.outcome === 'replaced') {
         await remember();
         await this.#prune(name);
@@ -1092,6 +1109,7 @@ export class BundleInstaller {
     record: SourceRecord,
     used: { up: boolean },
     step: Progress['step'],
+    forceOnAir = false,
   ): Promise<Outcome> {
     const { manager, bundlesDir } = this.#options;
     const { name, version } = entry.summary;
@@ -1100,30 +1118,35 @@ export class BundleInstaller {
     const source = await this.#sources.get(name);
     let backup: string | undefined;
     step('disable');
-    const result = await manager.replace(name, {
-      apply: async () => {
-        step('backup');
-        // Also where no backups are kept: this one is what a rollback goes back to.
-        await this.#backup(name, before, 'update', source, async (folder) => {
-          backup = folder;
-          await this.#move(live, join(folder, 'bundle'));
-        });
-        step('place');
-        await this.#move(entry.content, live);
-        used.up = true;
-        step('enable');
+    const result = await manager.replace(
+      name,
+      {
+        apply: async () => {
+          step('backup');
+          // Also where no backups are kept: this one is what a rollback goes back to.
+          await this.#backup(name, before, 'update', source, async (folder) => {
+            backup = folder;
+            await this.#move(live, join(folder, 'bundle'));
+          });
+          step('place');
+          await this.#move(entry.content, live);
+          used.up = true;
+          step('enable');
+        },
+        revert: async () => {
+          step('rollback');
+          if (backup === undefined) return;
+          if (await exists(join(backup, 'bundle'))) {
+            // The version that did not make it leaves with the rest of its staging folder.
+            if (used.up && (await exists(live)))
+              await this.#move(live, join(entry.dir, 'rejected'));
+            await this.#move(join(backup, 'bundle'), live);
+          }
+          await removeDir(backup);
+        },
       },
-      revert: async () => {
-        step('rollback');
-        if (backup === undefined) return;
-        if (await exists(join(backup, 'bundle'))) {
-          // The version that did not make it leaves with the rest of its staging folder.
-          if (used.up && (await exists(live))) await this.#move(live, join(entry.dir, 'rejected'));
-          await this.#move(join(backup, 'bundle'), live);
-        }
-        await removeDir(backup);
-      },
-    });
+      { forceOnAir },
+    );
     if (result.outcome === 'replaced') {
       await this.#sources.set(name, record);
       await this.#prune(name);

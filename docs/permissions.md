@@ -26,13 +26,19 @@ INFO  No user exists yet. Create the first administrator at http://127.0.0.1:909
 
 Open it, choose a user name and a password, and sign in. The code is random, lives in the
 server's memory only and changes with every start. Once any user exists, `/setup` and
-`POST /api/v1/setup` answer 404, and no other route creates a user without signing in.
+`POST /api/v1/setup` answer 404, and no other route creates a user without signing in. The
+user that [dev mode](#dev-mode) creates for itself does not count as one: an installation
+that was only ever used in dev mode is set up like a fresh one. In dev mode itself there is
+no setup.
 
 You can also create the first user from the command line, before or while the server runs:
 
 ```sh
 mooncg user create ada --admin --data-dir data
 ```
+
+There is no open mode: nothing is served to someone who is not signed in. The one exception is
+made on purpose and for one machine only, [dev mode](#dev-mode).
 
 ## The model
 
@@ -111,12 +117,15 @@ An installed bundle is trusted code: its extension runs on the server, with the 
 server, limited only by its capabilities. Whoever may install a bundle may therefore run code
 on the machine. That is the boundary, and one permission guards all of it:
 
-| What                                                             | Needs                   |
-| ---------------------------------------------------------------- | ----------------------- |
-| Fetching a bundle into staging, committing or discarding it      | `system:bundles.manage` |
-| Updating and removing a bundle, listing and restoring backups    | `system:bundles.manage` |
-| Reading jobs and staged bundles, the replicant `system:installs` | `system:bundles.manage` |
-| Trusting a bundle to run code while it is installed, per bundle  | `system:bundles.manage` |
+| What                                                                       | Needs                                                                      |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Fetching a bundle into staging, committing or discarding it                | `system:bundles.manage`                                                    |
+| Updating and removing a bundle, listing and restoring backups              | `system:bundles.manage`                                                    |
+| Reading jobs and staged bundles, the replicant `system:installs`           | `system:bundles.manage`                                                    |
+| Trusting a bundle to run code while it is installed, per bundle            | `system:bundles.manage`                                                    |
+| Switching On Air (`PUT /api/v1/on-air`)                                    | `system:bundles.manage`                                                    |
+| Making a change although the installation is on air (`"forceOnAir": true`) | `system:bundles.manage`, as the change itself                              |
+| Reading where On Air stands (`GET /api/v1/on-air`, `system:onAir`)         | `system:dashboard.view`; who switched it only with `system:bundles.manage` |
 
 Without it these requests answer 403 (401 when not signed in) before anything is looked at,
 so they do not tell whether a bundle, a job or a backup exists. The server log records who did
@@ -134,6 +143,13 @@ brings server code, whether installing it runs code (install scripts, its own `.
 dependencies from elsewhere than the registry, all refused unless allowed for that bundle), and
 which role grants it proposes. Git and npm run with the configuration of the machine switched
 off wherever that could run a program.
+
+**On Air.** While the installation is on air, updating, removing, disabling and reloading a
+bundle are refused unless the request overrides the lock (`"forceOnAir": true`). Overriding is
+not a right of its own: whoever may make the change may override the lock for it, and nobody
+else can. The lock is a guard against mistakes during a show,
+not against a holder of `system:bundles.manage`, who could switch it off just as well. See
+[development.md](development.md#the-on-air-lock).
 
 Grants that name a bundle stay when the bundle is removed, and apply again to a bundle of the
 same name. `defaultRoles` are turned into grants the first time a bundle name is seen; an
@@ -293,8 +309,14 @@ All of it is JSON over HTTP. Errors are `{ "error": { "code", "message" } }`.
 
 No answer ever contains a password or a hash. Status codes: 400 for unusable input, 401 when
 not signed in, 403 without the permission or beyond what you hold, 404 for something that does
-not exist, 409 for a taken name, a built-in role, or the last admin, 413 for a body over
-16 KiB, 429 for a throttled login or password change.
+not exist, 409 for a taken name, a built-in role, the last admin, or a change to the user of
+dev mode, 413 for a body over 16 KiB, 429 for a throttled login or password change.
+
+The user that [dev mode](#dev-mode) created is listed with `"devMode": true`. It can be
+deleted, and nothing else: renaming or disabling it, setting its password and assigning or
+removing a role answer 409, and `mooncg user passwd` and `mooncg token create --user` refuse
+it. A token for it can only be made in the dashboard while dev mode runs, and lasts until the
+next start without dev mode.
 
 Both password routes take `revokeTokens` (true or false). It deletes the API tokens the user
 created. An admin's reset (`PUT /api/v1/users/:id/password`) and `mooncg user passwd` revoke
@@ -370,6 +392,8 @@ A page of another site must not be able to act through your browser.
    needs the header, and so does the upload of a bundle's ZIP archive.
 3. Requests with a bearer token are exempt from the second rule: a browser never attaches a
    token by itself.
+4. The sign-in of [dev mode](#dev-mode) counts as a cookie for the second rule: it needs no
+   credentials at all, so a request that changes something must still prove it was meant.
 
 ## Listening beyond this machine
 
@@ -392,6 +416,42 @@ pass `Host` and `Origin` through unchanged, or add its public origin with `--all
 The origin check compares scheme, host and port. The server takes its own scheme for `http`
 unless a trusted proxy says `X-Forwarded-Proto: https`, so behind an HTTPS proxy without
 `--trust-proxy` a page's `https://…` origin does not match and its requests are refused.
+
+## Dev mode
+
+`mooncg dev` (the server's `--dev`) is for writing bundles on your own machine. It signs in
+every request from this machine that brings no credentials as an administrator, **without a
+password**. That is the only way past signing in that MoonCG has, and it is fenced in:
+
+| Rule                                                  | Why                                                                             |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Only the flag `--dev` turns it on                     | No environment variable or file can leave it on by accident                     |
+| The host must be `localhost`, `127.x.x.x` or `::1`    | Otherwise the server refuses to start. So it does with `--trust-proxy`          |
+| Every allowed origin must be on this machine          | Otherwise the server refuses to start: allowed is not to mean signed in         |
+| The connection must come from this machine            | The address of the socket itself; no header is believed about it                |
+| No `Forwarded`, `Via`, `X-Forwarded-*` or `X-Real-IP` | Behind a proxy on this machine everyone would come from loopback                |
+| The `Host` header must name this machine              | A site whose name was pointed at `127.0.0.1` (DNS rebinding) sends its own name |
+| No `Origin`, or one on this machine                   | A page of another site in a browser here connects from loopback too             |
+| No credentials at all in the request                  | A session that ended or a token that was revoked is refused, not replaced       |
+| The origin and forgery checks apply as ever           | A page of another site still cannot change anything or open a socket            |
+| A warning in the log at every start                   | Nobody runs it without being told                                               |
+
+It never acts as a real person. It acts as a user of its own, `dev`, which it creates with the
+role `admin`, without a password and marked as created by dev mode. Whoever brings a session
+or a token acts as themselves; whoever brings one that is not accepted gets `401`.
+
+Outside dev mode that user is inert: it cannot sign in, its sessions and tokens are deleted at
+the next start without `--dev` and not accepted, no token can be created for it, and it counts
+neither as a user nor as an administrator, so an installation that was only ever used in dev
+mode still gets its [setup](#first-start). It cannot be renamed, disabled, given a password or
+other roles, only deleted, and shows as `dev mode only` on the Users page and in
+`mooncg user list`.
+
+What it cannot protect against is the machine itself: every program and every person that can
+connect to loopback there is an administrator while it runs. That includes whatever a reverse
+proxy or a tunnel on this machine passes on (nginx, ngrok, a forwarded port): everyone who
+reaches it is an administrator, and MoonCG cannot tell. `mooncg start` has none of this.
+[development.md](development.md#dev-mode) has the rest, with `dev.url`.
 
 ## Response headers
 

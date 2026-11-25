@@ -24,7 +24,9 @@ import { AssetError, type AssetStore } from '../assets/store.js';
 import type { Auth } from '../auth/auth.js';
 import { redactSecrets } from '../auth/secrets.js';
 import type { BundleRecord } from '../bundles/bundles.js';
+import type { OnAirOverride } from '../bundles/manager.js';
 import type { BundleConfigs } from '../config/bundle-config.js';
+import type { OnAirLock } from '../dev/on-air.js';
 import type { GraphicInstances } from '../graphics/instances.js';
 import type { BundleInstaller } from '../install/installer.js';
 import type { FetchableSource } from '../install/sources.js';
@@ -32,15 +34,19 @@ import type { LogBuffer } from '../kernel/logger.js';
 import { jsonBody, registerAuthRoutes } from './auth-routes.js';
 import {
   createIdentify,
+  credentialsOf,
+  devLoginAllowed,
   type Identify,
   type RequestIdentity,
   type ResolvePrincipal,
+  SESSION_COOKIE,
   secureCookies,
   sessionCookie,
   TOKEN_COOKIE,
+  TOKEN_PARAMETER,
   viaHttps,
 } from './identity.js';
-import { originAllowed } from './origin.js';
+import { devOrigins, devServerUrl, originAllowed } from './origin.js';
 
 export { type ResolvePrincipal, resolveLocalAdmin } from './identity.js';
 
@@ -84,13 +90,16 @@ export const ASSET_CSP = [
   "frame-ancestors 'self'",
 ].join('; ');
 
-/** Changes a bundle's state. Each rejects with a `MoonCGError`. */
+/**
+ * Changes a bundle's state. Each rejects with a `MoonCGError`. `forceOnAir` lets a change
+ * through although the installation is on air.
+ */
 export interface BundleLifecycle {
   enable(name: string): Promise<BundleRecord>;
-  disable(name: string): Promise<BundleRecord>;
-  reload(name: string): Promise<BundleRecord>;
+  disable(name: string, options?: OnAirOverride): Promise<BundleRecord>;
+  reload(name: string, options?: OnAirOverride): Promise<BundleRecord>;
   /** Starts the extension of a running bundle again, with the configuration as it is now. */
-  restartExtension?(name: string): Promise<BundleRecord>;
+  restartExtension?(name: string, options?: OnAirOverride): Promise<BundleRecord>;
 }
 
 /** What the API needs of the installer. */
@@ -152,6 +161,16 @@ export interface AppOptions {
   readonly secureCookies?: boolean | undefined;
   /** Believes `X-Forwarded-Proto` and `X-Forwarded-For`. Only behind a reverse proxy. */
   readonly trustProxy?: boolean | undefined;
+  /**
+   * Dev mode: the `dev.url` of a manifest is honoured. Requests for that bundle's pages are
+   * sent on to its development server, whose origin may then be framed by the dashboard and
+   * send requests. Nothing of that exists without it.
+   */
+  readonly dev?: boolean | undefined;
+  /** Dev mode: who a request from this machine without credentials acts as. */
+  readonly devLogin?: (() => RequestIdentity) | undefined;
+  /** The "On Air" lock. Without it the API for it answers 404. */
+  readonly onAir?: Pick<OnAirLock, 'state' | 'set' | 'reason'> | undefined;
 }
 
 const SERVED_AREAS = new Set(['dashboard', 'graphics']);
@@ -209,8 +228,6 @@ const CONNECTION_HEADERS = new Set([
 
 /** Request headers a bundle route never sees: they are the caller's credentials. */
 const CREDENTIAL_HEADERS = new Set(['authorization', 'cookie']);
-/** The query parameter an API token may arrive in. A bundle route never sees it either. */
-const TOKEN_PARAMETER = 'token';
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
@@ -250,8 +267,32 @@ const STATUS: Readonly<Record<ErrorCode, number>> = {
 const publicFile = (name: string) => new URL(`../../public/${name}`, import.meta.url);
 
 /** What the API tells about a bundle's state. The same shape as in `system:bundles`. */
-function describeBundle({ name, state, manifest, errors, lastError }: BundleRecord) {
-  return { name, state, title: manifest?.title, version: manifest?.version, errors, lastError };
+function describeBundle(record: BundleRecord) {
+  const { name, state, manifest, errors, lastError, reloadErrors, pendingChanges } = record;
+  return {
+    name,
+    state,
+    title: manifest?.title,
+    version: manifest?.version,
+    errors,
+    lastError,
+    reloadErrors,
+    pendingChanges,
+  };
+}
+
+/**
+ * Whether a request asks to go ahead although the installation is on air: with a plain
+ * `true` as `forceOnAir` in its JSON body, and with nothing else. `force` is another word,
+ * for removing a bundle that others still need, and overrides no lock.
+ */
+function overridesOnAir(request: FastifyRequest): boolean {
+  try {
+    return jsonBody(request).forceOnAir === true;
+  } catch {
+    // No body, or none that is JSON: nothing was overridden.
+    return false;
+  }
 }
 
 /** What the routes for accounts need from the application they are part of. */
@@ -279,7 +320,25 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   const running = (name: string) =>
     bundles().find((candidate) => candidate.name === name && candidate.state === 'running');
   const identify: Identify = createIdentify(options);
-  const { dashboardDir } = options;
+  const { dashboardDir, onAir } = options;
+  /** The origins besides the server's own that pages may come from, as of now. */
+  const allowedOrigins = () => {
+    const configured = options.allowedOrigins ?? [];
+    return options.dev ? [...configured, ...devOrigins(bundles())] : configured;
+  };
+  /**
+   * Refuses with the reason the installation gives for being locked, unless the request
+   * overrides the lock. `note` is added to the reason: what becomes of what was asked for.
+   */
+  const assertNotOnAir = (
+    name: string,
+    operation: 'update' | 'remove',
+    forceOnAir: boolean,
+    note = '',
+  ) => {
+    const reason = forceOnAir ? undefined : onAir?.reason(name, operation);
+    if (reason !== undefined) throw new MoonCGError('conflict', `${reason}${note}`);
+  };
   // No message leaves the server with an API token or a secret of a bundle's configuration
   // in it, whatever put it there.
   const fail = (reply: FastifyReply, status: number, code: string, message: string) => {
@@ -341,11 +400,22 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   };
   const secure = (request: FastifyRequest) => secureCookies(request.headers, options);
   /** One of the server's own pages: never framed, and loading only what this server serves. */
-  const builtIn = (reply: FastifyReply) =>
+  const builtIn = (reply: FastifyReply, policy = BUILT_IN_CSP) =>
     reply
-      .header('content-security-policy', BUILT_IN_CSP)
+      .header('content-security-policy', policy)
       .header('x-frame-options', 'DENY')
       .type(CONTENT_TYPES['.html'] as string);
+  /**
+   * The policy of the dashboard page. In dev mode it may frame the development servers of
+   * the running bundles, where their panels are served from; nothing else is loosened, and
+   * outside dev mode it is the built-in policy to the letter.
+   */
+  const dashboardPolicy = () => {
+    const origins = options.dev ? devOrigins(bundles()) : [];
+    return origins.length === 0
+      ? BUILT_IN_CSP
+      : `${BUILT_IN_CSP}; frame-src 'self' ${origins.join(' ')}`;
+  };
   const sendPage = async (reply: FastifyReply, name: string) => {
     const content = await readFile(publicFile(name), 'utf8');
     return name.endsWith('.html')
@@ -403,13 +473,14 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   app.addHook('onRequest', async (request, reply) => {
     if (request.method === 'GET' || request.method === 'HEAD') return;
     const https = viaHttps(request.headers, options);
-    if (!originAllowed(request.headers, options.allowedOrigins ?? [], https)) {
+    if (!originAllowed(request.headers, allowedOrigins(), https)) {
       return fail(reply, 403, 'forbidden', 'Requests from this origin are not allowed');
     }
     // A browser attaches cookies by itself, so a cookie alone does not prove that the page
-    // meant to send this request. A token in a header is only ever sent on purpose.
+    // meant to send this request. A token in a header is only ever sent on purpose. The
+    // sign-in of dev mode needs no cookie at all, so it is asked the same.
     const { via } = identityOf(request);
-    if (via !== 'session' && via !== 'token-session') return;
+    if (via !== 'session' && via !== 'token-session' && via !== 'dev') return;
     const json = request.headers['content-type']?.toLowerCase().startsWith('application/json');
     if (!json && request.headers[CSRF_HEADER] === undefined) {
       return fail(
@@ -429,6 +500,25 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   // The dashboard is one page that draws all of its routes itself, so each of them answers
   // with that page. The page is not cached: it names the built files, which change.
   const dashboardPage = async (request: FastifyRequest, reply: FastifyReply) => {
+    // Dev mode signs in only a request without credentials. A browser that still holds a
+    // cookie from an earlier start, of a session that has ended since, would be stuck at a
+    // login page nobody has a password for. Such cookies are taken away and the browser is
+    // sent to the same page again, which it then asks for without them. Nothing is signed
+    // in here, and a request that would not get the dev login anyway is left alone.
+    if (auth && options.devLogin && anonymous(request) && devLoginAllowed(request.raw)) {
+      const { session, tokenSession } = credentialsOf(request.headers, secure(request));
+      const only = request.headers.authorization === undefined;
+      if (only && (session !== undefined || tokenSession !== undefined)) {
+        const gone = { secure: secure(request), maxAge: 0 };
+        return reply
+          .header('cache-control', 'no-store')
+          .header('set-cookie', [
+            sessionCookie(SESSION_COOKIE, '', gone),
+            sessionCookie(TOKEN_COOKIE, '', gone),
+          ])
+          .redirect(request.raw.url ?? '/', 302);
+      }
+    }
     // Whoever is not signed in is sent where that can be done.
     if (auth && anonymous(request)) {
       return reply.redirect(auth.setupCode() === undefined ? '/login' : '/setup', 302);
@@ -441,7 +531,7 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     if (page === undefined) {
       return fail(reply, 404, 'not_found', 'The dashboard is not built yet. Run "pnpm build".');
     }
-    return builtIn(reply).header('cache-control', 'no-cache').send(page);
+    return builtIn(reply, dashboardPolicy()).header('cache-control', 'no-cache').send(page);
   };
   for (const path of DASHBOARD_ROUTES) app.get(path, dashboardPage);
 
@@ -560,10 +650,17 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         try {
           const body = jsonBody(request);
           const by = actor(request);
+          // A removal is refused here, before anything is stopped. Two things can stand in
+          // its way, and each has its own word: `forceOnAir` for the lock, `force` for the
+          // bundles that still need this one. An update is only fetched here, which
+          // interrupts nothing; putting it in place is what the lock is asked about.
+          const forceOnAir = body.forceOnAir === true;
+          if (action === 'remove') assertNotOnAir(name, action, forceOnAir);
           const job =
             action === 'remove'
               ? options.installer.remove(name, {
                   force: body.force === true,
+                  forceOnAir,
                   deleteFiles: body.deleteFiles === true,
                   purgeData: body.purgeData === true,
                   by,
@@ -583,12 +680,46 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
       if (!lifecycle || !change || !BUNDLE_NAME_PATTERN.test(name)) return notFound(reply);
       if (!can(request, BUNDLES_MANAGE)) return deny(request, reply, BUNDLES_MANAGE);
       try {
-        return { bundle: describeBundle(await lifecycle[change](name)) };
+        const record = await lifecycle[change](name, { forceOnAir: overridesOnAir(request) });
+        return { bundle: describeBundle(record) };
       } catch (error) {
         return failWith(reply, error);
       }
     },
   );
+
+  // The "On Air" lock: one switch for the whole installation. Whoever sees the dashboard
+  // may know where it stands, since it is why buttons refuse; switching it takes what the
+  // changes it blocks take.
+  const onAirState = (request: FastifyRequest) => {
+    const { onAir: on, since, by } = onAir?.state ?? { onAir: false };
+    const canSwitch = can(request, BUNDLES_MANAGE);
+    return {
+      onAir: on,
+      ...(since === undefined ? {} : { since }),
+      // Who switched it is a user's name: for those who manage the installation.
+      ...(canSwitch && by !== undefined ? { by } : {}),
+      canSwitch,
+    };
+  };
+  app.get('/api/v1/on-air', requireListing, async (request, reply) => {
+    if (!onAir) return notFound(reply);
+    return onAirState(request);
+  });
+  app.put('/api/v1/on-air', async (request, reply) => {
+    if (!can(request, BUNDLES_MANAGE)) return deny(request, reply, BUNDLES_MANAGE);
+    if (!onAir) return notFound(reply);
+    try {
+      const { onAir: wanted } = jsonBody(request);
+      if (typeof wanted !== 'boolean') {
+        throw new MoonCGError('bad_request', '"onAir" must be true or false');
+      }
+      await onAir.set(wanted, actor(request));
+      return onAirState(request);
+    } catch (error) {
+      return failWith(reply, error);
+    }
+  });
 
   // Installing, updating and removing bundles. A bundle is code that runs on the server, so
   // all of it is for whoever may manage bundles and nobody else, and that is asked first:
@@ -619,6 +750,8 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   app.post(`${INSTALLS}/stage`, installs, async (request, reply) => {
     try {
       const body = jsonBody(request);
+      // Fetching interrupts nothing, also the update of a bundle that is on air: the lock
+      // is asked when what was fetched is to be put in place.
       const job = await installer?.stage({
         source: fetchableSource(body.source),
         target: targetOf(body.target),
@@ -639,10 +772,24 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     installs,
     async (request, reply) => {
       try {
-        const { scripts } = jsonBody(request);
+        const { scripts, forceOnAir } = jsonBody(request);
+        // What is put in the place of an installed bundle interrupts it. This is where an
+        // update meets the lock, and the answer says that nothing was lost.
+        const target = installer
+          ?.staged()
+          .find((staged) => staged.id === request.params.id)?.target;
+        if (target !== undefined) {
+          assertNotOnAir(
+            target,
+            'update',
+            forceOnAir === true,
+            ' The new version stays staged: put it in place once On Air is off.',
+          );
+        }
         // Nothing but a plain `true` lets the scripts of npm packages run.
         const job = installer?.commit(request.params.id, {
           scripts: scripts === true,
+          forceOnAir: forceOnAir === true,
           by: actor(request),
         });
         return reply.code(202).send({ job });
@@ -680,7 +827,9 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     async (request, reply) => {
       try {
         const { name, id } = request.params;
-        const job = await installer?.restore(name, id, actor(request));
+        const forceOnAir = overridesOnAir(request);
+        if (record(name)) assertNotOnAir(name, 'update', forceOnAir);
+        const job = await installer?.restore(name, id, actor(request), { forceOnAir });
         return reply.code(202).send({ job });
       } catch (error) {
         return failWith(reply, error);
@@ -728,7 +877,7 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     const bundle = configurable(name);
     if (!bundle?.manifest) return notFound(reply);
     try {
-      const { values } = jsonBody(request);
+      const { values, forceOnAir } = jsonBody(request);
       if (values === undefined) {
         throw new MoonCGError('bad_request', '"values" must be the configuration');
       }
@@ -736,14 +885,16 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
       // From here on the values are stored, and the answer says so whatever else happens.
       // The extension reads its configuration when it starts, so it is started again: the
       // extension only, so that graphics on air keep what they follow. A bundle that failed,
-      // perhaps over the very configuration, gets another try.
+      // perhaps over the very configuration, gets another try. While the installation is on
+      // air the restart is refused like any other, unless the request overrides the lock.
       const { state } = record(name) ?? bundle;
       let restartNote: string | undefined;
       try {
         if (bundle.manifest.extension === undefined) {
           restartNote = 'The bundle has no extension that could be restarted.';
-        } else if (state === 'running') await lifecycle?.restartExtension?.(name);
-        else if (state === 'failed') await lifecycle?.enable(name);
+        } else if (state === 'running') {
+          await lifecycle?.restartExtension?.(name, { forceOnAir: forceOnAir === true });
+        } else if (state === 'failed') await lifecycle?.enable(name);
         else restartNote = `The bundle is ${state}. The settings apply when it is started.`;
       } catch (error) {
         // Such as a change of the bundle's state that got in between.
@@ -829,33 +980,32 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     // A ZIP archive of a bundle, as the body of the request. It is written to staging as it
     // arrives and counted against the limit there. `filename` is what it is remembered as,
     // `target` the installed bundle it is the update of, and `scripts=true` trusts it to
-    // run code while it is installed.
-    uploads.put<{ Querystring: { filename?: string; target?: string; scripts?: string } }>(
-      `${INSTALLS}/stage`,
-      installs,
-      async (request, reply) => {
-        const length = request.headers['content-length'];
-        try {
-          const job = await installer?.stage({
-            source: {
-              type: 'upload',
-              body: request.raw,
-              length: length === undefined ? undefined : Number(length),
-              filename:
-                typeof request.query.filename === 'string' ? request.query.filename : undefined,
-            },
-            target: targetOf(request.query.target),
-            scripts: request.query.scripts === 'true',
-            by: actor(request),
-          });
-          return reply.code(202).send({ job });
-        } catch (error) {
-          // What is left of a refused upload is not waited for.
-          reply.header('connection', 'close');
-          return failWith(reply, error);
-        }
-      },
-    );
+    // run code while it is installed. Like every fetch it is taken while on air too.
+    uploads.put<{
+      Querystring: { filename?: string; target?: string; scripts?: string };
+    }>(`${INSTALLS}/stage`, installs, async (request, reply) => {
+      const length = request.headers['content-length'];
+      try {
+        const target = targetOf(request.query.target);
+        const job = await installer?.stage({
+          source: {
+            type: 'upload',
+            body: request.raw,
+            length: length === undefined ? undefined : Number(length),
+            filename:
+              typeof request.query.filename === 'string' ? request.query.filename : undefined,
+          },
+          target,
+          scripts: request.query.scripts === 'true',
+          by: actor(request),
+        });
+        return reply.code(202).send({ job });
+      } catch (error) {
+        // What is left of a refused upload is not waited for.
+        reply.header('connection', 'close');
+        return failWith(reply, error);
+      }
+    });
     uploads.put<{ Params: AssetParams }>(
       '/api/v1/bundles/:name/assets/:category/:file',
       async (request, reply) => {
@@ -1077,6 +1227,19 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
       const entry = [...panels, ...dialogs, ...graphics].find((item) => item.file === file);
       const permission = bundlePermission(name, entry?.requires);
       if (!can(request, permission)) return deny(request, reply, permission);
+
+      // In dev mode a bundle that names a development server has its pages served there:
+      // the browser is sent on to the same file on that server, after every check above.
+      // The manifest allows only an address on this machine.
+      if (options.dev && bundle.manifest.dev) {
+        // Everything after the first question mark: a query may hold more of them.
+        const url = request.raw.url ?? '';
+        const at = url.indexOf('?');
+        const query = at === -1 ? undefined : url.slice(at + 1);
+        return reply
+          .header('cache-control', 'no-store')
+          .redirect(devServerUrl(bundle.manifest.dev.url, file, query), 302);
+      }
 
       const path = await canonicalFile(join(bundle.dir, area), rest);
       if (path === undefined) return notFound(reply);

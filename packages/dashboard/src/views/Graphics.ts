@@ -97,6 +97,19 @@ export const GraphicsView = defineComponent({
           dot('running'),
           h('span', openBy(instance.id)),
           h('span', { class: 'muted' }, ` since ${new Date(instance.since).toLocaleString()} `),
+          // Outside dev mode nothing reloads a graphic but a person: it may be on air.
+          instance.outOfDate
+            ? h(
+                'span',
+                {
+                  class: 'badge warn',
+                  'data-badge': 'out-of-date',
+                  title:
+                    'The files of the bundle changed since this page loaded them. Reload it when it suits the show.',
+                },
+                'Out of date',
+              )
+            : null,
           // No button the server would refuse. Disconnecting frees the place of a
           // graphic that takes one instance; the page does not come back by itself.
           bundles.canManage
@@ -124,7 +137,8 @@ export const GraphicsView = defineComponent({
     const card = (bundle: BundleInfo, graphic: GraphicInfo) => {
       const key = `${bundle.name}:${graphic.id}`;
       const url = `${location.origin}${graphic.url}`;
-      const onAir = (instances.byGraphic.get(key)?.length ?? 0) > 0;
+      // "Open", not "on air": On Air is the lock of the whole installation.
+      const isOpen = (instances.byGraphic.get(key)?.length ?? 0) > 0;
       return h('section', { key, class: 'card', 'data-graphic': key }, [
         h('div', { class: 'graphic-body' }, [
           h('div', { class: 'graphic-title' }, [
@@ -137,7 +151,7 @@ export const GraphicsView = defineComponent({
             graphic.singleInstance
               ? h('span', { class: 'badge accent' }, 'takes one instance')
               : null,
-            onAir ? h('span', { class: 'badge live' }, [dot(), 'On air']) : null,
+            isOpen ? h('span', { class: 'badge live' }, [dot(), 'Open']) : null,
           ]),
           h('div', { class: 'copy-field' }, [
             h('input', { readonly: true, value: url, 'aria-label': `URL of ${graphic.id}` }),

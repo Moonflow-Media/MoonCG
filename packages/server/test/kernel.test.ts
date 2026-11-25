@@ -30,6 +30,8 @@ describe('loadConfig', () => {
       bundleNpmRegistry: undefined,
       secureCookies: false,
       trustProxy: false,
+      dev: false,
+      watch: false,
     });
   });
 
@@ -56,6 +58,8 @@ describe('loadConfig', () => {
       bundleNpmRegistry: undefined,
       secureCookies: false,
       trustProxy: false,
+      dev: false,
+      watch: false,
     });
   });
 
@@ -83,6 +87,8 @@ describe('loadConfig', () => {
       bundleNpmRegistry: undefined,
       secureCookies: false,
       trustProxy: false,
+      dev: false,
+      watch: false,
     });
   });
 

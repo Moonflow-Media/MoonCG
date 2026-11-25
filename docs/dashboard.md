@@ -17,20 +17,22 @@ scripts can use as well, the REST API under `/api/v1` and the SDK client.
 
 ## What is there today
 
-| Feature                                                   | State                                |
-| --------------------------------------------------------- | ------------------------------------ |
-| Navigation that shows only what you may use, in groups    | Done                                 |
-| Counts in the navigation, state of the connection         | Done                                 |
-| Workspaces with panels, layout stored per user            | Done; arranged with buttons, no drag |
-| Bundle page: state, errors, enable, disable, reload, live | Done; filter by state, key figures   |
-| Installing, updating and removing bundles                 | Done; from a Git address or a ZIP    |
-| Graphics page: URL, connected instances, reload of one    | Done; no preview of a graphic        |
-| Graphics that take a single instance                      | Done; enforced by the server         |
-| Dialogs opened by panels                                  | Done; one dialog at a time           |
-| Bundle settings: a form from the bundle's config schema   | Done                                 |
-| Assets: upload, list, delete, live list for graphics      | Done                                 |
-| Users, roles and tokens pages                             | Done                                 |
-| Log page with level filter, followed while open           | Done                                 |
+| Feature                                                       | State                                   |
+| ------------------------------------------------------------- | --------------------------------------- |
+| Navigation that shows only what you may use, in groups        | Done                                    |
+| Counts in the navigation, state of the connection             | Done                                    |
+| Workspaces with panels, layout stored per user                | Done; arranged with buttons, no drag    |
+| Bundle page: state, errors, enable, disable, reload, live     | Done; filter by state, key figures      |
+| On Air switch, and what it holds back                         | Done; one switch for everything         |
+| Live reload: `not reloaded`, `changes pending`, `Out of date` | Done; shown, never applied to a graphic |
+| Installing, updating and removing bundles                     | Done; from a Git address or a ZIP       |
+| Graphics page: URL, connected instances, reload of one        | Done; no preview of a graphic           |
+| Graphics that take a single instance                          | Done; enforced by the server            |
+| Dialogs opened by panels                                      | Done; one dialog at a time              |
+| Bundle settings: a form from the bundle's config schema       | Done                                    |
+| Assets: upload, list, delete, live list for graphics          | Done                                    |
+| Users, roles and tokens pages                                 | Done                                    |
+| Log page with level filter, followed while open               | Done                                    |
 
 ## Pages
 
@@ -56,8 +58,8 @@ that fails or is reloaded shows without reloading the page.
 
 ### The frame around the pages
 
-A sidebar holds the navigation, and below it how the connection stands and who is signed in.
-Under 900 pixels of width it lies above the page instead of beside it.
+A sidebar holds the navigation, and below it the On Air switch, how the connection stands and
+who is signed in. Under 900 pixels of width it lies above the page instead of beside it.
 
 | Group      | Entries              | Count beside an entry                                     |
 | ---------- | -------------------- | --------------------------------------------------------- |
@@ -79,6 +81,11 @@ is not shown.
   Up to when you have seen the log is kept in the browser (`localStorage`, under your user
   id), as the time of the newest line that was on the log page while you had it open. It is
   per browser: another browser counts from what the server still has.
+- **On Air** says where the lock of the installation stands, to everyone: "Off air", or
+  "On Air" in red. Holders of `system:bundles.manage` have a button beside it, **Go on air**
+  and **End**. It follows the replicant `system:onAir`, so everyone sees it move. Ending it
+  applies the file changes that waited, so the button asks first when there are any and names
+  the bundles. [development.md](development.md#the-on-air-lock) says what the lock holds back.
 - **The connection** is the status of the dashboard's SDK client (`live`, `reconnecting`,
   `offline`; see the [README](../README.md#using-replicants-in-a-page)), shown as "Live",
   "Reconnecting…" and "Offline" with the host the page was loaded from.
@@ -97,6 +104,21 @@ A row tells what `GET /api/v1/bundles` tells: for a running bundle how many pane
 graphics it has for you, and for every bundle the bundles it needs (`dependencies`, the names
 from its manifest, without those you are not shown). What a bundle that does not run would
 bring is not in the list, so the page does not claim it.
+
+With the file watcher on (see [development.md](development.md#live-reload)) a row can carry
+two more badges, from `reloadErrors` and `pendingChanges` of the same list:
+
+| Badge             | Means                                                                                                                                                          |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `not reloaded`    | The manifest or a schema on disk is invalid. The version from before keeps running; the errors are listed below the row and go away with the next valid change |
+| `changes pending` | Files changed while On Air. Nothing was reloaded; it is when On Air ends. The tooltip names the areas                                                          |
+
+While On Air, a line above the list says that changes are blocked, and **Reload**, **Disable**
+and **Remove** ask whether to do it anyway before they send the request with
+`"forceOnAir": true`, and with nothing else: a bundle that others still need is not removed for
+it. An update can be fetched without a question, since fetching interrupts nothing; its card
+then says that putting it in place is blocked, and its **Update** button asks first. **Enable**
+never asks.
 
 #### Installing, updating and removing
 
@@ -164,7 +186,8 @@ changed with buttons that work with a keyboard. Dragging is not there yet.
 
 The graphics page lists every graphic you may open, with its URL and a button that copies it
 (and says "Copied" once the browser has taken it), and below each the pages that show it
-right now. A graphic that is open somewhere is marked "On air".
+right now. A graphic that is open somewhere is marked "Open". (It used to say "On air"; that
+name now belongs to the lock of the whole installation.)
 
 The page draws no preview. A page that loads a graphic through the SDK is an instance of it,
 so a preview would be listed as one and, for a graphic that takes a single instance, would
@@ -177,6 +200,11 @@ read-only replicant `<bundle>:$instances.<graphic id>`:
 ```json
 [{ "id": "9f0c…", "since": "2026-01-02T03:04:05.000Z" }]
 ```
+
+An entry has `"outOfDate": true` once the files of its bundle's `graphics/` folder changed
+after the page loaded them, which only happens with the file watcher on and outside dev mode.
+The graphics page shows `Out of date` beside such a page. Nothing reloads it but its **Reload**
+button: the page that connects afterwards is a new entry without the mark.
 
 It takes the permission the graphic itself takes. It says that a page is connected, not whose:
 who each page acts as is told by `GET /api/v1/bundles/<bundle>/instances` to holders of

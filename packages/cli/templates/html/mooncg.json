@@ -1,0 +1,45 @@
+{
+  "manifest": 1,
+  "kind": "bundle",
+  "name": "{{name}}",
+  "version": "0.1.0",
+  "title": "{{title}}",
+  "extension": "extension/index.js",
+  "permissions": {
+    "view": "See {{title}}",
+    "operate": "Change {{title}}"
+  },
+  "defaultRoles": {
+    "operator": ["view", "operate"],
+    "viewer": ["view"],
+    "graphics": ["view"]
+  },
+  "panels": [
+    {
+      "id": "control",
+      "title": "{{title}}",
+      "file": "dashboard/control.html",
+      "width": 3,
+      "requires": "operate"
+    }
+  ],
+  "graphics": [
+    {
+      "id": "overlay",
+      "title": "Overlay",
+      "file": "graphics/overlay.html",
+      "width": 1920,
+      "height": 1080,
+      "requires": "view"
+    }
+  ],
+  "replicants": {
+    "message": {
+      "schema": "schemas/message.json",
+      "default": { "text": "Hello from {{title}}", "visible": true },
+      "persistent": true,
+      "read": "view",
+      "write": "operate"
+    }
+  }
+}

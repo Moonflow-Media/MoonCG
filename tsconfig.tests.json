@@ -12,7 +12,8 @@
       "@mooncg/core": ["./packages/core/src/index.ts"],
       "@mooncg/sdk/client": ["./packages/sdk/src/client/index.ts"],
       "@mooncg/sdk/extension": ["./packages/sdk/src/extension/index.ts"],
-      "@mooncg/server/accounts": ["./packages/server/src/accounts.ts"]
+      "@mooncg/server/accounts": ["./packages/server/src/accounts.ts"],
+      "@mooncg/server": ["./packages/server/src/index.ts"]
     }
   },
   "include": [

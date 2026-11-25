@@ -354,18 +354,20 @@ describe('the graphics page', () => {
     view.unmount();
   });
 
-  it('marks a graphic that is open as on air, and counts them in the heading', async () => {
+  it('marks a graphic that is open, and counts them in the heading', async () => {
     const { view, push } = await show();
     push('board:$instances.overlay', []);
     push('board:$instances.studio', []);
     await flushPromises();
-    expect(view.text()).not.toContain('On air');
+    expect(view.find('.graphic-title .badge.live').exists()).toBe(false);
     expect(view.find('.page-head .badge').exists()).toBe(false);
 
     push('board:$instances.overlay', [{ id: 'i-1', since: '2026-01-02T03:04:05.000Z' }]);
     await flushPromises();
-    expect(overlay(view).find('.graphic-title .badge.live').text()).toBe('On air');
-    expect(view.find('[data-graphic="board:studio"]').text()).not.toContain('On air');
+    expect(overlay(view).find('.graphic-title .badge.live').text()).toBe('Open');
+    expect(view.find('[data-graphic="board:studio"] .graphic-title .badge.live').exists()).toBe(
+      false,
+    );
     expect(view.find('.page-head .badge.live').text()).toBe('1 open');
     view.unmount();
   });

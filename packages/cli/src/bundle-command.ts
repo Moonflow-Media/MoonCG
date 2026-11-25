@@ -18,8 +18,13 @@ export interface BundleArgs {
    * packages, its `.npmrc`, and dependencies fetched from elsewhere than the registry.
    */
   readonly scripts: boolean;
-  /** Remove a bundle that enabled bundles still need. */
+  /** Remove a bundle although enabled bundles still need it. It overrides nothing else. */
   readonly force: boolean;
+  /**
+   * Go ahead although the installation is on air: update, remove, disable, reload or
+   * restore a bundle that the "On Air" lock protects.
+   */
+  readonly onAir: boolean;
   /** Delete the files of a removed bundle instead of keeping them as a backup. */
   readonly deleteFiles: boolean;
   /** Delete what a removed bundle stored: configuration, assets, replicants, role grants. */
@@ -344,7 +349,11 @@ export async function bundleCommand(
     }
     if (stats.isDirectory()) {
       return finished(
-        await call('POST', `${API}/-/stage`, { source: { type: 'path', path }, target, scripts }),
+        await call('POST', `${API}/-/stage`, {
+          source: { type: 'path', path },
+          target,
+          scripts,
+        }),
       );
     }
     // A file is sent to the server, which may be another machine.
@@ -354,8 +363,26 @@ export async function bundleCommand(
     return finished(await call('PUT', `${API}/-/stage?${query}`, await openAsBlob(path)));
   };
 
+  /** What goes along with a change that the "On Air" lock may stand in the way of. */
+  const override = args.onAir ? { forceOnAir: true } : {};
+  /** Whether the installation is on air. A server that does not say counts as off air. */
+  const isOnAir = async () =>
+    (await call<{ onAir?: boolean }>('GET', '/api/v1/on-air').catch(() => undefined))?.onAir ===
+    true;
+  /** Why an update does not go ahead while the installation is on air. */
+  const onAirRefusal = (target: string, when: string, fetched: string) =>
+    new Error(
+      `MoonCG ${when}: updating "${target}" would interrupt what it shows, so it is blocked. ` +
+        `${fetched}Nothing was changed. Switch On Air off first, or run the command again with --on-air to update anyway.`,
+    );
+
   /** Stages, shows what was fetched, asks, and installs. */
   const install = async (text: string | undefined, target: string | undefined) => {
+    // Fetching would be allowed, but this command fetches in order to install: where that
+    // is going to be refused, it is said before anything is fetched or asked.
+    if (target !== undefined && !args.onAir && (await isOnAir())) {
+      throw onAirRefusal(target, 'is on air', '');
+    }
     log(target === undefined ? 'Fetching the bundle' : `Fetching the new version of ${target}`);
     const fetched = await stage(text, target);
     const { staged } = fetched;
@@ -378,9 +405,25 @@ export async function bundleCommand(
       await discard();
       throw new Error('Nothing was changed.');
     }
-    const done = await finished(
-      await call('POST', `${API}/-/staged/${part(staged.id)}/commit`, { scripts: args.scripts }),
-    );
+    const commit = async () => {
+      try {
+        return await call<{ job: Job }>('POST', `${API}/-/staged/${part(staged.id)}/commit`, {
+          scripts: args.scripts,
+          ...override,
+        });
+      } catch (error) {
+        // The installation may have gone on air while the question waited for its answer.
+        // Nobody is left to install what was fetched, so it is not left behind.
+        if (staged.target === undefined || args.onAir || !(await isOnAir())) throw error;
+        await discard();
+        throw onAirRefusal(
+          staged.target,
+          'went on air meanwhile',
+          'The fetched version was discarded. ',
+        );
+      }
+    };
+    const done = await finished(await commit());
     if (done.state === 'rolled-back') {
       throw new Error(
         printable(
@@ -446,6 +489,7 @@ export async function bundleCommand(
       const done = await finished(
         await call('POST', `${API}/${part(name)}/remove`, {
           force: args.force,
+          ...override,
           deleteFiles: args.deleteFiles,
           purgeData: args.purgeData,
         }),
@@ -461,7 +505,7 @@ export async function bundleCommand(
       const { bundle } = await call<{ bundle: Listed }>(
         'POST',
         `${API}/${part(first as string)}/${action}`,
-        {},
+        action === 'enable' ? {} : override,
       );
       if (bundle.state === 'failed') {
         throw new Error(printable(`${bundle.name} failed: ${(bundle.errors ?? []).join('; ')}`));
@@ -487,7 +531,7 @@ export async function bundleCommand(
         throw new Error('Nothing was changed.');
       }
       const done = await finished(
-        await call('POST', `${API}/${part(name)}/backups/${part(backup)}/restore`, {}),
+        await call('POST', `${API}/${part(name)}/backups/${part(backup)}/restore`, override),
       );
       if (done.state === 'rolled-back') {
         throw new Error(

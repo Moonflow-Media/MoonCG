@@ -1,7 +1,13 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Json } from '@mooncg/core';
-import { AUTH_MIGRATION, type AuthStore, PREFS_MIGRATION, sqlAuthStore } from './auth-store.js';
+import {
+  AUTH_MIGRATION,
+  type AuthStore,
+  DEV_USER_MIGRATION,
+  PREFS_MIGRATION,
+  sqlAuthStore,
+} from './auth-store.js';
 import { type Db, migrate, openSqliteDb, openSqliteDbSync } from './db.js';
 
 export const DATABASE_FILE = 'mooncg.db';
@@ -19,6 +25,9 @@ export const MIGRATIONS: readonly string[] = [
   'CREATE TABLE disabled_bundles (name TEXT NOT NULL PRIMARY KEY)',
   AUTH_MIGRATION,
   PREFS_MIGRATION,
+  // What the server itself remembers, such as whether it is on air.
+  'CREATE TABLE settings (key TEXT NOT NULL PRIMARY KEY, json TEXT NOT NULL)',
+  DEV_USER_MIGRATION,
 ];
 
 export interface StoredReplicant {
@@ -132,10 +141,17 @@ export interface BundleSettingsStore {
   setDisabled(bundle: string, disabled: boolean): Promise<void>;
 }
 
+/** What the server itself remembers across restarts, one JSON value per key. */
+export interface SettingsStore {
+  get(key: string): Promise<Json | undefined>;
+  set(key: string, value: Json): Promise<void>;
+}
+
 /** Everything the server keeps across restarts. */
 export interface Storage {
   readonly replicants: ReplicantStore;
   readonly bundles: BundleSettingsStore;
+  readonly settings: SettingsStore;
   /** Users, roles, tokens and sessions. */
   readonly auth: AuthStore;
   close(): Promise<void>;
@@ -147,11 +163,21 @@ export interface Storage {
  */
 export function memoryStorage(): Storage {
   const disabled = new Set<string>();
+  const settings = new Map<string, string>();
   const db = openSqliteDbSync(':memory:');
   migrate(db, MIGRATIONS);
   return {
     replicants: new MemoryReplicantStore(),
     auth: sqlAuthStore(db),
+    settings: {
+      async get(key) {
+        const json = settings.get(key);
+        return json === undefined ? undefined : (JSON.parse(json) as Json);
+      },
+      async set(key, value) {
+        settings.set(key, JSON.stringify(value));
+      },
+    },
     bundles: {
       disabled: async () => [...disabled].sort(),
       async setDisabled(bundle, value) {
@@ -171,6 +197,20 @@ export async function openSqliteStorage(dataDir: string): Promise<Storage> {
   return {
     replicants,
     auth: sqlAuthStore(db),
+    settings: {
+      async get(key) {
+        const row = db.all<{ json: string }>('SELECT json FROM settings WHERE key = ?', key)[0];
+        return row === undefined ? undefined : (JSON.parse(row.json) as Json);
+      },
+      async set(key, value) {
+        db.run(
+          `INSERT INTO settings (key, json) VALUES (?, ?)
+           ON CONFLICT (key) DO UPDATE SET json = excluded.json`,
+          key,
+          JSON.stringify(value),
+        );
+      },
+    },
     bundles: {
       disabled: async () =>
         db

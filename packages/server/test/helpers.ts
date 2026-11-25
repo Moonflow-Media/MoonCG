@@ -42,6 +42,8 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     bundleNpmRegistry: undefined,
     secureCookies: false,
     trustProxy: false,
+    dev: false,
+    watch: false,
     ...overrides,
   };
 }

@@ -14,6 +14,121 @@ initial commit of the repository.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-25
+
+Wire protocol: 6 (was 5).
+
+### Added
+
+- Live reload: with `--watch` (`MOONCG_WATCH`, or `"watch": true` in the configuration file)
+  the server watches the folder of every enabled bundle and applies what changes, 150 ms
+  after the last change. A changed `mooncg.json` or schema reloads the bundle, a change in
+  `extension/` or `shared/` restarts its extension, one in `dashboard/` reloads its open
+  panel and dialog pages. `node_modules`, `.git` and dot folders are ignored. The watcher is
+  off unless turned on; `--no-watch` and `MOONCG_WATCH=0` turn it off again, the flag winning
+  over the variable and the variable over the file. See `docs/development.md`.
+- An invalid manifest, an unusable schema or a default that no longer fits its schema is not
+  applied when the files change: the version that ran before keeps running, and the bundle
+  says why in `reloadErrors` (API, `system:bundles`, a `not reloaded` badge on the Bundles
+  page) until a valid change arrives. The files are read once: the manifest and schemas that
+  were checked are the ones the bundle is started with, so a file that is cut short again a
+  moment later cannot leave the bundle failed.
+- Graphics are not reloaded by a file change outside dev mode. The connected pages are marked
+  `outOfDate` in `<bundle>:$instances.<graphic>`, the Graphics page shows `Out of date` beside
+  them, and the existing `Reload` of one instance brings them up to date.
+- Dev mode, `mooncg dev` or `--dev`: the watcher is on, graphics reload with their files, the
+  `dev.url` of a manifest is honoured, and every request from this machine without
+  credentials acts as an administrator. It exists as a flag only and refuses to start with a
+  host that is not loopback, with `--trust-proxy`, and with an allowed origin that is not on
+  this machine (`--allowed-origin`, `MOONCG_ALLOWED_ORIGINS`, `allowedOrigins` of the
+  configuration file). It signs a request in only if its socket address is loopback, it
+  carries no proxy header, its `Host` header names this machine, its `Origin` is absent or on
+  this machine, and it brings no credentials at all: a session that ended or a token that was
+  revoked gets `401`, not an administrator. It warns in the log at every start. Behind a
+  reverse proxy or a tunnel on the same machine everyone who reaches it is an administrator,
+  which MoonCG cannot detect; `docs/development.md` says so prominently.
+- Dev mode acts as a user of its own, `dev` (role `admin`, no password, marked as created by
+  dev mode), never as a real person. Outside dev mode that user is inert: it cannot sign in,
+  its sessions and API tokens are deleted at the next start without `--dev` and not accepted,
+  and it does not count as a user or an administrator, so an installation that was only ever
+  used in dev mode still offers the first-run setup. Such a start logs one warning. The user
+  cannot be renamed, disabled, given a password or given other roles, only deleted, and is
+  shown as `dev mode only` by `mooncg user list` and on the Users page (`"devMode": true` in
+  `GET /api/v1/users`).
+- `"dev": { "url": "http://localhost:5173" }` in a manifest, in dev mode only: requests for the
+  bundle's panel and graphic files are redirected to that development server after the usual
+  permission checks, MoonCG leaves reloading its pages to it, and its origin may open the
+  WebSocket, send requests and be framed by the dashboard (`frame-src`). The address must be
+  `http` or `https` on this machine, without credentials, query or fragment.
+- The On Air lock: one switch for the installation, kept across restarts, published as the
+  replicant `system:onAir`. While it is on, update, remove, disable, reload and restore of a
+  bundle and the restart of an extension are refused with `409` unless the request says
+  `"forceOnAir": true`, which takes the same permission as the change
+  (`system:bundles.manage`); the watcher records what changed as `pendingChanges` instead of
+  acting, and applies it when the switch goes off. An update can still be fetched while on
+  air (staging and uploading interrupt nothing); putting it in place is what is refused, and
+  the refusal says that the new version stays staged. The lock fails closed: a stored state
+  that cannot be read or understood counts as on air, with an error in the log that says how
+  to switch it off. `GET` and `PUT /api/v1/on-air`.
+- Dashboard: the On Air switch and indicator in the sidebar, `changes pending` and
+  `not reloaded` badges on the Bundles page, and a question before a button makes a change
+  while on air. The question is about the lock alone and sends `"forceOnAir": true` and
+  nothing else. An update is fetched without a question; its card says that putting it in
+  place is blocked, and **Update** asks.
+- `mooncg start` and `mooncg dev` start the server from the command line tool; `mooncg init`
+  creates an installation folder (`bundles/`, `data/`, `mooncg.config.json`, a `.gitignore`
+  for `data/`); `mooncg bundle create <name>` creates a bundle from the `html` template, in
+  the bundles folder of `--dir` or of the configuration file (`--config`, `MOONCG_CONFIG`), and
+  removes its folder again if a file cannot be written.
+- `--on-air` on `mooncg bundle update|remove|disable|reload|restore`, for a change while on
+  air. Without it, `update` stops before anything is fetched and names the flag.
+- The configuration file `mooncg.config.json` (`port`, `host`, `bundlesDir`, `dataDir`,
+  `allowedOrigins`, `watch`), read from the working directory or named with `--config` or
+  `MOONCG_CONFIG`. Flags win over environment variables, which win over the file. An unknown
+  or mistyped setting keeps the server from starting.
+- `createClient({ waitForBundle })`: by default a page whose bundle is not running keeps
+  asking, with growing pauses up to 15 seconds, instead of giving up.
+- `pnpm dev` builds and starts dev mode with the bundles in `examples/`.
+
+### Changed
+
+- Wire protocol 6: the server messages `rep.back` and `msg.back` announce a replicant or a
+  message topic that is declared again; `reload` is now sent to any page of a bundle, not
+  only to a graphic. Pages that load `/sdk/mooncg.js` get the matching client by themselves;
+  a bundle that ships its own copy of `@mooncg/sdk` must rebuild.
+- A page that connects while its bundle is not running no longer ends with `ready` rejected
+  as `not_found`: it waits for the bundle (see `waitForBundle` above).
+- A message topic the server removed is asked for again at the next reconnect, and when the
+  server says it is back, instead of being forgotten.
+- The Graphics page marks a graphic that is open somewhere as "Open", no longer "On air":
+  that name now belongs to the lock.
+- `mooncg bundle remove --force` and `"force": true` on `remove` mean what they meant in
+  0.7.0, removing a bundle that enabled bundles still need, and nothing more: they do not
+  override the On Air lock, which has its own word (`--on-air`, `"forceOnAir": true`). A
+  removal that both stand in the way of takes both.
+- `dev.url` in a manifest, which 0.7.0 accepted as any URL and did not use, must now be an
+  `http://` or `https://` address on this machine (`localhost`, `127.x.x.x` or `[::1]`),
+  without user name, password, query or fragment. A manifest with any other value is invalid:
+  its bundle does not start and cannot be installed until the value is corrected or removed.
+- The database gains the table `settings` (migration 5), which holds the On Air state, and the
+  column `users.dev_mode` (migration 6), which marks the user dev mode created.
+- Node.js 22.22 or newer is required (was 22): chokidar 6, which watches the bundle folders,
+  needs it, and `engines` of the repository, `@mooncg/server` and `@mooncg/cli` say so. It is
+  loaded only when watching is on.
+- Every switch of the server can be turned off on the command line with `--no-` in front,
+  such as `--no-watch`.
+
+### Fixed
+
+- Pages that stayed open while their bundle was reloaded, disabled and enabled, updated or
+  restarted after a crash went stale: their replicants stayed in the error state and their
+  message listeners were silent until the page was reloaded. The server now tells a page when
+  what it lost is back, and the SDK subscribes again by itself.
+- `ready` of a replicant that was refused once (asked for before it was declared) never
+  resolved, even after a later subscription succeeded.
+- A message listener was dropped for good when the connection was lost while the page was
+  subscribing again after a reconnect.
+
 ## [0.7.0] - 2026-11-25
 
 ### Added

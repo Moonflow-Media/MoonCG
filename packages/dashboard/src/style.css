@@ -724,6 +724,48 @@ main {
   padding: 0 var(--space-sm);
   font-size: var(--font-size-sm);
 }
+/* The On Air switch: quiet while off, unmistakable while on. */
+.on-air {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+}
+.on-air-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-weight: var(--font-weight-semibold);
+}
+.on-air .dot {
+  background: var(--dot-pending);
+}
+.on-air.on {
+  color: var(--badge-failed-text);
+  background: var(--badge-failed-bg);
+}
+.on-air.on .dot {
+  background: var(--dot-failed);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dot-failed) 25%, transparent);
+}
+.on-air-note {
+  margin: 0 0 var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-pill);
+  color: var(--badge-warn-text);
+  background: var(--badge-warn-bg);
+  font-size: var(--font-size-sm);
+}
+.bundle-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+}
 .conn code {
   margin-left: auto;
   padding: 0;

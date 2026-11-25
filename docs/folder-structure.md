@@ -93,7 +93,7 @@ my-show/
 ├── modules/              system modules (auth providers, storage, …)   (milestone 8)
 │   └── <name>/
 ├── data/                 everything MoonCG writes at runtime
-│   ├── mooncg.db         replicants, disabled bundles, users, roles, tokens, sessions, per-user layouts
+│   ├── mooncg.db         replicants, disabled bundles, users, roles, tokens, sessions, per-user layouts, On Air
 │   ├── config/
 │   │   └── <bundle>.json bundle config, secrets included; edited on the settings page
 │   ├── assets/
@@ -104,11 +104,14 @@ my-show/
 │   ├── backups/
 │   │   └── <bundle>/<version>-<time>/   an earlier version: bundle/ and backup.json
 │   └── bundle-sources.json   where each bundle was installed from, for updates
-└── mooncg.config.json    server config (port, host, data dir, origins) (file: milestone 6)
+└── mooncg.config.json    server config: port, host, bundles dir, data dir, origins, watch
 ```
 
-Today the server is configured with flags and environment variables only (`--bundles-dir`,
-`--data-dir`, `--allowed-origin`, …); the config file comes with the CLI's `init` command.
+`mooncg init` creates this folder: `bundles/`, `data/`, `mooncg.config.json` and a
+`.gitignore` for `data/`. The server reads the file from the directory it is started in;
+flags and environment variables win over it. Everything but the six settings named above is
+configured with flags and environment variables only. See
+[development.md](development.md#the-configuration-file).
 
 `staging/` is emptied whenever the server starts, and a staged bundle nobody decides about is
 deleted after 30 minutes. `backups/` keeps the newest three versions of each bundle
@@ -149,13 +152,14 @@ nodecg/
 MoonCG/
 ├── packages/
 │   ├── core/         @mooncg/core — pure logic, no file or network access
-│   │   └── src/      manifest/ replicant/ messages/ http/ bundle/ protocol/ permissions/ session/
+│   │   └── src/      manifest/ replicant/ messages/ http/ bundle/ protocol/ permissions/ session/ dev/
 │   ├── server/       @mooncg/server
-│   │   ├── src/      kernel/ auth/ bundles/ install/ config/ assets/ graphics/ extension-host/ http/ replicants/ storage/
+│   │   ├── src/      kernel/ auth/ bundles/ install/ config/ assets/ graphics/ extension-host/ http/ replicants/ storage/ dev/
 │   │   └── public/   the login and setup pages
 │   ├── sdk/          @mooncg/sdk — the only package bundle authors depend on
 │   │   └── src/      client/ extension/ vue/ react/ — later module/ (milestone 8)
-│   ├── cli/          the `mooncg` command — `types`, `user`, `token` and `bundle`
+│   ├── cli/          the `mooncg` command — `init`, `start`, `dev`, `types`, `user`, `token` and `bundle`
+│   │   └── templates/   what `mooncg bundle create` copies
 │   └── dashboard/    @mooncg/dashboard — Vue 3 app, built with Vite, served at /
 │       └── src/      stores/ views/ — logic in plain modules, components as render functions
 ├── examples/

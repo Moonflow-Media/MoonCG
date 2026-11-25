@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,6 +48,8 @@ test.beforeAll(async () => {
       bundlesDir,
       '--data-dir',
       dataDir,
+      // Live reload without dev mode: what a studio runs while a bundle is being finished.
+      '--watch',
     ],
     { stdio: ['ignore', 'pipe', 'pipe'] },
   );
@@ -942,6 +944,132 @@ test('a bundle: installed from a ZIP, updated, rolled back when broken, and remo
   await nav(admin, 'Show').click();
   await expect(admin.locator('iframe[title="Lines"]')).toHaveCount(0);
   await expect(control(admin).locator('body')).toBeVisible();
+
+  expect(problems).toEqual([]);
+});
+
+test('live reload: a changed panel reloads, a graphic is only marked, pages outlive a bundle reload, On Air holds changes back', async ({
+  browser,
+}) => {
+  const { problems, watch } = watcher();
+  const admin = watch(await asAdmin(browser));
+  const file = (path: string) => join(bundlesDir, 'scoreboard', path);
+  const controlHtml = await readFile(file('dashboard/control.html'), 'utf8');
+  const overlayHtml = await readFile(file('graphics/overlay.html'), 'utf8');
+  /** Marks a page, so that a later look tells whether it was loaded again. */
+  const mark = (page: Page) =>
+    page.evaluate(() => {
+      (window as unknown as { kept?: boolean }).kept = true;
+    });
+  const kept = (page: Page) =>
+    page.evaluate(() => (window as unknown as { kept?: boolean }).kept === true);
+
+  // --- A panel file changes on disk: the panel in the dashboard loads itself again.
+  await nav(admin, 'Show').click();
+  await expect(control(admin).locator('#home')).toHaveText('Home +1');
+  await writeFile(file('dashboard/control.html'), controlHtml.replace('Home +1', 'Home plus one'));
+  await expect(control(admin).locator('#home')).toHaveText('Home plus one');
+
+  // --- Two pages on their own, as in OBS or a second window: the panel and the graphic.
+  const panel = watch(await admin.context().newPage());
+  await panel.goto(`${base}/b/scoreboard/dashboard/control.html`);
+  await expect(panel.locator('#score')).toHaveText(/^\d+:\d+$/);
+  const graphic = watch(await admin.context().newPage());
+  await graphic.goto(`${base}${OVERLAY}`);
+  await expect(graphic.locator('#home')).toHaveText(/^\d+$/);
+  await mark(panel);
+  await mark(graphic);
+
+  // --- The bundle is reloaded: its replicants go and come back, and both pages go on
+  // working without being loaded again.
+  const reloaded = await admin.request.post(`${base}/api/v1/bundles/scoreboard/reload`, {
+    data: {},
+  });
+  expect(reloaded.status()).toBe(200);
+  // The score is set back and counted up: the request reaches the extension that was
+  // started again, and both pages follow the replicant that was declared again.
+  await expect(async () => {
+    await panel.locator('#reset').click();
+    await expect(panel.locator('#score')).toHaveText('0:0', { timeout: 1000 });
+    await panel.locator('#home').click();
+    await expect(panel.locator('#score')).toHaveText('1:0', { timeout: 1000 });
+    await expect(graphic.locator('#home')).toHaveText('1', { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  expect(await kept(panel)).toBe(true);
+  expect(await kept(graphic)).toBe(true);
+
+  // --- A graphic file changes: outside dev mode nothing reloads what may be on air. The
+  // graphics page marks the page as out of date, and reloads it when asked to.
+  await nav(admin, 'Graphics').click();
+  const listed = admin.locator('[data-graphic="scoreboard:overlay"]');
+  await expect(listed.locator('[data-instance]')).toHaveCount(1);
+  await writeFile(
+    file('graphics/overlay.html'),
+    overlayHtml.replace('<span>HOME</span>', '<span>HEIM</span>'),
+  );
+  await expect(listed.locator('[data-badge="out-of-date"]')).toHaveText('Out of date');
+  expect(await kept(graphic)).toBe(true);
+  await expect(graphic.locator('#board')).toContainText('HOME');
+  await Promise.all([
+    graphic.waitForEvent('framenavigated'),
+    listed.locator('[data-instance]').getByRole('button', { name: 'Reload' }).click(),
+  ]);
+  await expect(graphic.locator('#board')).toContainText('HEIM');
+  await expect(listed.locator('[data-instance]')).toHaveCount(1);
+  await expect(listed.locator('[data-badge="out-of-date"]')).toHaveCount(0);
+
+  // --- On Air: the switch is there for who manages bundles, and says where it stands.
+  const onAir = admin.locator('[data-on-air]');
+  await expect(onAir).toHaveAttribute('data-on-air', 'false');
+  await admin.locator('#on-air-switch').click();
+  await expect(onAir).toHaveAttribute('data-on-air', 'true');
+  await expect(onAir).toContainText('On Air');
+  // A reload is refused now, unless it overrides the lock.
+  const refused = await admin.request.post(`${base}/api/v1/bundles/scoreboard/reload`, {
+    data: {},
+  });
+  expect(refused.status()).toBe(409);
+  expect(((await refused.json()) as { error: { message: string } }).error.message).toContain(
+    'on air',
+  );
+
+  // --- A panel file changes while on air: it waits, and the bundles page says so.
+  await mark(panel);
+  await writeFile(file('dashboard/control.html'), controlHtml.replace('Home +1', 'Home again'));
+  await nav(admin, 'Bundles').click();
+  const row = admin.locator('[data-bundle="scoreboard"]');
+  await expect(row.locator('[data-badge="pending"]')).toHaveText('changes pending');
+  await expect(admin.locator('[data-on-air-note]')).toBeVisible();
+  expect(await kept(panel)).toBe(true);
+  await expect(panel.locator('#home')).toHaveText('Home plus one');
+
+  // --- Ending On Air applies what waited, after a question that names the bundle.
+  const questions: string[] = [];
+  admin.once('dialog', (dialog) => {
+    questions.push(dialog.message());
+    void dialog.accept();
+  });
+  await admin.locator('#on-air-switch').click();
+  await expect(onAir).toHaveAttribute('data-on-air', 'false');
+  await expect(panel.locator('#home')).toHaveText('Home again');
+  await expect(row.locator('[data-badge="pending"]')).toHaveCount(0);
+  expect(questions).toHaveLength(1);
+  expect(questions[0]).toContain('scoreboard');
+
+  // --- An invalid manifest is not applied: the bundle keeps running and says why.
+  const manifest = await readFile(file('mooncg.json'), 'utf8');
+  await writeFile(file('mooncg.json'), '{ "manifest": 1,');
+  await expect(row.locator('[data-badge="not-reloaded"]')).toHaveText('not reloaded');
+  await expect(row.locator('.state')).toHaveText('running');
+  await expect(row).toContainText('mooncg.json is not valid JSON');
+  await writeFile(file('mooncg.json'), manifest);
+  await expect(row.locator('[data-badge="not-reloaded"]')).toHaveCount(0);
+  await expect(row.locator('.state')).toHaveText('running');
+
+  // The example is left as it was found.
+  await writeFile(file('dashboard/control.html'), controlHtml);
+  await writeFile(file('graphics/overlay.html'), overlayHtml);
+  await expect(panel.locator('#home')).toHaveText('Home +1');
 
   expect(problems).toEqual([]);
 });

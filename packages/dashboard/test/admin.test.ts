@@ -74,6 +74,34 @@ describe('the users page', () => {
     expect(checked?.map((box) => box.attributes('data-role'))).toEqual(['admin']);
   });
 
+  it('shows the user of dev mode as what it is, with nothing to change but deleting it', async () => {
+    const calls = serve({
+      ...table,
+      'GET /api/v1/users': {
+        users: [
+          ...USERS.users,
+          { id: 'u3', name: 'dev', disabled: false, roles: ['admin'], devMode: true },
+        ],
+      },
+    });
+    const view = mount(UsersView);
+    await flushPromises();
+
+    const row = view.find('[data-user="dev"]');
+    expect(row.find('[data-dev-mode]').text()).toContain('dev mode');
+    expect(row.text()).toContain('admin');
+    expect(row.findAll('input')).toHaveLength(0);
+    expect(row.find('[data-action="toggle"]').exists()).toBe(false);
+    expect(row.find('form').exists()).toBe(false);
+    // An ordinary user has all of that.
+    expect(view.find('[data-user="ada"] [data-dev-mode]').exists()).toBe(false);
+    expect(view.find('[data-user="ada"] [data-action="toggle"]').exists()).toBe(true);
+
+    await row.find('[data-action="delete"]').trigger('click');
+    await flushPromises();
+    expect(sent(calls)).toEqual([{ method: 'DELETE', path: '/api/v1/users/u3', body: undefined }]);
+  });
+
   it('creates a user with the chosen roles', async () => {
     const { view, calls } = await show();
     const form = view.find('form[data-form="create"]');

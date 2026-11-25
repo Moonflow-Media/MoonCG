@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import {
+  isLoopbackHost,
   MessageBus,
   type Policy,
   ReplicantRegistry,
@@ -11,8 +12,11 @@ import { AssetStore } from './assets/store.js';
 import { type Auth, createAuth } from './auth/auth.js';
 import type { ScryptParams } from './auth/password.js';
 import type { BundleRecord } from './bundles/bundles.js';
-import { BundleManager } from './bundles/manager.js';
+import { BundleManager, type OnAirOverride } from './bundles/manager.js';
 import { BundleConfigs, scrubbingLogger } from './config/bundle-config.js';
+import { OnAirLock } from './dev/on-air.js';
+import { ConnectedPages } from './dev/pages.js';
+import { BundleWatchers, type CreateFileWatcher } from './dev/watcher.js';
 import type {
   ExtensionHost,
   ExtensionServices,
@@ -21,12 +25,13 @@ import type {
 import { WorkerHost } from './extension-host/worker-host.js';
 import { GraphicInstances } from './graphics/instances.js';
 import { type BundleLifecycle, createApp } from './http/app.js';
-import { createIdentify, type ResolvePrincipal } from './http/identity.js';
+import { createIdentify, type RequestIdentity, type ResolvePrincipal } from './http/identity.js';
+import { devOrigins } from './http/origin.js';
 import { attachWebSocket } from './http/ws.js';
 import { DEFAULT_INSTALL_LIMITS } from './install/files.js';
 import { BundleInstaller } from './install/installer.js';
 import type { NpmInstall } from './install/npm.js';
-import type { ServerConfig } from './kernel/config.js';
+import { devModeProblem, type ServerConfig } from './kernel/config.js';
 import { createLifecycle } from './kernel/lifecycle.js';
 import {
   createLogBuffer,
@@ -83,6 +88,8 @@ export interface ServerOptions {
   readonly allowFileGitUrls?: boolean;
   /** How long a fetched bundle waits for a decision before it is deleted again. */
   readonly stagingTtlMs?: number;
+  /** Watches a bundle folder. Defaults to chokidar; tests put their own in its place. */
+  readonly createWatcher?: CreateFileWatcher;
 }
 
 export interface ServerStats {
@@ -108,6 +115,10 @@ export interface RunningServer {
   readonly host: ExtensionHost;
   /** Accounts, sessions, tokens and roles. */
   readonly auth: Auth;
+  /** The "On Air" lock. */
+  readonly onAir: OnAirLock;
+  /** The watchers of the bundle folders; `undefined` unless watching is turned on. */
+  readonly watchers: BundleWatchers | undefined;
   readonly storage: Storage;
   readonly logger: Logger;
   /** Where the first administrator is created; `undefined` once any user exists. */
@@ -133,8 +144,7 @@ export function bindingWarning(
   config: Pick<ServerConfig, 'host' | 'secureCookies'>,
 ): string | undefined {
   const { host, secureCookies } = config;
-  const loopback = host === 'localhost' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
-  if (loopback || secureCookies) return undefined;
+  if (isLoopbackHost(host) || secureCookies) return undefined;
   return (
     `Listening on ${host} without HTTPS: passwords and session cookies cross the network ` +
     'unencrypted. Use this on a trusted network only, or put an HTTPS reverse proxy in front ' +
@@ -147,6 +157,10 @@ export async function startServer(
   config: ServerConfig,
   options: ServerOptions = {},
 ): Promise<RunningServer> {
+  // Asked here as well as where the flags are read: whoever starts a server from code must
+  // not get dev mode on a host the network reaches either.
+  const devProblem = devModeProblem(config);
+  if (devProblem !== undefined) throw new Error(devProblem);
   // Everything the server logs is also kept for the log page.
   const logs = createLogBuffer();
   // No line is printed or kept with a secret of a bundle's configuration in it.
@@ -177,17 +191,48 @@ export async function startServer(
     const persistence = createPersistence({ store: storage.replicants, logger });
     lifecycle.add('persistence', () => persistence.flush());
 
+    const devSignIn =
+      config.dev && options.resolvePrincipal === undefined && options.policy === undefined;
     const auth = createAuth({
       store: storage.auth,
+      devMode: devSignIn,
       ...(options.passwordCost === undefined ? {} : { scrypt: options.passwordCost }),
     });
+    // Dev mode signs requests from this machine in as an administrator: always as a user of
+    // its own, so that everything a user has (preferences, tokens) works as usual, and
+    // never as a real person, whose name would then stand in the log for what nobody with
+    // a password did.
+    let devLogin: (() => RequestIdentity) | undefined;
+    if (devSignIn) {
+      const user = auth.ensureDevUser();
+      devLogin = () => auth.devIdentity();
+      logger.warn(
+        `DEV MODE: every request from this machine is signed in as the administrator "${user.name}" without a password. ` +
+          'Use it for writing bundles on your own machine only, never where others can log in or connect.',
+      );
+    } else {
+      // Outside dev mode that user is nobody. What it left behind goes, and it is said once.
+      const inert = auth.lockDevUsers();
+      if (inert.length > 0) {
+        const names = inert.map((user) => `"${user.name}"`).join(', ');
+        logger.warn(
+          `The user ${names} was created by dev mode and is inert outside it: it cannot sign in, ` +
+            'its sessions and API tokens were deleted, and it does not count as a user or an administrator. ' +
+            'Delete it on the Users page if this installation is done with dev mode.',
+        );
+      }
+    }
     const identify = createIdentify({
       auth,
       resolvePrincipal: options.resolvePrincipal,
       policy: options.policy,
       secureCookies: config.secureCookies,
       trustProxy: config.trustProxy,
+      devLogin,
     });
+    const onAir = new OnAirLock({ registry, store: storage.settings, logger });
+    await onAir.load();
+    const pages = new ConnectedPages();
 
     const services: ExtensionServices = {
       registry,
@@ -217,7 +262,29 @@ export async function startServer(
       uploadIdleMs: options.assetUploadIdleMs,
     });
     await assets.sweep();
-    const manager = new BundleManager({
+    // Live reload. The watchers act through the manager, which is created right below.
+    // Chokidar is loaded only here: without watching, the server never touches it.
+    const createWatcher = config.watch
+      ? (options.createWatcher ?? (await import('./dev/chokidar-watcher.js')).chokidarWatcher)
+      : undefined;
+    const watchers: BundleWatchers | undefined = createWatcher
+      ? new BundleWatchers({
+          manager: {
+            get: (name) => manager.get(name),
+            reloadIfValid: (name) => manager.reloadIfValid(name),
+            restartExtension: (name) => manager.restartExtension(name),
+            enable: (name) => manager.enable(name),
+            notePending: (name, areas) => manager.notePending(name, areas),
+          },
+          pages,
+          instances,
+          logger,
+          dev: config.dev,
+          isOnAir: () => onAir.state.onAir,
+          createWatcher,
+        })
+      : undefined;
+    const manager: BundleManager = new BundleManager({
       bundlesDir: config.bundlesDir,
       registry,
       instances,
@@ -228,8 +295,23 @@ export async function startServer(
       logger,
       persistence,
       settings: storage.bundles,
+      onAirLock: (bundle, operation) => onAir.reason(bundle, operation),
+      watch: watchers,
     });
     lifecycle.add('bundles', () => manager.close());
+    if (watchers) {
+      // Disposed before the bundles are closed: nothing reloads a bundle that is going down.
+      lifecycle.add('watchers', () => watchers.dispose());
+      lifecycle.add(
+        'on air release',
+        onAir.onRelease(() => void watchers.flushPending()),
+      );
+      logger.info(
+        config.dev
+          ? 'Watching the bundle folders: changes are applied and pages reload'
+          : 'Watching the bundle folders: changes are applied; open graphics are only marked as out of date',
+      );
+    }
     // The bundles are known and show as `enabling`; their extensions start in the background,
     // so one that is slow to start does not keep the server from listening.
     await manager.load();
@@ -278,16 +360,20 @@ export async function startServer(
     // Closed before the bundles are: a job that still runs ends first.
     lifecycle.add('installer', () => installer.close());
     await installer.start();
-    const change = (action: 'enable' | 'disable' | 'reload') => async (name: string) => {
-      const record = await manager[action](name);
-      applyDefaults();
-      return record;
-    };
+    const change =
+      (action: 'enable' | 'disable' | 'reload') =>
+      async (name: string, override: OnAirOverride = {}) => {
+        const record = await (action === 'enable'
+          ? manager.enable(name)
+          : manager[action](name, override));
+        applyDefaults();
+        return record;
+      };
     const bundleLifecycle: BundleLifecycle = {
       enable: change('enable'),
       disable: change('disable'),
       reload: change('reload'),
-      restartExtension: (name) => manager.restartExtension(name),
+      restartExtension: (name, override) => manager.restartExtension(name, override),
     };
     const started = manager.startAll().catch((error) => {
       logger.error(`Starting the bundles failed: ${errorMessage(error)}`);
@@ -313,6 +399,9 @@ export async function startServer(
       allowedOrigins: config.allowedOrigins,
       secureCookies: config.secureCookies,
       trustProxy: config.trustProxy,
+      dev: config.dev,
+      devLogin,
+      onAir,
     });
     lifecycle.add('http', () => app.close());
     const sockets = attachWebSocket(app.server, {
@@ -322,7 +411,11 @@ export async function startServer(
       bundleExists: (name) => name === SYSTEM_BUNDLE || manager.isRunning(name),
       identify,
       graphics: instances,
-      allowedOrigins: config.allowedOrigins,
+      pages,
+      // In dev mode, also the development servers the running bundles name.
+      allowedOrigins: config.dev
+        ? () => [...config.allowedOrigins, ...devOrigins(manager.list())]
+        : config.allowedOrigins,
       transport: { trustProxy: config.trustProxy },
       heartbeatMs: options.socketHeartbeatMs,
       logger,
@@ -356,6 +449,8 @@ export async function startServer(
       port,
       url,
       auth,
+      onAir,
+      watchers,
       storage,
       logger,
       setupUrl,
