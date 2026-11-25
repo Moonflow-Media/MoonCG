@@ -3,9 +3,9 @@ import { DIALOG_CHANNEL } from '@mooncg/sdk/client';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createDialogHost, type DialogInfo, type OpenedDialog } from '../src/dialogs.js';
+import { createDialogHost, type DialogInfo, framedUrl, type OpenedDialog } from '../src/dialogs.js';
 import { useBundles } from '../src/stores/bundles.js';
-import { DialogHost } from '../src/views/DialogHost.js';
+import { DialogHost, devOriginOf } from '../src/views/DialogHost.js';
 
 const ORIGIN = 'http://127.0.0.1:9090';
 const CONFIRM: DialogInfo = {
@@ -26,7 +26,9 @@ function fakeWindow() {
   };
 }
 
-function setup() {
+const DEV = 'http://localhost:5173';
+
+function setup(options: { dialogs?: DialogInfo[]; devOrigins?: Record<string, string[]> } = {}) {
   const panel = fakeWindow();
   const other = fakeWindow();
   const dialog = fakeWindow();
@@ -38,7 +40,8 @@ function setup() {
   const host = createDialogHost({
     origin: ORIGIN,
     panels: () => frames,
-    dialogsOf: (bundle) => (bundle === 'board' ? [CONFIRM] : []),
+    dialogsOf: (bundle) => (bundle === 'board' ? (options.dialogs ?? [CONFIRM]) : []),
+    originsOf: (bundle) => options.devOrigins?.[bundle] ?? [],
     dialogWindow: () => (shown.at(-1) === undefined ? undefined : dialog),
     onChange: (open) => shown.push(open),
   });
@@ -104,6 +107,42 @@ describe('the dialog host', () => {
     from(panel, { t: 'open', id: 1, dialog: 'confirm-reset', data: null }, 'https://evil.example');
     expect(shown).toEqual([]);
     expect(panel.posted).toEqual([]);
+  });
+
+  it('believes a panel served by the development server of its own bundle, in dev mode', () => {
+    const { panel, dialog, shown, from, open } = setup({
+      devOrigins: { board: [DEV] },
+    });
+    from(panel, { t: 'open', id: 1, dialog: 'confirm-reset', data: { home: 2 } }, DEV);
+    expect(shown).toEqual([{ bundle: 'board', dialog: CONFIRM, title: 'Reset?' }]);
+    // The dialog page is sent on to the development server too; no other origin is believed.
+    from(dialog, { t: 'ready' }, 'http://localhost:5174');
+    expect(dialog.posted).toEqual([]);
+    from(dialog, { t: 'ready' }, DEV);
+    expect(dialog.posted).toEqual([
+      expect.objectContaining({
+        targetOrigin: DEV,
+        message: expect.objectContaining({ t: 'init' }),
+      }),
+    ]);
+    from(dialog, { t: 'close', result: true }, DEV);
+    // The answer goes to the origin the panel spoke from, and nowhere else.
+    expect(panel.posted).toEqual([
+      { targetOrigin: DEV, message: { channel: DIALOG_CHANNEL, t: 'result', id: 1, result: true } },
+    ]);
+    open();
+    expect(shown).toHaveLength(3);
+  });
+
+  it('believes the development server of one bundle for that bundle only', () => {
+    const { other, panel, shown, open, from } = setup({ devOrigins: { board: [DEV] } });
+    from(other, { t: 'open', id: 1, dialog: 'confirm-reset', data: null }, DEV);
+    expect(other.posted).toEqual([]);
+    from(panel, { t: 'open', id: 1, dialog: 'confirm-reset', data: null }, 'http://localhost:5174');
+    expect(panel.posted).toEqual([]);
+    expect(shown).toEqual([]);
+    open(panel);
+    expect(shown).toHaveLength(1);
   });
 
   it('believes no window that is not a panel on the page', () => {
@@ -192,6 +231,18 @@ describe('the dialog host', () => {
     from(dialog, { t: 'open', id: 7, dialog: 'confirm-reset', data: null });
     expect(dialog.posted[0]?.message).toMatchObject({ t: 'error', id: 7, code: 'conflict' });
     expect(shown).toHaveLength(1);
+  });
+});
+
+describe('framedUrl', () => {
+  it('names the dashboard to a page of a development server, and to no other', () => {
+    expect(framedUrl('/b/board/dashboard/control.html?x=1', ORIGIN)).toBe(
+      '/b/board/dashboard/control.html?x=1',
+    );
+    // MoonCG sends it on to the development server, query and all.
+    expect(framedUrl('/b/board/dashboard/control.html?x=1', ORIGIN, DEV)).toBe(
+      `/b/board/dashboard/control.html?x=1&mooncgHost=${encodeURIComponent(ORIGIN)}`,
+    );
   });
 });
 
@@ -297,5 +348,26 @@ describe('the dialog host on the page', () => {
     await flushPromises();
     expect(view.find('[role="dialog"]').exists()).toBe(false);
     view.unmount();
+  });
+});
+
+describe('the development server of a bundle, in dev mode', () => {
+  it.each([
+    'http://localhost:5173',
+    'https://localhost:5173',
+    'https://127.0.0.1:5173',
+    'https://[::1]:5173',
+    'http://[::1]',
+  ])('is taken on this machine: %s', (origin) => {
+    expect(devOriginOf({ devOrigin: origin })).toBe(origin);
+  });
+
+  it.each([
+    'https://localhost.example',
+    'https://bundle.example:5173',
+    'ftp://localhost',
+    'https://localhost:5173/path',
+  ])('is not taken elsewhere: %s', (origin) => {
+    expect(devOriginOf({ devOrigin: origin })).toBeUndefined();
   });
 });

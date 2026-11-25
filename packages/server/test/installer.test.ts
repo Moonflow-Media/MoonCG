@@ -697,7 +697,11 @@ describe('shutting down', () => {
     await writeFile(script, 'await new Promise((done) => setTimeout(done, 90_000));');
     const { installer, stagingDirs } = await setup({
       timeoutMs: 60_000,
-      git: { command: [process.execPath, script] },
+      // A public address for every name: nothing is asked of real DNS.
+      git: {
+        command: [process.execPath, script],
+        resolve: async () => [{ address: '93.184.215.14', family: 4 }],
+      },
     });
     const job = await installer.stage({
       source: { type: 'git', url: 'https://example.org/o/r.git' },
@@ -1415,7 +1419,10 @@ describe('how much may go on at once', () => {
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
     const script = join(dir, 'slow-git.mjs');
     await writeFile(script, 'await new Promise((done) => setTimeout(done, 90_000));');
-    return { command: [process.execPath, script] };
+    return {
+      command: [process.execPath, script],
+      resolve: async () => [{ address: '93.184.215.14', family: 4 }],
+    };
   }
   const git = { type: 'git', url: 'https://example.org/o/r.git' } as const;
 

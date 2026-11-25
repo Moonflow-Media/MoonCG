@@ -14,6 +14,73 @@ initial commit of the repository.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-25
+
+### Added
+
+- An opt-in test (`MOONCG_NETWORK_TESTS=1`) that adds the example index of this repository as
+  GitHub serves it raw (`text/plain`), reads the catalog and installs the scoreboard through
+  the real download, SHA-256 and ZIP checks. It passed as it was; nothing needed fixing.
+- Indexes and sources on a private network: `registryAllowPrivate` (`--registry-allow-private`,
+  `MOONCG_REGISTRY_ALLOW_PRIVATE`) names host names and networks inside `10.0.0.0/8`,
+  `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` or `fc00::/7` that indexes, archives and
+  Git repositories may be fetched from over `https://`, and `registryAllowPrivateHttp`
+  (`--registry-allow-private-http`) allows plain `http://` for them as well, connecting then
+  only to an allowed private address. Configuration only, never through the API; this machine
+  stays as it was. See `docs/registry.md`.
+- Live update hints: the replicants `system:updates.bundles` and `system:updates.modules`, read
+  with `system:bundles.manage` and `system:modules.manage`, worked out again whenever an index
+  was fetched, added or removed and whenever something was installed, updated or removed. The
+  Bundles, Modules and Catalog pages follow them, so badges appear without reloading;
+  `GET /api/v1/registry/updates` stays.
+- Dialogs from pages of a development server in dev mode: the dashboard believes the dialog
+  messages of a bundle's panels and dialog pages from the origin of that bundle's `dev.url`
+  (now listed as `devOrigin` by `GET /api/v1/bundles` in dev mode only, and only on this
+  machine), answers there and never to `*`, and tells the page its own origin in the address
+  of the frame (`mooncgHost`), which the SDK takes only between origins on this machine. The
+  opt-in Vite test opens a dialog of Vite from a panel of Vite.
+- Module hooks: `ctx.registry.registerSource({ id, load })`, an index a module provides
+  (`module://<module>/<id>`), checked like any index, with absolute `https://` archives only,
+  fetched by the server through its own checks and gone with the module; and
+  `ctx.dashboard.registerPage({ id, title, path, permission })`, a link in the navigation
+  (group **Modules**) to a `GET` route of the module, opened in a tab of its own, listed by
+  `GET /api/v1/module-pages` to holders of its permission. `storage.registerAdapter` is left
+  out, see `docs/modules.md`.
+
+### Changed
+
+- Git sources, direct and from an index, for bundles and modules: the server resolves the host
+  first and refuses internal addresses and this machine by the rules of the registry (this
+  machine only for what an index on this machine lists, so a repository on this machine given
+  directly is now refused), then pins git to the checked addresses with
+  `-c http.curloptResolve` and `-c http.followRedirects=false`. On Git for Windows with the
+  OpenSSL backend the fetch is run again, still pinned, with the backend its libcurl names
+  (only on git's own `fatal:`/`error:` line of a failed run, never on what a server passes on
+  as `remote:`). SSH addresses are checked, not pinned. See `docs/bundles.md`.
+- The pin no longer fails open: an `https://` Git source is refused when Git is older than
+  2.37 (asked once with `git --version`), and git is started without proxies
+  (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` in any case; `-c http.proxy=`), without
+  configuration from the environment (`GIT_CONFIG_COUNT`/`KEY_*`/`VALUE_*`,
+  `GIT_CONFIG_PARAMETERS`), `GIT_SSL_NO_VERIFY`, `GIT_PROXY_COMMAND`, `GIT_DIR` and the like,
+  and with `-c http.curloptResolve=` clearing other pins first. A `url.*.insteadOf` rewrite of
+  the machine's configuration is asked of git (`ls-remote --get-url`) and where it leads is
+  checked and pinned; an address the configuration names a proxy for (`http.<url>.proxy`) is
+  refused. **Git sources behind an HTTP proxy are no longer supported**; indexes and archives
+  never used a proxy.
+- A Git repository that answers with a redirect (`http.followRedirects=false`) is reported as
+  "the repository answered with a redirect (HTTP 301); give its new address" instead of git's
+  raw error.
+- Resolving the host of a Git source counts towards the time of the stage and ends when the
+  server shuts down; a resolver that never answers no longer holds the stage.
+- `64:ff9b:1::/48` (local-use NAT64) and `2002::/16` (6to4) count as internal addresses, and an
+  address of the well-known NAT64 prefix `64:ff9b::/96` is checked as the IPv4 address it
+  carries, for indexes, archives and Git sources alike.
+- The live update hints count up only when the hints of their kind, the entries of the indexes
+  or what is installed changed, not on every progress of a job, and a steady stream of changes
+  puts them off by 2 s at most.
+- Dev-mode dialogs also take a development server on `https://localhost` (or `127.x.x.x`,
+  `[::1]`), in the dashboard and in the SDK alike.
+
 ## [0.11.0] - 2026-11-25
 
 Milestone 9: registry indexes, the catalog and update hints. See `docs/registry.md`.

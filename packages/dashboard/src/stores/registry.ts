@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { api, messageOf } from '../api.js';
+import { live } from '../live.js';
 
 export type Kind = 'bundle' | 'module';
 
@@ -8,7 +9,9 @@ export type Kind = 'bundle' | 'module';
 export interface IndexInfo {
   readonly id: string;
   readonly url: string;
-  readonly origin: 'config' | 'added';
+  readonly origin: 'config' | 'added' | 'module';
+  /** The module that provides it, for `module`. */
+  readonly module?: string | undefined;
   readonly status: 'pending' | 'ok' | 'stale' | 'error';
   readonly error?: string | undefined;
   readonly title?: string | undefined;
@@ -70,6 +73,12 @@ export interface StageJob {
 
 const REGISTRY = '/api/v1/registry';
 
+/** The replicants the server keeps the update hints in, one per kind. */
+export const UPDATES_REPLICANTS: Readonly<Record<Kind, string>> = {
+  bundle: 'system:updates.bundles',
+  module: 'system:updates.modules',
+};
+
 /**
  * The registry indexes and what they list. For those who may manage bundles or modules; the
  * server tells each only the kinds they manage.
@@ -86,6 +95,8 @@ export const useRegistry = defineStore('registry', () => {
   const sending = ref(false);
   /** The last catalog asked for: an earlier answer that comes later is not used. */
   let asked = 0;
+  /** The kinds whose hints arrive live: a slower answer of the REST endpoint keeps them. */
+  const liveKinds = new Set<Kind>();
 
   async function run<T>(work: () => Promise<T>): Promise<T | undefined> {
     problem.value = '';
@@ -135,10 +146,38 @@ export const useRegistry = defineStore('registry', () => {
   async function loadUpdates(): Promise<void> {
     try {
       const answer = await api.request<{ updates?: UpdateHint[] }>('GET', `${REGISTRY}/updates`);
-      updates.value = answer?.updates ?? [];
+      const kept = updates.value.filter((hint) => liveKinds.has(hint.kind));
+      const told = (answer?.updates ?? []).filter((hint) => !liveKinds.has(hint.kind));
+      updates.value = [...kept, ...told];
     } catch {
-      updates.value = [];
+      updates.value = updates.value.filter((hint) => liveKinds.has(hint.kind));
     }
+  }
+
+  /**
+   * Follows the update hints of `kinds` live, as the server works them out again whenever an
+   * index was fetched or something was installed, updated or removed. `onNews` is called for
+   * every value after the first, which is the state when following began. Returns the
+   * function that stops following.
+   */
+  function followUpdates(kinds: readonly Kind[], onNews?: () => void): () => void {
+    const stops = kinds.map((kind) => {
+      let first = true;
+      const stop = live.follow<{ updates?: UpdateHint[] }>(UPDATES_REPLICANTS[kind], (value) => {
+        liveKinds.add(kind);
+        const hints = (value?.updates ?? []).filter((hint) => hint.kind === kind);
+        updates.value = [...updates.value.filter((hint) => hint.kind !== kind), ...hints];
+        if (first) first = false;
+        else onNews?.();
+      });
+      return () => {
+        stop();
+        liveKinds.delete(kind);
+      };
+    });
+    return () => {
+      for (const stop of stops) stop();
+    };
   }
 
   const add = (url: string) =>
@@ -191,6 +230,7 @@ export const useRegistry = defineStore('registry', () => {
     loadIndexes,
     loadCatalog,
     loadUpdates,
+    followUpdates,
     add,
     remove,
     refresh,

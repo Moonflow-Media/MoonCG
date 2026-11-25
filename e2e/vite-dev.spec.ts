@@ -12,7 +12,8 @@ import { findNpmCli } from '../packages/server/src/install/npm.js';
 /**
  * The `vue` template with a real Vite development server and MoonCG in dev mode, in
  * Chromium: the panel is sent on to Vite, connects its WebSocket through Vite's proxy, reads
- * and writes a replicant, and a saved component is applied by hot module replacement.
+ * and writes a replicant, a saved component is applied by hot module replacement, and a panel
+ * of Vite opens a dialog, also served by Vite, inside the dashboard.
  *
  * Opt-in: it installs Vite from the npm registry, so it needs the network and takes a while.
  * Run it with `MOONCG_VITE_E2E=1 pnpm test:e2e`.
@@ -103,7 +104,52 @@ test('a panel served by Vite works against MoonCG in dev mode, with HMR', async 
   const manifestFile = join(bundle, 'mooncg.json');
   const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
   manifest.dev.url = `http://localhost:${vitePort}/b/demo/`;
+  // A panel that asks in a dialog, and the dialog: pages of the development server both.
+  manifest.panels.push({ id: 'opener', title: 'Opener', file: 'dashboard/opener.html' });
+  manifest.dialogs = [{ id: 'ask', title: 'Ask', file: 'dashboard/ask.html' }];
   await writeFile(manifestFile, JSON.stringify(manifest, null, 2));
+  const htmlPage = (title: string, body: string, script: string) =>
+    `<!doctype html>\n<html lang="en">\n  <head><meta charset="utf-8" /><title>${title}</title></head>\n  <body>\n    ${body}\n    <script type="module" src="./${script}"></script>\n  </body>\n</html>\n`;
+  await writeFile(
+    join(bundle, 'src/dashboard/opener.html'),
+    htmlPage(
+      'Opener',
+      '<button id="ask" type="button" disabled>Ask</button><p id="answer"></p>',
+      'opener.js',
+    ),
+  );
+  await writeFile(
+    join(bundle, 'src/dashboard/opener.js'),
+    `import { mc } from '../client.js';
+document.getElementById('ask').addEventListener('click', async () => {
+  try {
+    const answer = await mc.dialogs.open('ask', { question: 'Go on air?' });
+    document.getElementById('answer').textContent = JSON.stringify(answer);
+  } catch (error) {
+    document.getElementById('answer').textContent = 'error ' + error.code;
+  }
+});
+// Clickable once it does something: Vite may load the script after the button shows.
+document.getElementById('ask').disabled = false;
+`,
+  );
+  await writeFile(
+    join(bundle, 'src/dashboard/ask.html'),
+    htmlPage(
+      'Ask',
+      '<p id="question"></p><button id="yes" type="button" disabled>Yes</button>',
+      'ask.js',
+    ),
+  );
+  await writeFile(
+    join(bundle, 'src/dashboard/ask.js'),
+    `import { mc } from '../client.js';
+const dialog = await mc.dialogs.current();
+document.getElementById('question').textContent = dialog.data.question;
+document.getElementById('yes').addEventListener('click', () => dialog.close('yes'));
+document.getElementById('yes').disabled = false;
+`,
+  );
   const npm = findNpmCli();
   if (npm === undefined) throw new Error('npm was not found beside node');
   await run(process.execPath, [npm, 'install', '--no-audit', '--no-fund'], { cwd: bundle });
@@ -158,11 +204,36 @@ test('a panel served by Vite works against MoonCG in dev mode, with HMR', async 
   await expect(text).toHaveValue('Written from the panel');
   expect(errors).toEqual([]);
 
+  // Dialogs: in the dashboard, a panel of Vite opens a dialog page of Vite. The dashboard
+  // believes both from the origin of the bundle's development server, and answers there alone.
+  const dashboard = await page.context().newPage();
+  dashboard.on('pageerror', (error) => errors.push(error.message));
+  await dashboard.goto(`${mooncg}/w/Main`);
+  const opener = dashboard.frameLocator('iframe[data-panel-bundle="demo"][src*="opener.html"]');
+  await opener.locator('#ask').click();
+  const dialog = dashboard.locator('[role="dialog"]');
+  await expect(dialog).toHaveAttribute('data-dialog', 'demo:ask');
+  const asked = dashboard.frameLocator('[role="dialog"] iframe');
+  await expect(asked.locator('#question')).toHaveText('Go on air?');
+  // Really served by Vite: the frame was sent on to the development server.
+  const frames = dashboard.frames().map((frame) => frame.url());
+  expect(
+    frames.some((url) => url.startsWith(`http://localhost:${vitePort}/b/demo/dashboard/ask.html`)),
+  ).toBe(true);
+  await asked.locator('#yes').click();
+  await expect(dialog).toHaveCount(0);
+  await expect(opener.locator('#answer')).toHaveText('"yes"');
+  await dashboard.close();
+  expect(errors).toEqual([]);
+
   // The built files: without "dev.url" MoonCG serves dashboard/ and graphics/ itself.
   await run(process.execPath, [join(bundle, 'node_modules/vite/bin/vite.js'), 'build'], {
     cwd: bundle,
   });
   delete manifest.dev;
+  // The pages of the dialog test are not built; without them the built bundle has neither.
+  manifest.panels = manifest.panels.filter((panel: { id: string }) => panel.id !== 'opener');
+  delete manifest.dialogs;
   await writeFile(manifestFile, JSON.stringify(manifest, null, 2));
   await expect(async () => {
     const answer = await page.request.get(`${mooncg}/b/demo/dashboard/control.html`, {

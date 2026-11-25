@@ -24,10 +24,12 @@ export {
 export {
   createDialogs,
   DIALOG_CHANNEL,
+  DIALOG_HOST_PARAMETER,
   type DialogMessage,
   type DialogOptions,
   type Dialogs,
   type DialogWindow,
+  dialogHostOrigin,
   type OpenDialog,
   readDialogMessage,
 } from './dialogs.js';

@@ -1,26 +1,35 @@
 import { createHash } from 'node:crypto';
-import { lookup as dnsLookup } from 'node:dns';
 import { createWriteStream } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { request as httpRequest, type IncomingHttpHeaders, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { BlockList, isIP, type LookupFunction } from 'node:net';
+import type { LookupFunction } from 'node:net';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { isLoopbackRegistryUrl, MoonCGError, registryUrlProblem } from '@mooncg/core';
+import {
+  isLoopbackHost,
+  isLoopbackRegistryUrl,
+  MoonCGError,
+  registryUrlProblem,
+} from '@mooncg/core';
 import { refuse, storageError, storageProblem } from '../install/files.js';
 import { withoutCredentials } from '../install/git.js';
 import { errorMessage } from '../kernel/logger.js';
+import {
+  guardedLookup,
+  ipProblem,
+  type PrivateNetworks,
+  plainHttpAllowed,
+  type Reach,
+  Refused,
+  type Resolver,
+} from './network.js';
+
+export type { PrivateNetworks, Resolver } from './network.js';
 
 /** How many redirects are followed before a request is given up. */
 export const MAX_REDIRECTS = 5;
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
-
-/** What a name resolves to, as `dns.lookup` with `all: true` says it. */
-export type Resolver = (
-  hostname: string,
-  family: number,
-) => Promise<readonly { readonly address: string; readonly family: number }[]>;
 
 export interface HttpGetOptions {
   /** How long the whole request may take, redirects and body included. */
@@ -32,6 +41,8 @@ export interface HttpGetOptions {
   readonly signal?: AbortSignal | undefined;
   /** Resolves host names instead of the system resolver. For tests. */
   readonly resolve?: Resolver | undefined;
+  /** The private networks the configuration of the server allows. */
+  readonly private?: PrivateNetworks | undefined;
 }
 
 /** Whether a content type is one an index may be served as. */
@@ -47,110 +58,43 @@ export function isJsonType(type: string | undefined): boolean {
   );
 }
 
-/**
- * Addresses the server never connects to for the registry: networks that are not the
- * internet (private, shared, link-local, unique-local), and addresses that are no single
- * machine (unspecified, multicast, broadcast, reserved). An index on the internet must not
- * make the server ask what only the server can reach. IPv4-mapped IPv6 addresses are
- * checked as the IPv4 address they map.
- */
-const INTERNAL = new BlockList();
-for (const [network, prefix] of [
-  ['0.0.0.0', 8],
-  ['10.0.0.0', 8],
-  ['100.64.0.0', 10],
-  ['169.254.0.0', 16],
-  ['172.16.0.0', 12],
-  ['192.0.0.0', 24],
-  ['192.168.0.0', 16],
-  ['198.18.0.0', 15],
-  ['224.0.0.0', 4],
-  ['240.0.0.0', 4],
-] as const) {
-  INTERNAL.addSubnet(network, prefix, 'ipv4');
-}
-for (const [network, prefix] of [
-  ['::', 128],
-  // IPv4-compatible addresses, long deprecated: none is used on purpose.
-  ['::', 96],
-  ['fc00::', 7],
-  ['fe80::', 10],
-  ['fec0::', 10],
-  ['ff00::', 8],
-] as const) {
-  INTERNAL.addSubnet(network, prefix, 'ipv6');
-}
-const LOOPBACK = new BlockList();
-LOOPBACK.addSubnet('127.0.0.0', 8, 'ipv4');
-LOOPBACK.addAddress('::1', 'ipv6');
-
-/** Why the server does not connect to an IP address, or `undefined` if it does. */
-function ipProblem(ip: string, policy: NetworkPolicy): string | undefined {
-  const family = isIP(ip);
-  if (family === 0) return undefined;
-  const type = family === 4 ? 'ipv4' : 'ipv6';
-  if (LOOPBACK.check(ip, type)) {
-    return policy.loopback
-      ? undefined
-      : `${ip} is this machine, which only an index on this machine may point to`;
-  }
-  if (INTERNAL.check(ip, type)) {
-    return `${ip} is a private, link-local or otherwise internal address, which is not asked`;
-  }
-  return undefined;
-}
-
-/** How a request may go: whether this machine may be asked, and who gets credentials. */
-interface NetworkPolicy {
-  /** Whether plain `http://` and addresses of this machine may be asked. */
-  readonly loopback: boolean;
+/** How a request may go: where it may connect, and who gets credentials. */
+interface NetworkPolicy extends Reach {
   /** The credentials to send as a header, and the one origin they go to. */
   readonly credentials?: { readonly origin: string; readonly header: string } | undefined;
 }
+
+/** The hosts plain `http://` is taken for besides this machine, under a policy. */
+const plainHttpFor = (policy: Reach) => (host: string) => plainHttpAllowed(host, policy.private);
 
 /**
  * Why an address is not asked under a policy, before anything connects: the rules of an
  * index address, and an IP address written in it that is internal, or this machine where
  * that is not allowed. Names are checked again for what they resolve to when the server
- * connects.
+ * connects. Plain `http://` is taken for this machine where it may be asked, and for a host
+ * of a private network the configuration allows it for.
  */
-export function addressProblem(url: string, policy: { readonly loopback: boolean }) {
-  const problem = registryUrlProblem(url, { loopback: policy.loopback });
+export function addressProblem(url: string, policy: Reach): string | undefined {
+  const problem = registryUrlProblem(url, {
+    loopback: policy.loopback,
+    plainHttp: plainHttpFor(policy),
+  });
   if (problem !== undefined) return problem;
-  const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
-  return ipProblem(host, policy);
+  const parsed = new URL(url);
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  return ipProblem(host, policy, host, isPlainRemote(parsed));
 }
 
-/** The error a refused address raises while the server connects. */
-class Refused extends Error {}
+/** Whether an address is plain `http://` to a host that is not this machine. */
+const isPlainRemote = (url: URL) => url.protocol === 'http:' && !isLoopbackHost(url.hostname);
 
 /**
- * Resolves a name as the system does and refuses it when any of its addresses is one the
- * server does not ask. As it runs when the connection is made, a name that changes what it
- * points to after it was checked (DNS rebinding) is caught too.
+ * Why an address cannot be an index, or `undefined` if it can: the rules of
+ * `registryUrlProblem`, with plain `http://` also for a host of a private network the
+ * configuration allows it for.
  */
-function guardedLookup(policy: NetworkPolicy, resolve: Resolver | undefined): LookupFunction {
-  const system: Resolver = (hostname, family) =>
-    new Promise((done, fail) => {
-      dnsLookup(hostname, { all: true, family }, (error, addresses) =>
-        error ? fail(error) : done(addresses),
-      );
-    });
-  return ((hostname: string, options: { family?: unknown; all?: boolean }, callback) => {
-    const family = options.family === 4 || options.family === 6 ? options.family : 0;
-    (resolve ?? system)(hostname, family)
-      .then((addresses) => {
-        if (addresses.length === 0) throw new Refused(`${hostname} has no address`);
-        for (const { address } of addresses) {
-          const problem = ipProblem(address, policy);
-          if (problem !== undefined) throw new Refused(`${hostname} resolves to ${problem}`);
-        }
-        const [first] = addresses as [{ address: string; family: number }];
-        if (options.all) callback(null, [...addresses]);
-        else callback(null, first.address, first.family);
-      })
-      .catch((error: Error) => callback(error as NodeJS.ErrnoException, '', 0));
-  }) as LookupFunction;
+export function indexUrlProblem(url: string, access?: PrivateNetworks): string | undefined {
+  return registryUrlProblem(url, { plainHttp: (host) => plainHttpAllowed(host, access) });
 }
 
 /** One GET, without following redirects, resolved once the head of the answer arrived. */
@@ -225,7 +169,6 @@ async function httpGet(
   const settings = exchange.options;
   const first = addressProblem(url, policy);
   if (first !== undefined) throw refuse(`${shown}: ${first}`);
-  const lookup = guardedLookup(policy, settings.resolve);
   let current = new URL(url);
   const max = settings.maxRedirects ?? MAX_REDIRECTS;
   for (let hop = 0; ; hop++) {
@@ -236,6 +179,8 @@ async function httpGet(
     if (policy.credentials !== undefined && current.origin === policy.credentials.origin) {
       headers.authorization = policy.credentials.header;
     }
+    // Made for each hop: plain http:// to a host elsewhere goes to an allowed private address only.
+    const lookup = guardedLookup(policy, settings.resolve, isPlainRemote(current));
     const response = await send(current, headers, signal, lookup);
     const status = response.statusCode ?? 0;
     if (REDIRECTS.has(status)) {
@@ -253,8 +198,11 @@ async function httpGet(
           ? 'redirects to an address that is no address'
           : location.includes('\\')
             ? 'the address must not contain "\\"'
-            : (registryUrlProblem(next.href, { credentials: false, loopback: policy.loopback }) ??
-              addressProblem(next.href, policy));
+            : (registryUrlProblem(next.href, {
+                credentials: false,
+                loopback: policy.loopback,
+                plainHttp: plainHttpFor(policy),
+              }) ?? addressProblem(next.href, policy));
       if (next === undefined || problem !== undefined) {
         throw refuse(`${shown}: a redirect was refused: ${problem}`);
       }
@@ -315,10 +263,11 @@ function credentialsOf(url: string): NetworkPolicy['credentials'] {
  * machine, and its credentials for its own origin. An address that is not usable gets no
  * credentials read; it is refused before anything connects.
  */
-function indexPolicy(index: string): NetworkPolicy {
+function indexPolicy(index: string, access: PrivateNetworks | undefined): NetworkPolicy {
   return {
     loopback: isLoopbackRegistryUrl(index),
-    credentials: registryUrlProblem(index) === undefined ? credentialsOf(index) : undefined,
+    private: access,
+    credentials: indexUrlProblem(index, access) === undefined ? credentialsOf(index) : undefined,
   };
 }
 
@@ -350,7 +299,7 @@ export async function getJson(
   const chunks: Buffer[] = [];
   let answer: Answer;
   try {
-    answer = await httpGet(url, indexPolicy(url), exchange, {
+    answer = await httpGet(url, indexPolicy(url, options.private), exchange, {
       headers,
       accept: (type) =>
         isJsonType(type) ? undefined : `the content type is ${type ?? 'missing'}, not JSON`,
@@ -407,8 +356,12 @@ export async function download(
     // An address of its own is asked like an index on the internet, with what it holds.
     const policy: NetworkPolicy =
       options.index === undefined
-        ? { loopback: false, credentials: indexPolicy(url).credentials }
-        : indexPolicy(options.index);
+        ? {
+            loopback: false,
+            private: options.private,
+            credentials: indexPolicy(url, options.private).credentials,
+          }
+        : indexPolicy(options.index, options.private);
     const answer = await httpGet(url, policy, exchange, {});
     const counting = new Transform({
       transform(chunk: Buffer, _encoding, done) {

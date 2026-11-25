@@ -97,6 +97,16 @@ describe('dev.url in dev mode', () => {
     expect((await server.http('GET', '/b/vite/dashboard/panel.html', nobody)).status).toBe(404);
   });
 
+  it('names the origin of the development server in the list of bundles, for dialogs', async () => {
+    const server = await start(true, `${DEV_SERVER}/b/vite/`);
+    const admin = await as(server, 'admin');
+    const { bundles } = (await server.http('GET', '/api/v1/bundles', admin)).json;
+    const vite = bundles.find((bundle: { name: string }) => bundle.name === 'vite');
+    expect(vite.devOrigin).toBe(DEV_SERVER);
+    const board = bundles.find((bundle: { name: string }) => bundle.name === 'board');
+    expect(board.devOrigin).toBeUndefined();
+  });
+
   it('lets pages of the development server open a socket and change things', async () => {
     const { http, upgrade } = await start(true);
 
@@ -156,5 +166,9 @@ describe('dev.url outside dev mode', () => {
     expect(change.status).toBe(403);
     const page = await server.http('GET', '/', admin);
     expect(page.headers.get('content-security-policy')).toBe(BUILT_IN_CSP);
+    const { bundles } = (await server.http('GET', '/api/v1/bundles', admin)).json;
+    expect(bundles.find((bundle: { name: string }) => bundle.name === 'vite').devOrigin).toBe(
+      undefined,
+    );
   });
 });

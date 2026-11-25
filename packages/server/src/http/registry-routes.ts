@@ -242,6 +242,8 @@ export function registerRegistryRoutes(
               // Pinned: the ref is fetched, or the commit itself, and must be that commit.
               ref: source.ref ?? source.commit,
               commit: source.commit,
+              // Decides whether this machine may be asked. Not kept with the source.
+              index: registry.address(item.index.id),
             };
       const catalog: CatalogOrigin = {
         index: item.index.id,

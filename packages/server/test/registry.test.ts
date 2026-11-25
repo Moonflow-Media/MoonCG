@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Json } from '@mooncg/core';
 import { afterEach, describe, expect, it } from 'vitest';
+import { privateNetworks } from '../src/registry/network.js';
 import { indexId, MAX_INDEXES, Registry } from '../src/registry/registry.js';
 import { memoryLogger } from './helpers.js';
 import { type HttpFixture, json, startHttpFixture } from './http-fixture.js';
@@ -355,5 +356,52 @@ describe('Registry', () => {
     expect(await readdir(join(dir, 'registry'))).toEqual([
       `${indexId(`${server.url}/index.json`)}.json`,
     ]);
+  });
+});
+
+describe('Registry, with private networks allowed by the configuration', () => {
+  const create = async (
+    allowed?: ReturnType<typeof privateNetworks>,
+    configured: string[] = [],
+  ) => {
+    const asked: string[] = [];
+    const reg = new Registry({
+      dataDir: await dataDir(),
+      store: memoryStore(),
+      configured,
+      logger: memoryLogger().logger,
+      privateNetworks: allowed,
+      sources: [
+        {
+          schemes: ['https:', 'http:'],
+          load: async (url) => {
+            asked.push(url);
+            return { status: 'ok', value: index() };
+          },
+        },
+      ],
+    });
+    registries.push(reg);
+    await reg.start();
+    await reg.refreshed();
+    return { reg, asked };
+  };
+  const url = 'http://index.intranet/index.json';
+
+  it('takes a plain http index on an allowed host only with the setting for http', async () => {
+    const closed = (await create()).reg;
+    await expect(closed.add(url, 'ada')).rejects.toMatchObject({ code: 'invalid' });
+    const httpsOnly = (await create(privateNetworks(['index.intranet'], false))).reg;
+    await expect(httpsOnly.add(url, 'ada')).rejects.toMatchObject({ code: 'invalid' });
+    const { reg, asked } = await create(privateNetworks(['index.intranet'], true));
+    expect(await reg.add(url, 'ada')).toMatchObject({ status: 'ok', entries: 1 });
+    expect(asked).toEqual([url]);
+  });
+
+  it('takes a configured plain http index on an allowed host', async () => {
+    const { reg } = await create(privateNetworks(['index.intranet'], true), [url]);
+    expect(reg.indexes()).toEqual([expect.objectContaining({ url, status: 'ok' })]);
+    const { reg: closed } = await create(undefined, [url]);
+    expect(closed.indexes()).toEqual([]);
   });
 });

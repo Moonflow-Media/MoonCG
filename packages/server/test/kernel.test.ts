@@ -32,6 +32,8 @@ describe('loadConfig', () => {
       bundleNpmRegistry: undefined,
       registryIndexes: [],
       registryRefreshMs: 6 * 60 * 60_000,
+      registryAllowPrivate: [],
+      registryAllowPrivateHttp: false,
       secureCookies: false,
       trustProxy: false,
       dev: false,
@@ -64,6 +66,8 @@ describe('loadConfig', () => {
       bundleNpmRegistry: undefined,
       registryIndexes: [],
       registryRefreshMs: 6 * 60 * 60_000,
+      registryAllowPrivate: [],
+      registryAllowPrivateHttp: false,
       secureCookies: false,
       trustProxy: false,
       dev: false,
@@ -97,6 +101,8 @@ describe('loadConfig', () => {
       bundleNpmRegistry: undefined,
       registryIndexes: [],
       registryRefreshMs: 6 * 60 * 60_000,
+      registryAllowPrivate: [],
+      registryAllowPrivateHttp: false,
       secureCookies: false,
       trustProxy: false,
       dev: false,
@@ -151,6 +157,62 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ argv, env: {}, cwd })).not.toThrow(/s3cret/);
     const file = { values: { registryIndexes: 'x' }, dir: cwd, path: resolve(cwd, 'm.json') };
     expect(() => loadConfig({ argv: [], env: {}, cwd, file })).toThrow(/registryIndexes/);
+  });
+
+  it('takes private hosts and networks for the registry from flags, the environment and the file', () => {
+    const file = {
+      values: { registryAllowPrivate: ['git.corp.example'], registryAllowPrivateHttp: true },
+      dir: cwd,
+      path: resolve(cwd, 'm.json'),
+    };
+    expect(loadConfig({ argv: [], env: {}, cwd, file })).toMatchObject({
+      registryAllowPrivate: ['git.corp.example'],
+      registryAllowPrivateHttp: true,
+    });
+    const env = {
+      MOONCG_REGISTRY_ALLOW_PRIVATE: '10.0.0.0/8, fd00::/8',
+      MOONCG_REGISTRY_ALLOW_PRIVATE_HTTP: '0',
+    };
+    expect(loadConfig({ argv: [], env, cwd, file })).toMatchObject({
+      registryAllowPrivate: ['10.0.0.0/8', 'fd00::/8'],
+      registryAllowPrivateHttp: false,
+    });
+    const argv = [
+      '--registry-allow-private',
+      '192.168.5.0/24',
+      '--registry-allow-private',
+      'index.intranet',
+      '--registry-allow-private-http',
+    ];
+    expect(loadConfig({ argv, env, cwd, file })).toMatchObject({
+      registryAllowPrivate: ['192.168.5.0/24', 'index.intranet'],
+      registryAllowPrivateHttp: true,
+    });
+  });
+
+  it('refuses a private entry that would open more than a private network', () => {
+    for (const entry of ['127.0.0.1', '169.254.169.254', '8.8.8.0/24', 'https://x.example']) {
+      expect(() => loadConfig({ argv: ['--registry-allow-private', entry], env: {}, cwd })).toThrow(
+        /registry-allow-private|private/,
+      );
+    }
+    const file = { values: { registryAllowPrivate: 'x' }, dir: cwd, path: resolve(cwd, 'm.json') };
+    expect(() => loadConfig({ argv: [], env: {}, cwd, file })).toThrow(/registryAllowPrivate/);
+    const http = { values: { registryAllowPrivateHttp: 'yes' }, dir: cwd, path: 'm.json' };
+    expect(() => loadConfig({ argv: [], env: {}, cwd, file: http })).toThrow(
+      /registryAllowPrivateHttp/,
+    );
+  });
+
+  it('takes a plain http index on a private host only when both settings allow it', () => {
+    const url = 'http://index.intranet/index.json';
+    expect(() => loadConfig({ argv: ['--registry-index', url], env: {}, cwd })).toThrow(/https/);
+    const allowed = ['--registry-index', url, '--registry-allow-private', 'index.intranet'];
+    expect(() => loadConfig({ argv: allowed, env: {}, cwd })).toThrow(/https/);
+    expect(
+      loadConfig({ argv: [...allowed, '--registry-allow-private-http'], env: {}, cwd })
+        .registryIndexes,
+    ).toEqual([url]);
   });
 });
 

@@ -1,7 +1,8 @@
-import { defineComponent, h, onMounted, ref } from 'vue';
+import { defineComponent, h, onMounted, onUnmounted, ref } from 'vue';
 import { api } from '../api.js';
 import { useOnAir } from '../stores/onAir.js';
 import { useRegistry } from '../stores/registry.js';
+import { useSession } from '../stores/session.js';
 import { part, sure, useActions } from './admin.js';
 import { ModuleInstall, outcomeOf, settled } from './ModuleInstall.js';
 import { pageHead } from './parts.js';
@@ -45,6 +46,11 @@ export const ModulesView = defineComponent({
     });
     const registry = useRegistry();
     onMounted(() => run(async () => {}));
+    // The hints arrive live too, for whoever may install modules.
+    const unfollow = useSession().can('system:modules.manage')
+      ? registry.followUpdates(['module'])
+      : () => {};
+    onUnmounted(unfollow);
     onMounted(() => registry.loadUpdates());
     const onAir = useOnAir();
     const installer = ref<{

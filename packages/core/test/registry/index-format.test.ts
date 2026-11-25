@@ -237,6 +237,17 @@ describe('registryUrlProblem, as an address is read where it is used', () => {
     expect(registryUrlProblem('https://[::1]/a.zip', remote)).toMatch(/this machine/);
     expect(registryUrlProblem('https://example.org/a.zip', remote)).toBeUndefined();
   });
+
+  it('takes plain http elsewhere only for a host the caller allows it for', () => {
+    const plainHttp = (host: string) => host === 'intranet.example' || host === '[fd00::5]';
+    expect(registryUrlProblem('http://intranet.example/i.json', { plainHttp })).toBeUndefined();
+    expect(registryUrlProblem('http://INTRANET.example/i.json', { plainHttp })).toBeUndefined();
+    expect(registryUrlProblem('http://[fd00::5]/i.json', { plainHttp })).toBeUndefined();
+    expect(registryUrlProblem('http://other.example/i.json', { plainHttp })).toMatch(/https/);
+    // Never a way around the other rules.
+    expect(registryUrlProblem('http://intranet.example\\@x/', { plainHttp })).toBeDefined();
+    expect(registryUrlProblem('ftp://intranet.example/i.json', { plainHttp })).toMatch(/https/);
+  });
 });
 
 describe('isLoopbackRegistryUrl', () => {

@@ -38,10 +38,45 @@ changelog):
   or a fresh sign-in.
 - Up to three OpenID Connect providers per installation.
 
+## After 0.11.0 (released in 0.12.0)
+
+Open points closed after milestone 9 (in `[Unreleased]` of the changelog):
+
+- A real `https://` index: an opt-in test adds the example index of this repository as GitHub
+  serves it raw and installs the scoreboard from it through the real download and checks.
+- Git sources resolve-checked and pinned: the host is resolved and checked by the rules of the
+  registry before git runs, and git is pinned to the checked addresses
+  (`http.curloptResolve`) and follows no redirect. SSH addresses are checked, not pinned.
+  The pin does not fail open: Git older than 2.37 is refused for `https://`, git runs without
+  proxies and without configuration from the environment, `url.*.insteadOf` rewrites are
+  checked where they lead, and resolving the host counts towards the time of the stage. Git
+  behind an HTTP proxy is no longer supported.
+- NAT64 and 6to4 addresses checked as the IPv4 address they carry, or as internal.
+- Indexes and sources on a private network, opened by the configuration alone
+  (`registryAllowPrivate`, `registryAllowPrivateHttp`).
+- Live update hints (`system:updates.bundles`, `system:updates.modules`) on the Bundles,
+  Modules and Catalog pages, counting up only when something changed, at least every 2 s
+  under a steady stream of changes.
+- Dialogs from pages of a development server in dev mode, with a strict per-bundle origin
+  check, also for dialog pages served by the development server, over `http://` or
+  `https://` on this machine.
+- Module hooks `registry.registerSource` and `dashboard.registerPage`.
+
 ## Not possible to verify here
 
 - Signing in with real Twitch, Discord or OpenID Connect providers; only a mock provider is tested.
 - A real console Ctrl-C on Windows; shutdown is tested with a signal raised in the process.
+- A real Git older than 2.37 (refused by its `git --version`, tested with a stand-in), and a
+  real proxy or `url.*.insteadOf` setting in the machine's Git configuration (tested with a
+  stand-in for git); only Git for Windows 2.52 was used here, with and without its OpenSSL
+  backend, the real fetch with the cleaned environment included.
+- Schannel with a private certificate authority and its revocation check
+  (`http.schannelCheckRevoke`); only public certificates were fetched here.
+- A real NAT64 or 6to4 network; the address rules are tested on their own.
+- DNS rebinding against SSH Git addresses, which are checked but not pinned.
+- Dialogs from a development server in Firefox or Safari, which do not tell a page the origins
+  of the frames around it, and from a development server over `https://`; the opt-in Vite test
+  runs in Chromium over `http://`.
 
 ## Deferred
 
@@ -51,11 +86,10 @@ Planned, but not part of milestones 0–9:
 - Streaming request and response bodies for extension HTTP routes.
 - CSS hot swap without a page reload.
 - Sound cues.
-- Storage adapters other than SQLite.
+- Storage adapters other than SQLite, and `storage.registerAdapter` for modules (see
+  [modules.md](modules.md#what-is-not-there-yet) for why it is left out).
 - Sandboxing bundles; installed bundles are trusted code.
 - Translations of the dashboard.
-- Module hooks for storage adapters, registry sources and dashboard pages. Milestone 9 has a
-  small `RegistrySource` interface in the server, but no `registry.registerSource` for modules.
 - Signed registry indexes and archives.
 - MoonCG publish to npm.
 - A public registry with a catalog of bundles and modules, and a way to publish them.

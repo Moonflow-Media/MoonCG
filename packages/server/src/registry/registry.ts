@@ -8,12 +8,11 @@ import {
   parseRegistryIndex,
   type RegistryEntry,
   type RegistryIndex,
-  registryUrlProblem,
 } from '@mooncg/core';
 import { withoutCredentials } from '../install/git.js';
 import { errorMessage, type Logger } from '../kernel/logger.js';
 import type { SettingsStore } from '../storage/replicant-store.js';
-import { getJson, type JsonAnswer } from './https.js';
+import { getJson, indexUrlProblem, type JsonAnswer, type PrivateNetworks } from './https.js';
 
 /** How often the indexes are fetched again unless configured otherwise: every 6 hours. */
 export const DEFAULT_REGISTRY_REFRESH_MS = 6 * 60 * 60_000;
@@ -52,18 +51,38 @@ export interface RegistrySource {
   ): Promise<JsonAnswer>;
 }
 
-/** The source of every `https://` index. */
-export const httpsSource: RegistrySource = {
-  schemes: ['https:', 'http:'],
-  load: (url, held, options) => getJson(url, { ...held, ...options, maxBytes: MAX_INDEX_BYTES }),
-};
+/**
+ * The source of every `https://` index, and of plain `http://` ones on this machine or on a
+ * private network the configuration allows it for.
+ */
+export function httpsSourceFor(access?: PrivateNetworks): RegistrySource {
+  return {
+    schemes: ['https:', 'http:'],
+    load: (url, held, options) =>
+      getJson(url, { ...held, ...options, maxBytes: MAX_INDEX_BYTES, private: access }),
+  };
+}
+
+/** The source of every `https://` index, without private networks. */
+export const httpsSource: RegistrySource = httpsSourceFor();
+
+/** How a module loads the index it provides: the JSON an index file would hold. */
+export type ModuleIndexLoad = (options: { readonly signal: AbortSignal }) => unknown;
+
+/** The scheme of the address an index a module provides is listed by. */
+export const MODULE_INDEX_SCHEME = 'module:';
 
 /** How an index stands, as administrators are told: its address without credentials. */
 export interface IndexState {
   readonly id: string;
   readonly url: string;
-  /** `config`: set in the configuration, changed there. `added`: added at run time. */
-  readonly origin: 'config' | 'added';
+  /**
+   * `config`: set in the configuration, changed there. `added`: added at run time. `module`:
+   * provided by a module while it runs.
+   */
+  readonly origin: 'config' | 'added' | 'module';
+  /** The module that provides it, for `module`. */
+  readonly module?: string | undefined;
   /**
    * `pending`: not fetched yet. `ok`: the last fetch worked. `stale`: it did not, and the
    * last good copy is used. `error`: it did not and there is no copy.
@@ -100,6 +119,8 @@ interface Held {
   /** As it was given: it may hold credentials. */
   readonly url: string;
   readonly origin: IndexState['origin'];
+  /** For an index a module provides: the module, and how its index is loaded. */
+  readonly module?: { readonly name: string; readonly load: ModuleIndexLoad } | undefined;
   status: IndexState['status'];
   error?: string | undefined;
   checkedAt?: string | undefined;
@@ -145,6 +166,53 @@ function resolved(entry: RegistryEntry, index: string): RegistryEntry {
   };
 }
 
+/**
+ * Loads the index a module provides, bounded like a download: within the time of a fetch,
+ * and no larger than an index file may be.
+ */
+async function loadFromModule(
+  load: ModuleIndexLoad,
+  timeoutMs: number,
+  shutdown: AbortSignal,
+): Promise<JsonAnswer> {
+  const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), shutdown]);
+  const value = await new Promise<unknown>((resolve, reject) => {
+    const stop = () =>
+      reject(new MoonCGError('timeout', `the module did not answer within ${timeoutMs / 1000} s`));
+    signal.addEventListener('abort', stop, { once: true });
+    Promise.resolve()
+      .then(() => load({ signal }))
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener('abort', stop));
+  });
+  let text: string | undefined;
+  try {
+    text = JSON.stringify(value);
+  } catch (error) {
+    throw new MoonCGError('invalid', `it is no JSON: ${errorMessage(error)}`);
+  }
+  if (text === undefined) throw new MoonCGError('invalid', 'the module answered nothing');
+  if (Buffer.byteLength(text) > MAX_INDEX_BYTES) {
+    throw new MoonCGError('invalid', `it is larger than ${MAX_INDEX_BYTES} bytes`);
+  }
+  // A copy of its own: nothing the module keeps can change what was checked.
+  return { status: 'ok', value: JSON.parse(text) };
+}
+
+/** An index a module provides has no address of a file: what it lists is named in full. */
+function relativeProblem(index: RegistryIndex): void {
+  for (const entry of index.entries) {
+    for (const version of entry.versions) {
+      if (version.source.type === 'zip' && !/^https:\/\//i.test(version.source.url)) {
+        throw new MoonCGError(
+          'invalid',
+          `${entry.name} ${version.version}: an index of a module must name https:// addresses, not paths next to it`,
+        );
+      }
+    }
+  }
+}
+
 export interface RegistryOptions {
   readonly dataDir: string;
   readonly store: Pick<SettingsStore, 'get' | 'set'>;
@@ -155,6 +223,13 @@ export interface RegistryOptions {
   readonly logger: Logger;
   /** Where indexes are fetched from, by URL scheme. Defaults to `httpsSource`. */
   readonly sources?: readonly RegistrySource[] | undefined;
+  /**
+   * The private networks the configuration of the server allows indexes on, and whether
+   * plain `http://` may be used for them. Never changed at run time.
+   */
+  readonly privateNetworks?: PrivateNetworks | undefined;
+  /** Called whenever an index was fetched, added or removed: what it lists may have changed. */
+  readonly onChange?: (() => void) | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -174,13 +249,14 @@ export class Registry {
   readonly #shutdown = new AbortController();
   #timer: ReturnType<typeof setInterval> | undefined;
   #refreshing: Promise<void> | undefined;
+  #started = false;
   readonly #now: () => number;
 
   constructor(options: RegistryOptions) {
     this.#options = options;
     this.#log = options.logger.child('registry');
     this.#dir = join(options.dataDir, 'registry');
-    this.#sources = options.sources ?? [httpsSource];
+    this.#sources = options.sources ?? [httpsSourceFor(options.privateNetworks)];
     this.#now = options.now ?? Date.now;
   }
 
@@ -196,7 +272,7 @@ export class Registry {
    */
   async start(): Promise<void> {
     for (const url of this.#options.configured) {
-      const problem = registryUrlProblem(url);
+      const problem = this.#urlProblem(url);
       if (problem !== undefined) {
         this.#log.error(`The registry index ${withoutCredentials(url)} is not used: ${problem}`);
         continue;
@@ -210,11 +286,11 @@ export class Registry {
       this.#log.error(`The added registry indexes could not be read: ${errorMessage(error)}`);
     }
     for (const url of Array.isArray(added) ? added : []) {
-      if (typeof url === 'string' && registryUrlProblem(url) === undefined)
-        this.#hold(url, 'added');
+      if (typeof url === 'string' && this.#urlProblem(url) === undefined) this.#hold(url, 'added');
     }
     for (const [id, held] of this.#held) held.copy = await this.#readCopy(id, held.url);
     for (const held of this.#held.values()) if (held.copy) held.status = 'stale';
+    this.#started = true;
     this.#refreshing = this.refresh();
     this.#timer = setInterval(() => void this.refresh(), this.refreshMs);
     this.#timer.unref();
@@ -268,7 +344,7 @@ export class Registry {
   async add(url: string, by: string): Promise<IndexState> {
     if (typeof url !== 'string') throw new MoonCGError('bad_request', '"url" must be an address');
     const trimmed = url.trim();
-    const problem = registryUrlProblem(trimmed);
+    const problem = this.#urlProblem(trimmed);
     if (problem !== undefined) throw new MoonCGError('invalid', problem);
     const id = indexId(trimmed);
     if (this.#held.has(id)) throw new MoonCGError('conflict', 'This index is listed already');
@@ -288,10 +364,40 @@ export class Registry {
     return this.#state(id, held);
   }
 
+  /**
+   * Takes up the index a module provides, as `module://<module>/<id>`, and loads it now if the
+   * indexes were taken up already. Answers what takes it away again, with its copy.
+   */
+  provide(module: string, id: string, load: ModuleIndexLoad): () => void {
+    const url = `${MODULE_INDEX_SCHEME}//${module}/${id}`;
+    const key = indexId(url);
+    if (this.#held.has(key)) {
+      throw new MoonCGError('conflict', `The index ${url} is provided already`);
+    }
+    if (this.#held.size >= MAX_INDEXES) {
+      throw new MoonCGError('conflict', `There may be at most ${MAX_INDEXES} indexes`);
+    }
+    const held: Held = { url, origin: 'module', module: { name: module, load }, status: 'pending' };
+    this.#held.set(key, held);
+    if (this.#started) void this.#fetch(key);
+    return () => {
+      if (this.#held.get(key) !== held) return;
+      this.#held.delete(key);
+      void this.#removeCopy(key);
+      this.#options.onChange?.();
+    };
+  }
+
   /** Removes an added index and its copy. A configured one is changed in the configuration. */
   async remove(id: string, by: string): Promise<void> {
     const held = this.#held.get(id);
     if (!held) throw new MoonCGError('not_found', 'There is no such index');
+    if (held.origin === 'module') {
+      throw new MoonCGError(
+        'conflict',
+        `This index is provided by the module "${held.module?.name}"; disable the module to remove it`,
+      );
+    }
     if (held.origin === 'config') {
       throw new MoonCGError(
         'conflict',
@@ -302,12 +408,18 @@ export class Registry {
     await this.#saveAdded();
     // A fetch that runs keeps no copy once it sees the index gone; this one goes now.
     await this.#removeCopy(id);
+    this.#options.onChange?.();
     this.#log.info(`${by} removed the registry index ${withoutCredentials(held.url)}`);
   }
 
   /** The address of an index as it was given, credentials included, for fetching from it. */
   address(id: string): string | undefined {
     return this.#held.get(id)?.url;
+  }
+
+  /** Why an address cannot be an index here: plain `http://` elsewhere only where allowed. */
+  #urlProblem(url: string): string | undefined {
+    return indexUrlProblem(url, this.#options.privateNetworks);
   }
 
   #hold(url: string, origin: IndexState['origin']): void {
@@ -331,6 +443,7 @@ export class Registry {
       id,
       url: withoutCredentials(held.url),
       origin: held.origin,
+      ...(held.module === undefined ? {} : { module: held.module.name }),
       status: held.status,
       ...(held.error === undefined ? {} : { error: held.error }),
       ...(copy?.index.title === undefined ? {} : { title: copy.index.title }),
@@ -352,6 +465,7 @@ export class Registry {
     if (!held) return Promise.resolve();
     held.running ??= this.#load(id, held).finally(() => {
       held.running = undefined;
+      if (!this.#shutdown.signal.aborted) this.#options.onChange?.();
     });
     return held.running;
   }
@@ -363,15 +477,17 @@ export class Registry {
     const source = this.#sources.find((candidate) => candidate.schemes.includes(scheme));
     held.checkedAt = new Date(this.#now()).toISOString();
     try {
-      if (!source) throw new MoonCGError('invalid', `No source can fetch ${scheme} addresses`);
-      const answer = await source.load(
-        held.url,
-        { etag: held.copy?.etag, lastModified: held.copy?.lastModified },
-        {
-          timeoutMs: this.#options.timeoutMs ?? REGISTRY_TIMEOUT_MS,
-          signal: this.#shutdown.signal,
-        },
-      );
+      const timeoutMs = this.#options.timeoutMs ?? REGISTRY_TIMEOUT_MS;
+      if (!held.module && !source) {
+        throw new MoonCGError('invalid', `No source can fetch ${scheme} addresses`);
+      }
+      const answer: JsonAnswer = held.module
+        ? await loadFromModule(held.module.load, timeoutMs, this.#shutdown.signal)
+        : await (source as RegistrySource).load(
+            held.url,
+            { etag: held.copy?.etag, lastModified: held.copy?.lastModified },
+            { timeoutMs, signal: this.#shutdown.signal },
+          );
       if (answer.status === 'not-modified' && held.copy) {
         held.status = 'ok';
         held.error = undefined;
@@ -390,6 +506,7 @@ export class Registry {
             .join('; ')}`,
         );
       }
+      if (held.module) relativeProblem(parsed.index);
       const copy: Cached = {
         fetchedAt: new Date(this.#now()).toISOString(),
         ...(answer.etag === undefined ? {} : { etag: answer.etag }),

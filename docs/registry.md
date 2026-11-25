@@ -133,9 +133,81 @@ An index must be on the internet or on this machine: the server does not connect
 shared, link-local or unique-local networks (`10.0.0.0/8`, `172.16.0.0/12`,
 `192.168.0.0/16`, `100.64.0.0/10`, `169.254.0.0/16`, `fc00::/7`, `fe80::/10`), nor to
 unspecified, multicast or reserved addresses, for an index, an archive it lists or a redirect.
+IPv6 addresses that carry an IPv4 address count as what they carry or as internal: an address
+of the well-known NAT64 prefix `64:ff9b::/96` is checked as its IPv4 address (so
+`64:ff9b::a00:1` is `10.0.0.1`, while a NAT64 address of a host on the internet is taken, as
+on an IPv6-only network it must be), and local-use NAT64 (`64:ff9b:1::/48`) and 6to4
+(`2002::/16`) are internal as a whole.
 A name is checked for every address it resolves to at the moment the connection is made, so a
 name pointed elsewhere after a check is caught too. An index on a company network is
-therefore not reachable; serve it on the internet with credentials, or on this machine.
+reachable only when the configuration of the server allows its network (below).
+
+### Indexes and sources on a private network
+
+The configuration of the server, and nothing else, can open hosts and networks of a private
+network for indexes, the archives they list, ZIP sources by address and Git repositories:
+
+```json
+{
+  "registryAllowPrivate": ["git.studio.internal", "10.20.0.0/16", "fd00:1234::/32"],
+  "registryAllowPrivateHttp": false
+}
+```
+
+or `--registry-allow-private <host|network>` (repeatable) and `--registry-allow-private-http`,
+or `MOONCG_REGISTRY_ALLOW_PRIVATE` (comma-separated) and `MOONCG_REGISTRY_ALLOW_PRIVATE_HTTP=1`.
+It cannot be changed through the API or the dashboard: it widens what the server reaches,
+which is a decision about the machine and its network.
+
+- An entry is a host name (exactly that name: `git.studio.internal`, not its subdomains), an
+  address, or a network in CIDR form. A network must lie inside `10.0.0.0/8`,
+  `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` or `fc00::/7`; anything else, such as a
+  public network, this machine, a link-local address (where cloud metadata services answer),
+  multicast or `localhost`, is refused when the server starts.
+- **Keep entries narrow**: name the hosts, or the smallest networks, that really serve
+  indexes, archives or repositories, not a whole range such as `10.0.0.0/8`. An entry opens
+  everything in it to whoever may add an index or install from an address. `100.64.0.0/10`
+  in particular is shared address space (carrier-grade NAT, VPNs such as Tailscale) and
+  holds services of cloud providers: Alibaba Cloud answers its instance metadata, with the
+  credentials of the machine, at `100.100.100.200`. Allowing `100.64.0.0/10` as a whole opens
+  that too.
+- A private address is then asked when it lies in an allowed network, or when it is what an
+  allowed host name resolves to. An allowed name that resolves to a link-local, reserved or
+  loopback address is refused all the same; it is checked when the connection is made, as
+  ever.
+- **Over `https://`** only, unless `registryAllowPrivateHttp` is on: then plain `http://` is
+  taken for the allowed hosts and networks too, and a connection over it goes only to an
+  allowed private address (an allowed name that resolves to the internet is refused over
+  `http://`). Credentials in the address of such an index would then cross the network in
+  plain text; prefer `https://`.
+- An index on a private host may list archives next to it, and `https://` addresses; an
+  absolute `http://` address in an index is still taken only from an index on this machine.
+- This machine stays as it was: only an index on this machine may point to it.
+
+The setting is read once, at start.
+
+**Git for Windows and a private certificate authority.** Git for Windows installs with
+`http.sslBackend=openssl`, and that backend cannot be combined with the pin the server gives
+git: git says so, and the server runs the fetch again with the backend git names, Schannel,
+which checks certificates against the certificate store of Windows and, by default, asks
+whether a certificate was revoked. A repository whose certificate comes from a private
+certificate authority can then fail although it worked in a shell: the authority is not in the
+Windows store, or its revocation list cannot be reached from the server
+(`CRYPT_E_NO_REVOCATION_CHECK`, `CRYPT_E_REVOCATION_OFFLINE`). What the administrator can do,
+in the Git configuration of the machine or of the server's account:
+
+- Fix the backend: `git config --system http.sslBackend schannel` (or choose "Use the native
+  Windows Secure Channel library" when installing Git for Windows). Then the server runs git
+  once, with that backend, and the settings below apply from the start.
+- Put the private authority into the Windows certificate store (Trusted Root Certification
+  Authorities) of the server's account or of the machine.
+- Make its revocation list reachable from the server. Only where that cannot be done:
+  `http.schannelCheckRevoke false`, best only for that host
+  (`git config --system http.https://git.studio.internal/.schannelCheckRevoke false`), which
+  gives up the revocation check there.
+
+`http.sslCAInfo` (a CA file for OpenSSL) does not apply once Schannel is used, unless
+`http.schannelUseSSLCAInfo` is set as well.
 
 A private index can carry credentials in its address, such as
 `https://reader:token@example.org/index.json`. They are sent as an `Authorization` header
@@ -207,6 +279,14 @@ source, the index and that entries of an index are not checked by MoonCG. Everyt
 module: the engine range, the dependencies, npm and its trust opt-in, the On Air lock for an
 update, a module staying disabled until it is enabled.
 
+## Indexes a module provides
+
+A module can provide an index of its own, for instance read from a private API, with
+`ctx.registry.registerSource`. It shows as `module://<module>/<id>` with the origin _module_,
+is checked like any index, must name archives by `https://` address, and is gone with the
+module. The server downloads what it lists itself, through the same checks. See
+[modules.md](modules.md#registry-indexes-of-a-module).
+
 ## How updates are found
 
 Updates are matched by **where something was installed from**, not by its name. When a bundle
@@ -225,7 +305,15 @@ address or another index offers it nothing: no hint and no one-click update, and
 bundle to an index, remove it and install it from the catalog.
 
 The hints show as **Update available** on the Bundles and Modules pages and in the catalog,
-and in `mooncg bundle outdated` / `module outdated`. **Update to x.y.z** stages that version as
+and in `mooncg bundle outdated` / `module outdated`. The pages get them live: the server keeps
+them in the replicants `system:updates.bundles` and `system:updates.modules`
+(`{ updates, revision }`), read with `system:bundles.manage` and `system:modules.manage`
+respectively, and works them out again whenever an index was fetched, added or removed and
+whenever something was installed, updated or removed. Changes that come close together are
+taken as one (after 100 ms of quiet, and at least every 2 s however steadily they come), and
+`revision` counts up only when the hints of that kind, the entries of the indexes or what is
+installed really changed, not on every progress of a job. A badge appears without reloading
+the page, and the catalog reads its entries again. `GET /api/v1/registry/updates` stays. **Update to x.y.z** stages that version as
 an update of the installed one; it is put in place like every update, with a backup and a
 rollback, and blocked while On Air unless overridden. `mooncg bundle update <name>` without a
 source takes the newer version from the index it was installed from, also when other indexes
@@ -287,14 +375,21 @@ staged as a `zip` path instead.
   controls the checksum.
 - **Git commit pinning** binds a version to one commit: a tag that is moved later is refused.
   An index must name the commit of every Git version.
-- Only `https://` (and `http://` on this machine, for an index on this machine) is fetched,
-  never an internal address, redirects are limited and checked again, every download is
+- Only `https://` (and `http://` on this machine, for an index on this machine, or on a
+  private network the configuration allows it for) is fetched, never an internal address the
+  configuration does not allow, redirects are limited and checked again, every download is
   bounded in size and time, and credentials appear in no message.
 - The network checks are done by the server itself, with `node:http` and `node:https` and a
   resolver of its own that checks every address a name resolves to when it connects; a
-  connection is never reused across requests. Git sources are fetched by `git`, which resolves
-  names itself: for them only what the address says is checked (`https://`, not this machine
-  for an index elsewhere), not what a name resolves to.
+  connection is never reused across requests.
+- Git sources are fetched by `git`, which resolves names itself. So the server resolves the
+  host of a Git address first, by the same rules (never an internal address unless its private
+  network is allowed; this machine only for what an index on this machine lists), and then pins
+  git to the addresses it checked with `-c http.curloptResolve=<host>:<port>:<addresses>`, and
+  `-c http.followRedirects=false`, so that a redirect does not lead to a host that was not
+  checked. Git older than 2.37, which would ignore the pin, is refused for `https://`; no proxy
+  is used; a `url.*.insteadOf` rewrite is checked where it leads. See
+  [bundles.md](bundles.md#git) for what remains: SSH is checked, not pinned.
 - **Versions** follow the semver.org grammar strictly, so a list of versions sorts one way only
   and no version hides an update. The catalog never goes back a version.
 - An index never makes the server fetch anything but the index itself, except when an
@@ -304,8 +399,4 @@ staged as a `zip` path instead.
 
 ## Not there yet
 
-- Modules cannot register other kinds of index sources yet: the server has a small
-  `RegistrySource` interface for it, but `ModuleContext` offers no `registry.registerSource`.
 - No signatures of indexes or archives; no public MoonCG index.
-- No live push of update hints: the pages read them when they are opened and after a change.
-- No index on a private network (see above), and no setting to allow one.

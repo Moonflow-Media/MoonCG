@@ -21,3 +21,6 @@ handoff/
 .atl/
 .claude/
 
+
+# Local CodeGraph index
+.codegraph/

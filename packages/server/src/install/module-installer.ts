@@ -21,6 +21,7 @@ import { engineProblem } from '../bundles/dependencies.js';
 import { privateRoots, publicError } from '../bundles/errors.js';
 import { errorMessage, type Logger } from '../kernel/logger.js';
 import { type ModuleManager, readModuleManifest } from '../modules/manager.js';
+import type { PrivateNetworks } from '../registry/https.js';
 import { fetchSource, receiveUpload, type StageSource, sourceProblem } from './fetch.js';
 import {
   DEFAULT_INSTALL_LIMITS,
@@ -127,7 +128,12 @@ export interface ModuleInstallerOptions {
    * was installed from it. Without it, that is fetched as an address of its own.
    */
   readonly indexAddress?: ((id: string) => string | undefined) | undefined;
-  readonly git?: Pick<GitOptions, 'allowFileUrls' | 'command' | 'env'> | undefined;
+  readonly git?: Pick<GitOptions, 'allowFileUrls' | 'command' | 'env' | 'resolve'> | undefined;
+  /**
+   * The private networks the configuration of the server allows sources on, and whether
+   * plain `http://` may be used for them.
+   */
+  readonly privateNetworks?: PrivateNetworks | undefined;
   /** Deletes what a module stored: its configuration. */
   readonly purge?: ((module: string) => Promise<void>) | undefined;
   readonly now?: (() => number) | undefined;
@@ -234,7 +240,12 @@ export class ModuleInstaller {
       const { source, target, by, catalog } = request;
       const trusted = request.scripts === true;
       if (target !== undefined) this.#replaceable(target);
-      const problem = sourceProblem(source, 'module', this.#options.git?.allowFileUrls === true);
+      const problem = sourceProblem(
+        source,
+        'module',
+        this.#options.git?.allowFileUrls === true,
+        this.#options.privateNetworks,
+      );
       if (problem !== undefined) throw refuse(problem);
       this.#assertRoom();
 
@@ -266,6 +277,7 @@ export class ModuleInstaller {
             timeoutMs: this.#timeoutMs,
             signal: this.#shutdown.signal,
             git: this.#options.git,
+            privateNetworks: this.#options.privateNetworks,
             forbidden: [this.#options.modulesDir, this.#options.bundlesDir, this.#options.dataDir],
             noun: 'module',
           });

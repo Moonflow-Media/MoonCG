@@ -56,8 +56,54 @@ export interface ModuleContext {
      */
     define(name: string, description: string): string;
   };
+  readonly registry: {
+    /**
+     * Adds a registry index that the module provides itself, such as one read from a private
+     * API. It is listed as `module://<module>/<id>` beside the other indexes and loaded
+     * whenever they are. What `load` answers is checked as any index is, and installing from
+     * it follows every rule of the catalog: the server downloads what an entry names itself,
+     * through its own checks, never through the module. Its entries must name `https://`
+     * addresses; paths next to the index and this machine are refused. Throws when the id is
+     * taken or cannot be one.
+     */
+    registerSource(source: ModuleRegistrySource): void;
+  };
+  readonly dashboard: {
+    /**
+     * Adds a page to the navigation of the dashboard, for those who hold `permission`. It is a
+     * link to a `GET` route of the module (`/m/<module><path>`), which the module registers
+     * with `http.register` and which answers with the same policy as every module route. The
+     * page opens in a tab of its own, apart from the dashboard. Throws when the id is taken,
+     * the path has parameters or the permission is neither the module's own nor a system one.
+     */
+    registerPage(page: ModulePage): void;
+  };
   /** Runs `dispose` when the module stops, last registered first. */
   onDispose(dispose: ModuleDispose): void;
+}
+
+/** A registry index a module provides. */
+export interface ModuleRegistrySource {
+  /** Part of its address, `module://<module>/<id>`: lowercase letters, digits and dashes. */
+  readonly id: string;
+  /**
+   * Answers the index as JSON (`{ "index": 1, "entries": [...] }`), as a file of an index would
+   * hold it. Bounded by the time and size limits of an index; the signal ends when the server
+   * stops or gives up.
+   */
+  load(options: { readonly signal: AbortSignal }): unknown | Promise<unknown>;
+}
+
+/** A page of a module in the navigation of the dashboard. */
+export interface ModulePage {
+  /** Unique within the module: lowercase letters, digits and dashes. */
+  readonly id: string;
+  /** What the navigation says. At most 60 characters, no control characters. */
+  readonly title: string;
+  /** The path of a `GET` route of the module, such as `/stats`, without parameters. */
+  readonly path: string;
+  /** Who sees it: a permission the module defined, or a system permission. */
+  readonly permission: string;
 }
 
 export interface ModuleLogger {

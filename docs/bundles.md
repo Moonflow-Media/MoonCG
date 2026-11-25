@@ -86,7 +86,7 @@ A bundle is refused at the stage step, with the reason, when
   permissions, panels, dialogs or graphics, and so on),
 - it would make npm do more than fetch packages from the registry, and was not fetched as
   trusted (see [npm dependencies](#npm-dependencies)),
-- `engine.mooncg` does not allow this MoonCG (`engine.mooncg: needs MoonCG >=1.0.0, but this is 0.11.0`),
+- `engine.mooncg` does not allow this MoonCG (`engine.mooncg: needs MoonCG >=1.0.0, but this is 0.12.0`),
 - a bundle it depends on is not installed or has the wrong version, or it would close a
   dependency cycle,
 - a bundle of that name is installed already (install), or its name is not the name of the
@@ -126,10 +126,18 @@ not check what an index lists. See [registry.md](registry.md).
   Git itself is told `GIT_ALLOW_PROTOCOL=https:ssh`, whatever a redirect says.
 - Git is started directly, with the address behind `--`. No shell is involved.
 - The Git configuration of the machine and of the server's account still applies where it
-  says how to reach a host: credential helpers, SSH settings and `url.*.insteadOf` rewrites,
-  so an address can be rewritten by what an administrator of the machine configured. Nothing
-  of it that would run a program applies: hooks (`core.hooksPath`), the file system monitor
-  and filters are switched off for every call.
+  says how to reach a host: credential helpers, SSH settings, TLS settings and
+  `url.*.insteadOf` rewrites, so an address can be rewritten by what an administrator of the
+  machine configured; where a rewrite leads is checked like the address itself (see below).
+  Nothing of it that would run a program applies: hooks (`core.hooksPath`), the file system
+  monitor and filters are switched off for every call. No proxy applies (see below).
+- Git is started without the variables of the server's environment that would undo that:
+  proxies (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, in any case), configuration
+  passed through the environment (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_*`,
+  `GIT_CONFIG_VALUE_*`, `GIT_CONFIG_PARAMETERS`), `GIT_SSL_NO_VERIFY`, `GIT_PROXY_COMMAND`,
+  another repository or work tree (`GIT_DIR`, `GIT_WORK_TREE` and the like) and traces
+  (`GIT_TRACE*`, `GIT_CURL_VERBOSE`), which would print headers with credentials.
+  `GIT_SSH_COMMAND` stays the administrator's, as before; without one, SSH runs in batch mode.
 - No filter runs, whatever `.gitattributes` asks for. Files are checked out as they were
   committed; a file kept in Git LFS comes out as its small pointer file. A bundle that needs
   its LFS files is better installed from a ZIP archive.
@@ -141,8 +149,49 @@ not check what an index lists. See [registry.md](registry.md).
 - Submodules are not fetched. Symbolic links in the repository are checked out as plain files.
 - Git must be installed on the server. Without it the answer says so; a ZIP still works.
 
-The server fetches from whatever host is named, also one only it can reach. Whoever may manage
-bundles can therefore make the server talk to hosts of its network.
+Where Git may connect is held to the rules of the registry (see
+[registry.md](registry.md#indexes-and-sources-on-a-private-network)), for a repository given
+directly and for one an index lists, for bundles and modules alike:
+
+- An IP address written in the address is checked before anything starts: never a private,
+  shared, link-local, unique-local or reserved address, unless the configuration allows its
+  private network (`registryAllowPrivate`), and never this machine, except for a repository an
+  index on this machine lists. A repository on this machine is therefore refused when given
+  directly; install from its folder instead.
+- A host name is resolved by the server before git runs, and every address it resolves to must
+  be allowed by the same rules.
+- For `https://`, git is then pinned to those addresses with
+  `-c http.curloptResolve=<host>:<port>:<addresses>`, so that it does not resolve the name a
+  second time (no DNS rebinding between the check and the connection), and it follows no
+  redirect (`-c http.followRedirects=false`), since a redirect would lead to a host that was
+  not checked. `-c http.curloptResolve=` (empty) comes first, so that no pin of the machine's
+  configuration for the same host applies. A repository that moved must be given by its new
+  address: git's answer is then "the repository answered with a redirect (HTTP 301); give its
+  new address". Git for Windows with `http.sslBackend=openssl` (the default of its installer)
+  refuses that backend once a pin is set and names the one its libcurl has (Schannel); when
+  git itself says so (its own `fatal:` or `error:` line, not a `remote:` line of the server)
+  and the fetch failed, it is run again, still pinned, with that backend, and so with the
+  certificate store of Windows. See
+  [registry.md](registry.md#indexes-and-sources-on-a-private-network) for what that means for
+  a private certificate authority.
+- `http.curloptResolve` needs Git 2.37 or newer, and an older Git ignores it without a word.
+  So the server asks `git --version` once, and refuses an `https://` source with an older Git
+  (or one that does not say its version): "Update Git on the server, or install the bundle
+  from a ZIP archive". `ssh://` and `user@host:path` work with any Git.
+- `url.*.insteadOf` rewrites of the machine's configuration: before fetching, the server asks
+  git what it makes of the address (`git ls-remote --get-url`, in the new, empty repository,
+  so that it reads what the fetch reads). Where a rewrite leads is checked like the address:
+  it must be one of the accepted forms, and its host must be allowed; then it is what git is
+  pinned to.
+- **SSH** (`ssh://`, `user@host:path`) resolves names itself and cannot be pinned this way: the
+  name is checked, but between that check and the connection of ssh its address could change.
+  Use `https://` where that matters.
+- **Proxies are not supported for Git.** A proxy would resolve the name and connect in its own
+  right, and the pin would not apply. So git gets `-c http.proxy=` and none of the proxy
+  variables of the environment, and an address for which the machine's Git configuration
+  names a proxy of its own (`http.<url>.proxy`) is refused. A server that can reach a Git host
+  through a proxy only cannot fetch from it; install the bundle from a ZIP archive instead.
+  Indexes and archives never used a proxy either: the server connects to them directly.
 
 ### ZIP
 

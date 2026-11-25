@@ -81,39 +81,43 @@ never sit behind a proxy or a tunnel, and is never for a show. [docs/development
 
 ## Configuration
 
-| Flag                               | Environment variable                    | Default     | Meaning                                            |
-| ---------------------------------- | --------------------------------------- | ----------- | -------------------------------------------------- |
-| `--port`                           | `MOONCG_PORT`                           | `9090`      | HTTP and WebSocket port                            |
-| `--host`                           | `MOONCG_HOST`                           | `127.0.0.1` | Address to listen on                               |
-| `--bundles-dir`                    | `MOONCG_BUNDLES_DIR`                    | `bundles`   | Folder with one subfolder per bundle               |
-| `--data-dir`                       | `MOONCG_DATA_DIR`                       | `data`      | Folder for what the server stores                  |
-| `--modules-dir`                    | `MOONCG_MODULES_DIR`                    | `modules`   | Folder with one subfolder per module               |
-| `--public-url`                     | `MOONCG_PUBLIC_URL`                     | none        | Origin people reach the server at; external logins |
-| `--allowed-origin`                 | `MOONCG_ALLOWED_ORIGINS`                | none        | Extra origin whose pages may open the WebSocket    |
-| `--extension-memory-mb`            | `MOONCG_EXTENSION_MEMORY_MB`            | `256`       | Heap each bundle extension may use, in MiB         |
-| `--max-body-bytes`                 | `MOONCG_MAX_BODY_BYTES`                 | `1048576`   | Largest request body a bundle HTTP route accepts   |
-| `--asset-max-file-bytes`           | `MOONCG_ASSET_MAX_FILE_BYTES`           | `52428800`  | Largest file that can be uploaded as an asset      |
-| `--asset-quota-bytes`              | `MOONCG_ASSET_QUOTA_BYTES`              | `524288000` | What one asset category of a bundle may hold       |
-| `--asset-max-files`                | `MOONCG_ASSET_MAX_FILES`                | `1000`      | How many files one asset category may hold         |
-| `--bundle-max-archive-bytes`       | `MOONCG_BUNDLE_MAX_ARCHIVE_BYTES`       | `104857600` | Largest ZIP archive a bundle is installed from     |
-| `--bundle-max-unpacked-bytes`      | `MOONCG_BUNDLE_MAX_UNPACKED_BYTES`      | `524288000` | Largest bundle that is installed, unpacked         |
-| `--bundle-max-files`               | `MOONCG_BUNDLE_MAX_FILES`               | `50000`     | Most files and folders a bundle may consist of     |
-| `--bundle-backups-kept`            | `MOONCG_BUNDLE_BACKUPS_KEPT`            | `3`         | Earlier versions kept of each bundle               |
-| `--bundle-install-timeout-ms`      | `MOONCG_BUNDLE_INSTALL_TIMEOUT_MS`      | `300000`    | How long Git, and npm, may each take               |
-| `--bundle-npm-registry`            | `MOONCG_BUNDLE_NPM_REGISTRY`            | npm's own   | Registry for the npm packages of bundles (https)   |
-| `--registry-index`                 | `MOONCG_REGISTRY_INDEXES`               | none        | Registry index for the catalog (https); repeatable |
-| `--registry-refresh-ms`            | `MOONCG_REGISTRY_REFRESH_MS`            | `21600000`  | How often the registry indexes are fetched again   |
-| `--extension-start-timeout-ms`     | `MOONCG_EXTENSION_START_TIMEOUT_MS`     | `10000`     | How long an extension may take to start            |
-| `--extension-heartbeat-timeout-ms` | `MOONCG_EXTENSION_HEARTBEAT_TIMEOUT_MS` | `10000`     | How long a running extension may stay unresponsive |
-| `--secure-cookies`                 | `MOONCG_SECURE_COOKIES`                 | off         | Marks session cookies `Secure` (HTTPS only)        |
-| `--trust-proxy`                    | `MOONCG_TRUST_PROXY`                    | off         | Believes `X-Forwarded-Proto` and `X-Forwarded-For` |
-| `--watch`, `--no-watch`            | `MOONCG_WATCH`                          | off         | Watches the bundle folders and applies changes     |
-| `--dev`                            | none, on purpose                        | off         | Dev mode: watcher, `dev.url`, sign-in on loopback  |
-| `--config`                         | `MOONCG_CONFIG`                         | see below   | The configuration file to read                     |
+| Flag                               | Environment variable                    | Default     | Meaning                                               |
+| ---------------------------------- | --------------------------------------- | ----------- | ----------------------------------------------------- |
+| `--port`                           | `MOONCG_PORT`                           | `9090`      | HTTP and WebSocket port                               |
+| `--host`                           | `MOONCG_HOST`                           | `127.0.0.1` | Address to listen on                                  |
+| `--bundles-dir`                    | `MOONCG_BUNDLES_DIR`                    | `bundles`   | Folder with one subfolder per bundle                  |
+| `--data-dir`                       | `MOONCG_DATA_DIR`                       | `data`      | Folder for what the server stores                     |
+| `--modules-dir`                    | `MOONCG_MODULES_DIR`                    | `modules`   | Folder with one subfolder per module                  |
+| `--public-url`                     | `MOONCG_PUBLIC_URL`                     | none        | Origin people reach the server at; external logins    |
+| `--allowed-origin`                 | `MOONCG_ALLOWED_ORIGINS`                | none        | Extra origin whose pages may open the WebSocket       |
+| `--extension-memory-mb`            | `MOONCG_EXTENSION_MEMORY_MB`            | `256`       | Heap each bundle extension may use, in MiB            |
+| `--max-body-bytes`                 | `MOONCG_MAX_BODY_BYTES`                 | `1048576`   | Largest request body a bundle HTTP route accepts      |
+| `--asset-max-file-bytes`           | `MOONCG_ASSET_MAX_FILE_BYTES`           | `52428800`  | Largest file that can be uploaded as an asset         |
+| `--asset-quota-bytes`              | `MOONCG_ASSET_QUOTA_BYTES`              | `524288000` | What one asset category of a bundle may hold          |
+| `--asset-max-files`                | `MOONCG_ASSET_MAX_FILES`                | `1000`      | How many files one asset category may hold            |
+| `--bundle-max-archive-bytes`       | `MOONCG_BUNDLE_MAX_ARCHIVE_BYTES`       | `104857600` | Largest ZIP archive a bundle is installed from        |
+| `--bundle-max-unpacked-bytes`      | `MOONCG_BUNDLE_MAX_UNPACKED_BYTES`      | `524288000` | Largest bundle that is installed, unpacked            |
+| `--bundle-max-files`               | `MOONCG_BUNDLE_MAX_FILES`               | `50000`     | Most files and folders a bundle may consist of        |
+| `--bundle-backups-kept`            | `MOONCG_BUNDLE_BACKUPS_KEPT`            | `3`         | Earlier versions kept of each bundle                  |
+| `--bundle-install-timeout-ms`      | `MOONCG_BUNDLE_INSTALL_TIMEOUT_MS`      | `300000`    | How long Git, and npm, may each take                  |
+| `--bundle-npm-registry`            | `MOONCG_BUNDLE_NPM_REGISTRY`            | npm's own   | Registry for the npm packages of bundles (https)      |
+| `--registry-index`                 | `MOONCG_REGISTRY_INDEXES`               | none        | Registry index for the catalog (https); repeatable    |
+| `--registry-refresh-ms`            | `MOONCG_REGISTRY_REFRESH_MS`            | `21600000`  | How often the registry indexes are fetched again      |
+| `--registry-allow-private`         | `MOONCG_REGISTRY_ALLOW_PRIVATE`         | none        | Private host or network sources may be on; repeatable |
+| `--registry-allow-private-http`    | `MOONCG_REGISTRY_ALLOW_PRIVATE_HTTP`    | off         | Plain `http://` for those hosts and networks too      |
+| `--extension-start-timeout-ms`     | `MOONCG_EXTENSION_START_TIMEOUT_MS`     | `10000`     | How long an extension may take to start               |
+| `--extension-heartbeat-timeout-ms` | `MOONCG_EXTENSION_HEARTBEAT_TIMEOUT_MS` | `10000`     | How long a running extension may stay unresponsive    |
+| `--secure-cookies`                 | `MOONCG_SECURE_COOKIES`                 | off         | Marks session cookies `Secure` (HTTPS only)           |
+| `--trust-proxy`                    | `MOONCG_TRUST_PROXY`                    | off         | Believes `X-Forwarded-Proto` and `X-Forwarded-For`    |
+| `--watch`, `--no-watch`            | `MOONCG_WATCH`                          | off         | Watches the bundle folders and applies changes        |
+| `--dev`                            | none, on purpose                        | off         | Dev mode: watcher, `dev.url`, sign-in on loopback     |
+| `--config`                         | `MOONCG_CONFIG`                         | see below   | The configuration file to read                        |
 
 Flags win over environment variables. Relative paths resolve against the working directory.
-`--allowed-origin` and `--registry-index` can be repeated; their environment variables take a
-comma-separated list.
+`--allowed-origin`, `--registry-index` and `--registry-allow-private` can be repeated; their
+environment variables take a comma-separated list. See
+[docs/registry.md](docs/registry.md#indexes-and-sources-on-a-private-network) for the private
+networks.
 The switches are on in the environment as `1` or `true`, and each can be turned off on the
 command line with `--no-` in front, such as `--no-watch`. For `watch`, the flag wins over
 `MOONCG_WATCH` (where `0` turns it off), which wins over the file.

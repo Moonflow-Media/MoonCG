@@ -129,6 +129,14 @@ export interface DialogWindow {
   readonly parent: { postMessage(message: unknown, targetOrigin: string): void } | null;
   /** The page's own origin. Messages go to it and are believed from it, and nowhere else. */
   readonly origin: string;
+  /**
+   * In dev mode, for a page of a development server: the origin of the dashboard that frames
+   * it, as the dashboard put it into the address of the frame (`mooncgHost`). Taken only when
+   * both are on this machine, and only when the browser does not say another frames it.
+   */
+  readonly host?: string | undefined;
+  /** The origins of the frames around the page, where the browser tells them. */
+  readonly ancestors?: readonly string[] | undefined;
   addEventListener(
     type: 'message' | 'pagehide',
     listener: (event: { data?: unknown; origin?: string; source?: unknown }) => void,
@@ -140,11 +148,35 @@ export interface DialogOptions {
   readonly initTimeoutMs?: number;
 }
 
+/** The query parameter a dashboard in dev mode names itself by to a page of another origin. */
+export const DIALOG_HOST_PARAMETER = 'mooncgHost';
+
+/** An origin on this machine, over `http:` or `https:`, as the dashboard's `devOriginOf` takes. */
+const LOOPBACK_ORIGIN =
+  /^https?:\/\/(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\])(:\d{1,5})?$/;
+
+/**
+ * The origin of the dashboard a page speaks to: its own, as a page MoonCG serves has. A page
+ * of a development server in dev mode speaks to the origin the dashboard named in the address
+ * of its frame, but only when both are on this machine (dev mode runs nowhere else) and the
+ * browser, where it tells the origins of the frames around a page, says the same.
+ */
+export function dialogHostOrigin(win: DialogWindow): string {
+  const { host, origin, ancestors } = win;
+  if (host === undefined || host === origin) return origin;
+  if (!LOOPBACK_ORIGIN.test(host) || !LOOPBACK_ORIGIN.test(origin)) return origin;
+  if (ancestors !== undefined && ancestors[0] !== host) return origin;
+  return host;
+}
+
 function pageWindow(): DialogWindow | undefined {
   if (typeof window === 'undefined') return undefined;
+  const ancestors = window.location.ancestorOrigins;
   return {
     parent: window.parent === window ? null : window.parent,
     origin: window.location.origin,
+    host: new URLSearchParams(window.location.search).get(DIALOG_HOST_PARAMETER) ?? undefined,
+    ancestors: ancestors === undefined ? undefined : [...ancestors],
     addEventListener: (type, listener) =>
       window.addEventListener(type, listener as (event: Event) => void),
   };
@@ -165,7 +197,9 @@ export function createDialogs(
   let init: ((message: Extract<DialogMessage, { t: 'init' }>) => void) | undefined;
   let listening = false;
 
-  const post = (message: DialogMessage) => parent?.postMessage(message, win?.origin ?? '');
+  /** The dashboard's origin: messages go to it and are believed from it alone, never `*`. */
+  const host = win ? dialogHostOrigin(win) : '';
+  const post = (message: DialogMessage) => parent?.postMessage(message, host);
   const unavailable = () =>
     new MoonCGError('unavailable', 'Dialogs need the dashboard: this page is not shown inside it');
 
@@ -174,7 +208,7 @@ export function createDialogs(
     listening = true;
     win.addEventListener('message', (event) => {
       // Only the dashboard that frames this page is believed, and only from this origin.
-      if (event.source !== parent || event.origin !== win.origin) return;
+      if (event.source !== parent || event.origin !== host) return;
       const message = readDialogMessage(event.data);
       if (message?.t === 'result') {
         pending.get(message.id)?.resolve(message.result);

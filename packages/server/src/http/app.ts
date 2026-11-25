@@ -652,6 +652,11 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
           return {
             ...describeBundle(record),
             ...(sources?.[name] === undefined ? {} : { source: sources[name] }),
+            // In dev mode, where its pages really come from: the dashboard believes the
+            // dialog messages of its panels from that origin, and from no other.
+            ...(options.dev && served?.dev !== undefined
+              ? { devOrigin: new URL(served.dev.url).origin }
+              : {}),
             // The bundles this one needs, by the manifest, so also while it does not run. A
             // bundle the caller is not shown is not named here either, and one that is not
             // installed only to those who may manage bundles: a grant with a wildcard

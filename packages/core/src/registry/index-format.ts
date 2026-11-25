@@ -96,6 +96,8 @@ export function gitRefProblem(ref: unknown): string | undefined {
  * `https://`, or plain `http://` on this machine alone (an index served while developing,
  * where nothing crosses a network). `loopback: false` refuses this machine altogether, for
  * what an index elsewhere lists; `credentials: false` refuses a user name and a password.
+ * `plainHttp` names the other hosts plain `http://` is taken for, as the server's
+ * configuration allows it for hosts of a private network (lowercase, IPv6 in brackets).
  *
  * The address is read twice, by hand and as `fetch` reads it (WHATWG `URL`), and taken only
  * when both agree on the scheme and the host: `URL` reads `\` as `/`, drops tabs and
@@ -104,7 +106,11 @@ export function gitRefProblem(ref: unknown): string | undefined {
  */
 export function registryUrlProblem(
   url: string,
-  options: { readonly credentials?: boolean; readonly loopback?: boolean } = {},
+  options: {
+    readonly credentials?: boolean;
+    readonly loopback?: boolean;
+    readonly plainHttp?: ((host: string) => boolean) | undefined;
+  } = {},
 ): string | undefined {
   if (url.length > MAX_REGISTRY_URL_LENGTH) return 'The address is too long';
   if (CONTROL.test(url) || /\s/.test(url)) {
@@ -133,7 +139,7 @@ export function registryUrlProblem(
   if (local && options.loopback === false) {
     return 'The address must not name this machine: only an index on this machine may list one';
   }
-  if (scheme === 'http' && !local) {
+  if (scheme === 'http' && !local && options.plainHttp?.(host) !== true) {
     return 'The address must start with https://; plain http:// is for this machine only';
   }
   return undefined;

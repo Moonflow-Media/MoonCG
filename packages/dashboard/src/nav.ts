@@ -1,7 +1,7 @@
 import { holds } from './permissions.js';
 
 /** The groups of the navigation, in the order they are shown. */
-export const NAV_GROUPS = ['Workspaces', 'Show', 'Admin', 'System'] as const;
+export const NAV_GROUPS = ['Workspaces', 'Show', 'Admin', 'System', 'Modules'] as const;
 export type NavGroup = (typeof NAV_GROUPS)[number];
 
 /** What a count stands for: something failed, something on air, something to look at. */
@@ -17,6 +17,19 @@ export interface NavItem {
   readonly tone?: NavTone;
   /** What the count counts, in words: `2 failed`. */
   readonly hint?: string;
+  /**
+   * A page a module serves (`module/id`): a link out of the dashboard, opened in a tab of its
+   * own, not a page of the dashboard's router.
+   */
+  readonly modulePage?: string;
+}
+
+/** A page a module added, as the server lists it for the user. */
+export interface ModulePageLink {
+  readonly module: string;
+  readonly id: string;
+  readonly title: string;
+  readonly url: string;
 }
 
 /** What the navigation counts. Whatever is left out or zero shows no count. */
@@ -88,6 +101,7 @@ export function navigation(
   permissions: readonly string[],
   workspaces: readonly string[],
   counts: NavCounts = {},
+  modulePages: readonly ModulePageLink[] = [],
 ): NavItem[] {
   return [
     ...workspaces.map((name) => {
@@ -100,6 +114,15 @@ export function navigation(
     ...PAGES.filter((page) => holds(permissions, page.needs)).map(({ to, label, group, counted }) =>
       withCount({ to, label, group }, counted?.(counts)),
     ),
+    // The server lists only what the user may open, and only below `/m/`.
+    ...modulePages
+      .filter((page) => page.url.startsWith('/m/'))
+      .map((page) => ({
+        to: page.url,
+        label: page.title,
+        group: 'Modules' as const,
+        modulePage: `${page.module}/${page.id}`,
+      })),
   ];
 }
 

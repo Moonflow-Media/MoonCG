@@ -9,6 +9,7 @@ import { describeSource } from '../src/stores/installs.js';
 import { useSession } from '../src/stores/session.js';
 import { BundlesView } from '../src/views/Bundles.js';
 import { CatalogView, catalogTiming } from '../src/views/Catalog.js';
+import { ModulesView } from '../src/views/Modules.js';
 
 type Call = { method: string; path: string; body: unknown };
 const INDEX = { id: 'aaaaaaaaaaaaaaaa', url: 'https://one.example.org/index.json', title: 'One' };
@@ -89,9 +90,18 @@ function signIn(permissions: string[]) {
   useSession().me = { user: { id: 'u1', kind: 'user', name: 'ada' }, roles: [], permissions };
 }
 
+/** What the pages follow live, by replicant name, and a way to push a new value to them. */
+let followed: Map<string, (value: unknown) => void>;
+const push = (name: string, value: unknown) => followed.get(name)?.(value);
+
 beforeEach(() => {
   setActivePinia(createPinia());
   catalogTiming.pollMs = 0;
+  followed = new Map();
+  live.follow = ((name: string, listener: (value: unknown) => void) => {
+    followed.set(name, listener);
+    return () => followed.delete(name);
+  }) as typeof live.follow;
 });
 afterEach(() => {
   document.body.replaceChildren();
@@ -155,6 +165,28 @@ describe('the catalog page', () => {
       },
       { method: 'POST', path: '/api/v1/registry/refresh', body: {} },
     ]);
+  });
+
+  it('names the module that provides an index, which is changed with the module alone', async () => {
+    const { view } = await show(['*'], {
+      'GET /api/v1/registry/indexes': {
+        ...INDEXES,
+        indexes: [
+          {
+            id: 'cccccccccccccccc',
+            url: 'module://catalogue/studio',
+            origin: 'module',
+            module: 'catalogue',
+            status: 'ok',
+            entries: 1,
+          },
+        ],
+      },
+    });
+    const row = view.find('[data-index="cccccccccccccccc"]');
+    expect(row.find('.badge').text()).toBe('module catalogue');
+    expect(row.find('button').exists()).toBe(false);
+    view.unmount();
   });
 
   it('says when the indexes were checked moments ago and may not be checked yet', async () => {
@@ -265,6 +297,99 @@ describe('update hints on the Bundles page', () => {
         body: { kind: 'bundle', index: INDEX.id, name: 'ticker', update: true },
       },
     ]);
+    view.unmount();
+  });
+});
+
+describe('update hints, live', () => {
+  const HINT = {
+    kind: 'bundle',
+    name: 'ticker',
+    installed: '1.0.0',
+    available: '1.1.0',
+    index: INDEX,
+  };
+  const BUNDLES = {
+    canManage: true,
+    backupsKept: 3,
+    bundles: [
+      { name: 'ticker', state: 'running', version: '1.0.0', errors: [], panels: [], graphics: [] },
+    ],
+  };
+
+  it('show on the Bundles page as soon as the server says so, without a reload', async () => {
+    signIn(['*']);
+    serve({
+      'GET /api/v1/bundles': BUNDLES,
+      'GET /api/v1/registry/updates': { updates: [] },
+      'GET /api/v1/bundles/-/backups': { bundles: [] },
+    });
+    const view = mount(BundlesView, { attachTo: document.body });
+    await flushPromises();
+    expect(view.find('[data-badge="update"]').exists()).toBe(false);
+    push('system:updates.bundles', { updates: [HINT], revision: 2 });
+    await flushPromises();
+    expect(view.find('[data-badge="update"]').text()).toBe('Update available: 1.1.0');
+    push('system:updates.bundles', { updates: [], revision: 3 });
+    await flushPromises();
+    expect(view.find('[data-badge="update"]').exists()).toBe(false);
+    view.unmount();
+    expect(followed.has('system:updates.bundles')).toBe(false);
+  });
+
+  it('show on the Modules page for modules, and leave the hints of bundles alone', async () => {
+    signIn(['system:modules.manage']);
+    serve({
+      'GET /api/v1/modules': {
+        modules: [
+          {
+            name: 'greeter',
+            version: '1.0.0',
+            enabled: false,
+            state: 'disabled',
+            builtin: false,
+            internal: false,
+            config: false,
+            providers: [],
+            permissions: [],
+            routes: 0,
+          },
+        ],
+      },
+      'GET /api/v1/registry/updates': { updates: [] },
+    });
+    const view = mount(ModulesView);
+    await flushPromises();
+    // Only the kind the user manages is followed.
+    expect([...followed.keys()]).toEqual(['system:updates.modules']);
+    push('system:updates.modules', {
+      updates: [{ ...HINT, kind: 'module', name: 'greeter' }],
+      revision: 1,
+    });
+    await flushPromises();
+    expect(view.find('[data-module="greeter"] [data-badge="update"]').text()).toBe(
+      'Update available: 1.1.0',
+    );
+    view.unmount();
+  });
+
+  it('bring the catalog up to date when the indexes or what is installed changed', async () => {
+    const { calls, view } = await show();
+    const catalogReads = () =>
+      calls.filter((call) => call.path.startsWith('/api/v1/registry/catalog'));
+    expect(catalogReads()).toHaveLength(1);
+    // The first value is what was there when the page was opened.
+    push('system:updates.bundles', { updates: [], revision: 4 });
+    await flushPromises();
+    expect(catalogReads()).toHaveLength(1);
+    push('system:updates.bundles', { updates: [HINT], revision: 5 });
+    await flushPromises();
+    expect(catalogReads()).toHaveLength(2);
+    // The same news for the other kind is taken once.
+    push('system:updates.modules', { updates: [], revision: 7 });
+    push('system:updates.modules', { updates: [], revision: 8 });
+    await flushPromises();
+    expect(catalogReads().length).toBeGreaterThanOrEqual(3);
     view.unmount();
   });
 });

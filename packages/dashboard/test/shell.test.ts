@@ -138,6 +138,32 @@ describe('the shell', () => {
     view.unmount();
   });
 
+  it('lists the pages of modules the server names for this user, as links that open apart', async () => {
+    const { view, calls } = await show(viewer, {
+      'GET /api/v1/module-pages': {
+        pages: [{ module: 'catalogue', id: 'stats', title: 'Stats', url: '/m/catalogue/stats' }],
+      },
+    });
+    expect(calls).toContain('GET /api/v1/module-pages');
+    const group = view.find('[data-nav-group="Modules"]');
+    expect(group.find('.nav-label').text()).toBe('Modules');
+    const link = group.find('a.nav-item');
+    expect(link.text()).toBe('Stats');
+    expect(link.attributes()).toMatchObject({
+      href: '/m/catalogue/stats',
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      'data-module-page': 'catalogue/stats',
+    });
+    view.unmount();
+  });
+
+  it('shows no module pages when there are none or they cannot be read', async () => {
+    const { view } = await show(admin);
+    expect(view.find('[data-nav-group="Modules"]').exists()).toBe(false);
+    view.unmount();
+  });
+
   it('shows no label of a group that has no entry for this user', async () => {
     const { view } = await show(viewer);
     expect(view.findAll('.nav-label').map((label) => label.text())).toEqual(['Workspaces', 'Show']);

@@ -6,10 +6,11 @@ import {
   isLoopbackHost,
   isLoopbackOrigin,
   isPlainObject,
-  registryUrlProblem,
 } from '@mooncg/core';
 import { DEFAULT_INSTALL_LIMITS } from '../install/files.js';
 import { withoutCredentials } from '../install/git.js';
+import { indexUrlProblem } from '../registry/https.js';
+import { privateEntryProblem, privateNetworks } from '../registry/network.js';
 import { DEFAULT_REGISTRY_REFRESH_MS } from '../registry/registry.js';
 
 /** How long Git and npm may each take while a bundle is installed, unless configured. */
@@ -85,6 +86,16 @@ export interface ServerConfig {
   /** How often the registry indexes are fetched again, in milliseconds. */
   readonly registryRefreshMs: number;
   /**
+   * Hosts (by name) and networks (such as `10.0.0.0/8`) of a private network that indexes,
+   * archives and Git repositories may be fetched from over `https://`. Only private, shared
+   * and unique-local networks can be named; this machine, link-local and other addresses
+   * cannot. Set in the configuration alone, never at run time: it widens what the server
+   * reaches.
+   */
+  readonly registryAllowPrivate: readonly string[];
+  /** Plain `http://` for the hosts and networks of `registryAllowPrivate` too. */
+  readonly registryAllowPrivateHttp: boolean;
+  /**
    * Marks the session cookies `Secure`, so browsers send them over HTTPS only. Turn it on
    * whenever people reach the server through HTTPS.
    */
@@ -153,6 +164,8 @@ const FLAGS = {
   'bundle-npm-registry': { type: 'string' },
   'registry-index': { type: 'string', multiple: true },
   'registry-refresh-ms': { type: 'string' },
+  'registry-allow-private': { type: 'string', multiple: true },
+  'registry-allow-private-http': { type: 'boolean' },
   'allowed-origin': { type: 'string', multiple: true },
   'secure-cookies': { type: 'boolean' },
   'trust-proxy': { type: 'boolean' },
@@ -207,6 +220,8 @@ interface FileValues {
   readonly publicUrl?: string;
   readonly allowedOrigins?: readonly string[];
   readonly registryIndexes?: readonly string[];
+  readonly registryAllowPrivate?: readonly string[];
+  readonly registryAllowPrivateHttp?: boolean;
   readonly watch?: boolean;
 }
 
@@ -227,6 +242,8 @@ function fileValues(file: ConfigFile | undefined): FileValues {
     'publicUrl',
     'allowedOrigins',
     'registryIndexes',
+    'registryAllowPrivate',
+    'registryAllowPrivateHttp',
     'watch',
   ];
   for (const key of Object.keys(values)) {
@@ -245,6 +262,19 @@ function fileValues(file: ConfigFile | undefined): FileValues {
     return resolve(file.dir, value);
   };
   const { port, host, allowedOrigins, watch, publicUrl, registryIndexes } = values;
+  const { registryAllowPrivate, registryAllowPrivateHttp } = values;
+  if (
+    registryAllowPrivate !== undefined &&
+    (!Array.isArray(registryAllowPrivate) ||
+      !registryAllowPrivate.every((item) => typeof item === 'string'))
+  ) {
+    throw wrong(
+      '"registryAllowPrivate" must be a list of host names and networks such as "git.example.internal" or "10.0.0.0/8"',
+    );
+  }
+  if (registryAllowPrivateHttp !== undefined && typeof registryAllowPrivateHttp !== 'boolean') {
+    throw wrong('"registryAllowPrivateHttp" must be true or false');
+  }
   if (
     registryIndexes !== undefined &&
     (!Array.isArray(registryIndexes) || !registryIndexes.every((item) => typeof item === 'string'))
@@ -293,6 +323,10 @@ function fileValues(file: ConfigFile | undefined): FileValues {
     ...(publicUrl === undefined ? {} : { publicUrl }),
     ...(allowedOrigins === undefined ? {} : { allowedOrigins: allowedOrigins as string[] }),
     ...(registryIndexes === undefined ? {} : { registryIndexes: registryIndexes as string[] }),
+    ...(registryAllowPrivate === undefined
+      ? {}
+      : { registryAllowPrivate: registryAllowPrivate as string[] }),
+    ...(registryAllowPrivateHttp === undefined ? {} : { registryAllowPrivateHttp }),
     ...(watch === undefined ? {} : { watch }),
   };
 }
@@ -300,7 +334,8 @@ function fileValues(file: ConfigFile | undefined): FileValues {
 /**
  * Builds the configuration from four places, the earlier one winning: command line flags,
  * environment variables, the configuration file (`port`, `host`, `dataDir`, `bundlesDir`,
- * `modulesDir`, `publicUrl`, `allowedOrigins`, `registryIndexes`, `watch`; see `readConfigFile`) and the defaults. `--dev` turns dev mode
+ * `modulesDir`, `publicUrl`, `allowedOrigins`, `registryIndexes`, `registryAllowPrivate`,
+ * `registryAllowPrivateHttp`, `watch`; see `readConfigFile`) and the defaults. `--dev` turns dev mode
  * on and exists as a flag only; `--watch` (`MOONCG_WATCH`) turns on the watcher alone, and
  * `--no-watch` (`MOONCG_WATCH=0`) turns it off whatever the later places say.
  *
@@ -309,9 +344,9 @@ function fileValues(file: ConfigFile | undefined): FileValues {
  * `--max-body-bytes`, `--asset-max-file-bytes`, `--asset-quota-bytes`, `--asset-max-files`,
  * `--bundle-max-archive-bytes`, `--bundle-max-unpacked-bytes`, `--bundle-max-files`,
  * `--bundle-backups-kept`, `--bundle-install-timeout-ms`, `--bundle-npm-registry`, `--registry-refresh-ms`,
- * repeatable `--allowed-origin` and `--registry-index` (`MOONCG_REGISTRY_INDEXES`, a
- * comma-separated list), and the switches `--secure-cookies` and
- * `--trust-proxy`) wins over its environment variable: the flag in capitals with `MOONCG_` in
+ * repeatable `--allowed-origin`, `--registry-index` (`MOONCG_REGISTRY_INDEXES`, a
+ * comma-separated list) and `--registry-allow-private` (`MOONCG_REGISTRY_ALLOW_PRIVATE`), and
+ * the switches `--secure-cookies`, `--trust-proxy` and `--registry-allow-private-http`) wins over its environment variable: the flag in capitals with `MOONCG_` in
  * front and underscores for dashes, such as `MOONCG_DATA_DIR`, and `MOONCG_ALLOWED_ORIGINS` as
  * a comma-separated list. A switch is on in the environment as `1` or `true`, and can be
  * turned off on the command line with `--no-` in front. That wins over the default.
@@ -336,6 +371,21 @@ export function loadConfig({ argv, env, cwd, file }: ConfigSources): ServerConfi
   // A variable that is set says so either way: `MOONCG_WATCH=0` turns off what the file
   // turns on. One that is empty is not set.
   const watchFromEnv = env.MOONCG_WATCH ? on(env.MOONCG_WATCH) : undefined;
+  const registryAllowPrivate = parsePrivate(
+    values['registry-allow-private'] ??
+      env.MOONCG_REGISTRY_ALLOW_PRIVATE?.split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== '') ??
+      fromFile.registryAllowPrivate ??
+      [],
+  );
+  const registryAllowPrivateHttp =
+    values['registry-allow-private-http'] ??
+    (env.MOONCG_REGISTRY_ALLOW_PRIVATE_HTTP
+      ? on(env.MOONCG_REGISTRY_ALLOW_PRIVATE_HTTP)
+      : undefined) ??
+    fromFile.registryAllowPrivateHttp ??
+    false;
   return {
     dev,
     watch: dev || (values.watch ?? watchFromEnv ?? fromFile.watch ?? false),
@@ -426,6 +476,7 @@ export function loadConfig({ argv, env, cwd, file }: ConfigSources): ServerConfi
         env.MOONCG_REGISTRY_INDEXES?.split(',').filter((url) => url.trim() !== '') ??
         fromFile.registryIndexes ??
         [],
+      privateNetworks(registryAllowPrivate, registryAllowPrivateHttp),
     ),
     registryRefreshMs: parsePositive(
       'registry refresh interval',
@@ -433,16 +484,33 @@ export function loadConfig({ argv, env, cwd, file }: ConfigSources): ServerConfi
         env.MOONCG_REGISTRY_REFRESH_MS ??
         String(DEFAULT_REGISTRY_REFRESH_MS),
     ),
+    registryAllowPrivate,
+    registryAllowPrivateHttp,
     secureCookies: values['secure-cookies'] ?? on(env.MOONCG_SECURE_COOKIES),
     trustProxy,
   };
 }
 
+/** The private hosts and networks, each checked; an unusable one stops the start. */
+function parsePrivate(entries: readonly string[]): string[] {
+  return entries.map((given) => {
+    const entry = given.trim();
+    const problem = privateEntryProblem(entry);
+    if (problem !== undefined) {
+      throw new Error(`Invalid --registry-allow-private entry: ${problem}`);
+    }
+    return entry;
+  });
+}
+
 /** The registry indexes, each checked; an unusable one stops the start with the reason. */
-function parseIndexes(urls: readonly string[]): string[] {
+function parseIndexes(
+  urls: readonly string[],
+  access: ReturnType<typeof privateNetworks>,
+): string[] {
   return urls.map((given) => {
     const url = given.trim();
-    const problem = registryUrlProblem(url);
+    const problem = indexUrlProblem(url, access);
     if (problem !== undefined) {
       throw new Error(`The registry index "${withoutCredentials(url)}" cannot be used: ${problem}`);
     }

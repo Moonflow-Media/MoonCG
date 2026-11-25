@@ -13,7 +13,7 @@ import { AssetStore } from './assets/store.js';
 import { type Auth, createAuth } from './auth/auth.js';
 import type { ScryptParams } from './auth/password.js';
 import type { BundleRecord } from './bundles/bundles.js';
-import { BundleManager, type OnAirOverride } from './bundles/manager.js';
+import { BundleManager, type OnAirOverride, REVISION_REPLICANT } from './bundles/manager.js';
 import { BundleConfigs, scrubbingLogger } from './config/bundle-config.js';
 import { OnAirLock } from './dev/on-air.js';
 import { ConnectedPages } from './dev/pages.js';
@@ -30,8 +30,8 @@ import { createIdentify, type RequestIdentity, type ResolvePrincipal } from './h
 import { devOrigins } from './http/origin.js';
 import { attachWebSocket } from './http/ws.js';
 import { DEFAULT_INSTALL_LIMITS } from './install/files.js';
-import { BundleInstaller } from './install/installer.js';
-import { ModuleInstaller } from './install/module-installer.js';
+import { BundleInstaller, INSTALLS_REPLICANT } from './install/installer.js';
+import { MODULE_INSTALLS_REPLICANT, ModuleInstaller } from './install/module-installer.js';
 import type { NpmInstall } from './install/npm.js';
 import type { PublicSource } from './install/sources.js';
 import { devModeProblem, type ServerConfig } from './kernel/config.js';
@@ -49,7 +49,10 @@ import { ExternalLogins } from './modules/external-login.js';
 import { type BuiltinModule, ModuleManager } from './modules/manager.js';
 import { ProviderRegistry } from './modules/providers.js';
 import { SelfLinking } from './modules/self-linking.js';
+import { updates } from './registry/catalog.js';
+import { privateNetworks } from './registry/network.js';
 import { Registry } from './registry/registry.js';
+import { UpdateHints } from './registry/updates.js';
 import { createPersistence } from './replicants/persistence.js';
 import { openSqliteStorage, type Storage } from './storage/replicant-store.js';
 
@@ -379,16 +382,26 @@ export async function startServer(
     applyDefaults();
     // The registry indexes, taken up below. The installers ask it for the address of an
     // index, credentials included, when they fetch again what was installed from it.
+    // Private networks the configuration opens for indexes and sources; checked when it was read.
+    const privateAccess = privateNetworks(
+      config.registryAllowPrivate,
+      config.registryAllowPrivateHttp,
+    );
     const catalogRegistry = new Registry({
       dataDir: config.dataDir,
       store: storage.settings,
       configured: config.registryIndexes,
       refreshMs: config.registryRefreshMs,
+      privateNetworks: privateAccess,
+      // Bound below, once the update hints are there.
+      onChange: () => hints?.changed(),
       logger,
     });
+    let hints: UpdateHints | undefined;
     const indexAddress = (id: string) => catalogRegistry.address(id);
     const installer = new BundleInstaller({
       indexAddress,
+      privateNetworks: privateAccess,
       dataDir: config.dataDir,
       bundlesDir: config.bundlesDir,
       manager,
@@ -464,11 +477,14 @@ export async function startServer(
       logger,
       mooncgVersion: MOONCG_VERSION,
       setupTimeoutMs: options.moduleSetupTimeoutMs,
+      // Indexes modules provide are listed beside the others, and checked like them.
+      indexSources: catalogRegistry,
     });
     lifecycle.add('modules', () => modules.close());
     await modules.load();
     const moduleInstaller = new ModuleInstaller({
       indexAddress,
+      privateNetworks: privateAccess,
       dataDir: config.dataDir,
       modulesDir: config.modulesDir,
       bundlesDir: config.bundlesDir,
@@ -520,6 +536,34 @@ export async function startServer(
         module: of(modules.list(), moduleSources),
       };
     };
+
+    // The update hints, live: worked out again when an index was fetched and when something
+    // was installed, updated or removed (the installers' jobs, and every change of a bundle).
+    const liveHints = new UpdateHints({
+      registry,
+      compute: async () => {
+        const entries = catalogRegistry.entries();
+        const installed = await installedItems();
+        return {
+          hints: updates(entries, installed, MOONCG_VERSION),
+          // What the catalog shows besides the hints: when it changed, the catalog reads it
+          // again, also when the hints stayed the same.
+          basis: { entries, bundle: [...installed.bundle], module: [...installed.module] },
+        };
+      },
+      logger,
+    });
+    hints = liveHints;
+    lifecycle.add('update hints', () => liveHints.close());
+    for (const name of [INSTALLS_REPLICANT, MODULE_INSTALLS_REPLICANT, REVISION_REPLICANT]) {
+      const watched = registry.get(`${SYSTEM_BUNDLE}:${name}`)?.replicant;
+      if (watched)
+        lifecycle.add(
+          `update hints of ${name}`,
+          watched.onCommit(() => liveHints.changed()),
+        );
+    }
+    void liveHints.refresh();
 
     const app = await createApp({
       bundles: () => manager.list(),

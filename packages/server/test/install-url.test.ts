@@ -10,6 +10,7 @@ import { fetchSource, sourceProblem } from '../src/install/fetch.js';
 import { DEFAULT_INSTALL_LIMITS } from '../src/install/files.js';
 import { parseCatalogOrigin } from '../src/install/installer.js';
 import { publicSource, refetchable } from '../src/install/sources.js';
+import { privateNetworks } from '../src/registry/network.js';
 import { bytes, type HttpFixture, startHttpFixture } from './http-fixture.js';
 import { zipOf } from './zip-writer.js';
 
@@ -211,5 +212,89 @@ describe('parseCatalogOrigin', () => {
     expect(parseCatalogOrigin({ ...origin, kind: 'theme' })).toBeUndefined();
     expect(parseCatalogOrigin({ ...origin, name: 'x'.repeat(300) })).toBeUndefined();
     expect(parseCatalogOrigin('board')).toBeUndefined();
+  });
+});
+
+describe('where a source may lead, with the configuration of private networks', () => {
+  const sha = 'a'.repeat(64);
+  const access = privateNetworks(['10.20.0.0/16', 'git.corp.example'], false);
+  const withHttp = privateNetworks(['10.20.0.0/16'], true);
+
+  it('refuses an internal address written in a Git address before anything is started', () => {
+    expect(sourceProblem({ type: 'git', url: 'https://10.20.0.5/o/r.git' }, 'bundle')).toMatch(
+      /internal/,
+    );
+    expect(sourceProblem({ type: 'git', url: 'git@[fd00::1]:o/r.git' }, 'bundle')).toBeDefined();
+    expect(sourceProblem({ type: 'git', url: 'ssh://git@127.0.0.1/o/r.git' }, 'bundle')).toMatch(
+      /this machine/,
+    );
+    expect(
+      sourceProblem({ type: 'git', url: 'https://10.20.0.5/o/r.git' }, 'bundle', false, access),
+    ).toBeUndefined();
+  });
+
+  it('takes an archive on an allowed private network, over http only where that is allowed', () => {
+    const at = (url: string, allowed = access) =>
+      sourceProblem({ type: 'url', url, sha256: sha }, 'bundle', false, allowed);
+    expect(at('https://10.20.0.5/a.zip')).toBeUndefined();
+    expect(at('https://10.21.0.5/a.zip')).toMatch(/internal/);
+    expect(at('http://10.20.0.5/a.zip')).toMatch(/https/);
+    expect(at('http://10.20.0.5/a.zip', withHttp)).toBeUndefined();
+    expect(at('https://127.0.0.1/a.zip', withHttp)).toMatch(/machine/);
+  });
+
+  it('lets Git ask this machine only for what an index on this machine lists', async () => {
+    const dir = await temp();
+    const script = join(dir, 'fake-git.mjs');
+    await writeFile(
+      script,
+      `import { mkdirSync } from 'node:fs';
+const args = process.argv.slice(2);
+if (args.includes('--version')) console.log('git version 2.52.0');
+if (args.includes('--get-url')) console.log(args.at(-1));
+if (args.includes('--get-urlmatch')) process.exit(1);
+if (args.includes('init')) mkdirSync(args.at(-1) + '/.git', { recursive: true });
+if (args.includes('rev-parse')) console.log('${'b'.repeat(40)}');
+`,
+    );
+    const git = {
+      command: [process.execPath, script],
+      resolve: async () => [{ address: '127.0.0.1', family: 4 }],
+    };
+    const url = 'https://localhost:3000/o/r.git';
+    const fetch = (index?: string) =>
+      fetchSource(
+        { type: 'git', url, ...(index === undefined ? {} : { index }) },
+        dir,
+        join(dir, `bundle-${index === undefined ? 'direct' : 'listed'}`),
+        { ...context(), git },
+      );
+    await expect(fetch()).rejects.toThrow(/this machine/);
+    await expect(fetch('http://127.0.0.1:9/index.json')).resolves.toMatchObject({
+      type: 'git',
+      commit: 'b'.repeat(40),
+    });
+  });
+
+  it('fetches a Git source from an index again with that index, for its rules', () => {
+    const catalog = {
+      index: 'abc123',
+      indexUrl: 'http://127.0.0.1:9/index.json',
+      kind: 'bundle',
+      name: 'board',
+      version: '1.0.0',
+    } as const;
+    const source = {
+      type: 'git',
+      url: 'https://localhost/o/r.git',
+      commit: 'c'.repeat(40),
+      catalog,
+    } as const;
+    expect(refetchable(source, () => 'http://127.0.0.1:9/index.json')).toEqual({
+      type: 'git',
+      url: source.url,
+      commit: source.commit,
+      index: 'http://127.0.0.1:9/index.json',
+    });
   });
 });

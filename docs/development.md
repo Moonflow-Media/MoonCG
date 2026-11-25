@@ -421,9 +421,25 @@ Limits to know:
 - `import '/sdk/mooncg.js'` resolves against the development server. Import
   `@mooncg/sdk/client` instead, or let the development server proxy `/sdk` to MoonCG, as the
   `vue` template does.
-- **Dialogs** (`mc.dialogs.open`) talk to the dashboard by `postMessage` between pages of one
-  origin, and the dashboard believes no other. They do not work from a page of a development
-  server, the `vue` template's included. Test dialogs against the built files.
+- **Dialogs** (`mc.dialogs.open`) work from pages of the development server too, panels and
+  dialog pages alike. In dev mode, and only there, `GET /api/v1/bundles` names the origin of
+  a bundle's `dev.url` (`devOrigin`), and the dashboard believes dialog messages from the
+  frames of that bundle at that origin, and at its own, and from no other: not from the
+  development server of another bundle, never from `*`, and only from an origin on this
+  machine (`http://` or `https://` on `localhost`, `127.x.x.x` or `[::1]`, so a development
+  server with a certificate of its own works too). It puts its own origin into the address of
+  those frames (`?mooncgHost=…`), which MoonCG passes on with the redirect, so that the page
+  knows where to answer; the SDK takes it only when both origins are on this machine and,
+  where the browser tells the origins of the frames around a page
+  (`location.ancestorOrigins`, Chromium), when that is the one that frames it. Firefox and
+  Safari do not tell them: there the SDK relies on the rule of this machine alone, so a page of
+  the development server that another page on this machine frames with a forged `mooncgHost`
+  would post its dialog requests there. That page would have to run on this machine already,
+  and the dashboard still believes only its own frames. Answers go to the origin a message was
+  believed from, never to `*`. Outside dev mode nothing of this applies: pages are MoonCG's own
+  and of its origin, and MoonCG serves every panel, dialog and graphic page with
+  `Content-Security-Policy: frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN`, so no
+  other site frames them.
 
 ## The On Air lock
 

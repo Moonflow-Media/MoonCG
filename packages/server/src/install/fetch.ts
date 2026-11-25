@@ -5,7 +5,8 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { isLoopbackRegistryUrl, MoonCGError } from '@mooncg/core';
 import { errorMessage } from '../kernel/logger.js';
-import { addressProblem, download } from '../registry/https.js';
+import { addressProblem, download, type PrivateNetworks } from '../registry/https.js';
+import { ipProblem, type Reach } from '../registry/network.js';
 import {
   type InstallLimits,
   isInside,
@@ -20,6 +21,7 @@ import {
 import {
   fetchGit,
   type GitOptions,
+  gitHostOf,
   gitRefProblem,
   gitUrlProblem,
   withoutCredentials,
@@ -49,11 +51,24 @@ export interface FetchContext {
   readonly timeoutMs: number;
   /** Ends Git when the server shuts down. */
   readonly signal: AbortSignal;
-  readonly git?: Pick<GitOptions, 'allowFileUrls' | 'command' | 'env'> | undefined;
+  readonly git?: Pick<GitOptions, 'allowFileUrls' | 'command' | 'env' | 'resolve'> | undefined;
+  /** The private networks the configuration of the server allows sources on. */
+  readonly privateNetworks?: PrivateNetworks | undefined;
   /** Folders of the server nothing may be copied or unpacked from. */
   readonly forbidden: readonly string[];
   /** What is fetched, for messages: `bundle` or `module`. */
   readonly noun: string;
+}
+
+/**
+ * Where a source may lead: this machine only through an index on this machine, never by an
+ * address of its own; a private network where the configuration allows it.
+ */
+function reachOf(index: unknown, access: PrivateNetworks | undefined): Reach {
+  return {
+    loopback: typeof index === 'string' && isLoopbackRegistryUrl(index),
+    private: access,
+  };
 }
 
 /** Why a request names no source to fetch from, checked before anything is created. */
@@ -61,6 +76,7 @@ export function sourceProblem(
   source: StageSource,
   noun: string,
   allowFileUrls = false,
+  access?: PrivateNetworks,
 ): string | undefined {
   const given: Partial<Record<string, unknown>> = source ?? {};
   if (given.type === 'git') {
@@ -68,15 +84,15 @@ export function sourceProblem(
     if (commit !== undefined && (typeof commit !== 'string' || !COMMIT.test(commit))) {
       return 'The commit must be a full commit hash';
     }
-    return gitUrlProblem(given.url, allowFileUrls) ?? gitRefProblem(given.ref);
+    const problem = gitUrlProblem(given.url, allowFileUrls) ?? gitRefProblem(given.ref);
+    if (problem !== undefined) return problem;
+    // An IP address written in it is checked now; a name when it is fetched.
+    const host = gitHostOf(given.url as string)?.host ?? '';
+    return ipProblem(host, reachOf(given.index, access));
   }
   if (given.type === 'url') {
     if (typeof given.url !== 'string') return `The address of the ${noun} archive is missing`;
-    // This machine only through an index on this machine; an address of its own never.
-    const index = typeof given.index === 'string' ? given.index : undefined;
-    const problem = addressProblem(given.url, {
-      loopback: index !== undefined && isLoopbackRegistryUrl(index),
-    });
+    const problem = addressProblem(given.url, reachOf(given.index, access));
     if (problem !== undefined) return problem;
     return typeof given.sha256 === 'string' && SHA256.test(given.sha256)
       ? undefined
@@ -155,6 +171,7 @@ export async function fetchSource(
       signal: context.signal,
       // While it is fetched the folder holds the history too; twice the bundle is room.
       maxBytes: limits.maxUnpackedBytes * 2,
+      reach: reachOf(source.index, context.privateNetworks),
       ...context.git,
     });
     // A ref that was pinned to a commit and points elsewhere now is not what was offered.
@@ -174,6 +191,7 @@ export async function fetchSource(
       maxBytes: limits.maxArchiveBytes,
       signal: context.signal,
       index,
+      private: context.privateNetworks,
     });
     // Checked before a single entry is read: an archive that is not the one offered is not
     // opened at all.

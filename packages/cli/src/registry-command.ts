@@ -15,7 +15,7 @@ export interface RegistryArgs extends ApiArgs {
 interface IndexLine {
   readonly id: string;
   readonly url: string;
-  readonly origin: 'config' | 'added';
+  readonly origin: 'config' | 'added' | 'module';
   readonly status: string;
   readonly error?: string;
   readonly entries: number;

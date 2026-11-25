@@ -54,6 +54,7 @@ export interface ModuleHttp {
     | 'match'
     | 'methods'
     | 'configurable'
+    | 'pages'
   >;
   readonly externalLogins: ExternalLogins;
   /** The configuration of the modules. */
@@ -513,6 +514,18 @@ export function registerModuleRoutes(
     } catch (error) {
       return failWith(reply, error);
     }
+  });
+
+  // The pages modules added to the dashboard, for its navigation: each only for whoever holds
+  // its permission. Anybody signed in may ask; nobody learns of a page they cannot open.
+  app.get('/api/v1/module-pages', async (request, reply) => {
+    if (anonymous(request)) return unauthenticated(reply);
+    return {
+      pages: modules
+        .pages()
+        .filter((page) => can(request, page.permission))
+        .map(({ module, id, title, url }) => ({ module, id, title, url })),
+    };
   });
 
   // The permissions there are to grant, for the Roles page: the built-in ones and what

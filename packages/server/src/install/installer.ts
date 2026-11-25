@@ -27,6 +27,7 @@ import { installProblems } from '../bundles/dependencies.js';
 import { privateRoots, publicError } from '../bundles/errors.js';
 import type { BundleManager } from '../bundles/manager.js';
 import { errorMessage, type Logger } from '../kernel/logger.js';
+import type { PrivateNetworks } from '../registry/https.js';
 import { fetchSource, receiveUpload, type StageSource, sourceProblem } from './fetch.js';
 import {
   DEFAULT_INSTALL_LIMITS,
@@ -188,7 +189,12 @@ export interface InstallerOptions {
    */
   readonly indexAddress?: ((id: string) => string | undefined) | undefined;
   /** For tests: how Git is run, and whether `file://` addresses are taken. */
-  readonly git?: Pick<GitOptions, 'allowFileUrls' | 'command' | 'env'> | undefined;
+  readonly git?: Pick<GitOptions, 'allowFileUrls' | 'command' | 'env' | 'resolve'> | undefined;
+  /**
+   * The private networks the configuration of the server allows sources on, and whether
+   * plain `http://` may be used for them.
+   */
+  readonly privateNetworks?: PrivateNetworks | undefined;
   /** Deletes what a bundle stored: configuration, assets, replicants and role grants. */
   readonly purge?: ((bundle: string) => Promise<void>) | undefined;
   /** Says which role grants a bundle would bring. Without it, none are said to be made. */
@@ -1019,7 +1025,12 @@ export class BundleInstaller {
 
   /** Why a request names no source to fetch from, checked before anything is created. */
   #sourceProblem(source: StageSource): string | undefined {
-    return sourceProblem(source, 'bundle', this.#options.git?.allowFileUrls === true);
+    return sourceProblem(
+      source,
+      'bundle',
+      this.#options.git?.allowFileUrls === true,
+      this.#options.privateNetworks,
+    );
   }
 
   /** Writes an uploaded archive to `file`, counting what arrives against the limit. */
@@ -1038,6 +1049,7 @@ export class BundleInstaller {
       timeoutMs: this.#timeoutMs,
       signal: this.#shutdown.signal,
       git: this.#options.git,
+      privateNetworks: this.#options.privateNetworks,
       forbidden: [this.#options.bundlesDir, this.#options.dataDir],
       noun: 'bundle',
     });

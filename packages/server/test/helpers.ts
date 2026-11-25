@@ -45,6 +45,8 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     bundleNpmRegistry: undefined,
     registryIndexes: [],
     registryRefreshMs: 6 * 60 * 60_000,
+    registryAllowPrivate: [],
+    registryAllowPrivateHttp: false,
     secureCookies: false,
     trustProxy: false,
     dev: false,

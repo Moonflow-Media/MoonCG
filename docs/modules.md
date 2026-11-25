@@ -286,6 +286,8 @@ tested, and nothing that is only planned.
 | `ctx.auth.registerProvider(provider)`       | Adds a way to sign in. See [external-logins.md](external-logins.md) |
 | `ctx.http.register(route)`                  | Adds a route below `/m/<module>`                                    |
 | `ctx.permissions.define(name, description)` | Defines a permission and returns its full name                      |
+| `ctx.registry.registerSource(source)`       | Adds a registry index the module provides. See below                |
+| `ctx.dashboard.registerPage(page)`          | Adds a link to a page of the module to the dashboard. See below     |
 | `ctx.onDispose(dispose)`                    | Runs `dispose` when the module stops                                |
 
 Every member that registers something throws when what it is given is not usable, which fails
@@ -388,6 +390,79 @@ administrators hold them without doing anything.
 
 See [external-logins.md](external-logins.md#writing-a-provider).
 
+### Registry indexes of a module
+
+`ctx.registry.registerSource({ id, load })` adds an index whose entries the module provides
+itself, for instance read from a private API of a studio:
+
+```js
+ctx.registry.registerSource({
+  id: 'studio',
+  load: async ({ signal }) => {
+    const answer = await fetch('https://api.studio.example/mooncg-index', {
+      headers: { authorization: `Bearer ${ctx.config.token}` },
+      signal,
+    });
+    return answer.json(); // { "index": 1, "entries": [...] }, as an index file holds it
+  },
+});
+```
+
+- It is listed beside the other indexes as `module://<module>/<id>`, with the origin
+  _module_ and the name of the module, and loaded whenever they are: when the server starts or
+  the module starts, every 6 hours, and on **Check now**. `id` is lowercase letters, digits and
+  dashes; one id once per module.
+- What `load` answers is checked like any index (`parseRegistryIndex`), within the time of a
+  fetch (30 s) and no larger than an index file (2 MiB). It is copied first: nothing the module
+  keeps changes what was checked. An answer that is no valid index makes the index `stale` or
+  `error` with the reason, as for a file.
+- Its entries must name archives by an `https://` address: there is no file next to which a
+  path could be read. This machine and plain `http://` are refused, as in any index that is not
+  on this machine.
+- Installing from it follows every rule of the catalog. **The server fetches what an entry
+  names itself**, with its own checks (the guarded download of a ZIP with its SHA-256, Git
+  pinned to a commit, never an internal address unless the configuration allows its private
+  network), never through the module: `load` provides a list, not files.
+- It is gone when the module is disabled or fails, and cannot be removed in the dashboard
+  (409): disable the module instead. What was installed from it stays installed and keeps its
+  note of the index; while the index is gone it is offered no update.
+
+A module is trusted code in the server process and could fetch anything itself; what this hook
+guarantees is that the catalog, the installers and their checks see what it provides like any
+index, so that its entries are bound by the same rules.
+
+### Pages in the dashboard
+
+`ctx.dashboard.registerPage({ id, title, path, permission })` adds a page of the module to the
+navigation of the dashboard, under **Modules**:
+
+```js
+const view = ctx.permissions.define('stats', 'See the stats');
+ctx.http.register({
+  method: 'GET',
+  path: '/stats',
+  permission: view,
+  handler: () => ({ headers: { 'content-type': 'text/html' }, body: renderStats() }),
+});
+ctx.dashboard.registerPage({ id: 'stats', title: 'Stats', path: '/stats', permission: view });
+```
+
+- `path` is the path of a `GET` route of the module without parameters; the page is that
+  route, `/m/<module><path>`, answered with the same policy as every module route: unless the
+  handler sets its own `Content-Security-Policy`, the answer is a sandboxed document that runs
+  no script. The route checks its own permission on every request.
+- `permission` is one the module defined or a system permission; the page is listed only to
+  those who hold it (`GET /api/v1/module-pages`). `title` is at most 60 characters, without
+  control or format characters; `id` is unique within the module.
+- The navigation shows it as a **link that opens in a tab of its own** (`target="_blank"`,
+  `rel="noopener noreferrer"`), not in a frame of the dashboard. A frame sandboxed without
+  `allow-same-origin` would keep the page from the dashboard but would also send none of the
+  session cookies with the requests the page makes to its own routes, so any page that does
+  more than show what its route rendered would not work; a frame with `allow-same-origin` would
+  hand the page the window of the dashboard. A tab of its own works for every page and gives it
+  no handle on the dashboard.
+- It is gone when the module stops. The navigation reads the list when the dashboard loads.
+
 ## When a module fails
 
 | What happens                                            | Result                                                    |
@@ -452,14 +527,15 @@ looked at, so they do not tell which modules exist.
 
 All of it is JSON. Errors are `{ "error": { "code", "message" } }`.
 
-| Request                                         | Does                                                           |
-| ----------------------------------------------- | -------------------------------------------------------------- |
-| `GET /api/v1/modules`                           | `{ modules: [...] }`, each as below                            |
-| `POST /api/v1/modules/:name/enable`             | Enables and starts; `{ module }`, which may be `failed`        |
-| `POST /api/v1/modules/:name/disable`            | Stops and disables; `{ module }`. 409 for `auth-local`         |
-| `GET /api/v1/modules/:name/config`              | Schema and values without secrets; 404 without a config        |
-| `PUT /api/v1/modules/:name/config` `{ values }` | Stores and starts the module again; `restarted`, `restartNote` |
-| `GET /api/v1/permissions`                       | The system permissions, built-in and of running modules        |
+| Request                                         | Does                                                            |
+| ----------------------------------------------- | --------------------------------------------------------------- |
+| `GET /api/v1/modules`                           | `{ modules: [...] }`, each as below                             |
+| `POST /api/v1/modules/:name/enable`             | Enables and starts; `{ module }`, which may be `failed`         |
+| `POST /api/v1/modules/:name/disable`            | Stops and disables; `{ module }`. 409 for `auth-local`          |
+| `GET /api/v1/modules/:name/config`              | Schema and values without secrets; 404 without a config         |
+| `PUT /api/v1/modules/:name/config` `{ values }` | Stores and starts the module again; `restarted`, `restartNote`  |
+| `GET /api/v1/permissions`                       | The system permissions, built-in and of running modules         |
+| `GET /api/v1/module-pages`                      | The pages of running modules the caller holds the permission of |
 
 Installing, updating and removing:
 
@@ -496,11 +572,14 @@ A module:
   "config": true,
   "providers": ["oidc"],
   "permissions": [],
-  "routes": 0
+  "routes": 0,
+  "indexSources": [],
+  "pages": []
 }
 ```
 
-`state` is `running`, `disabled` or `failed`; a failed one has `error`. `internal` is true for
+`indexSources` are the ids of the registry indexes it provides and `pages` the ids of its
+pages in the dashboard, while it runs. `state` is `running`, `disabled` or `failed`; a failed one has `error`. `internal` is true for
 what is part of the server and cannot be disabled. A folder with a name no module can have is
 in the list as `failed`, and every request that names it answers 404.
 
@@ -511,11 +590,16 @@ shipped as something that does not work:
 
 | Hook                      | State                                                             |
 | ------------------------- | ----------------------------------------------------------------- |
-| `storage.registerAdapter` | Not there. The server stores in SQLite only                       |
-| `registry.registerSource` | Not there. There is no bundle registry yet                        |
-| `dashboard.registerPage`  | Not there. A module cannot add a page to the dashboard            |
+| `storage.registerAdapter` | Not there. See below                                              |
 | Password providers        | Internal only: `auth-local` registers the one there is            |
 | Reloading on file changes | Not there. The watcher watches bundles; modules are read at start |
+
+`storage.registerAdapter` is left out on purpose. The replicant store has a small interface
+(`load`, `save`, `removeBundle`, `close`), but it is chosen before anything else starts: the
+replicants of the bundles are restored from it before a module is loaded, and settings,
+accounts and sessions share the same database. An adapter a module registers would come too
+late for what was restored, would leave with the module while bundles still write to it, and
+would need a migration of what is stored; none of that falls out of the present design.
 
 Of the built-in parts of the server, the local login is a module (`auth-local`): it registers
 its provider in the same registry the providers of modules are in, and the login route asks

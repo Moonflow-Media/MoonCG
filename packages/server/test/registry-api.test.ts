@@ -298,6 +298,60 @@ describe('the registry API', () => {
     expect(server.modules.get('greeter')?.enabled).toBe(false);
   });
 
+  it('pushes the update hints of each kind live, to those who manage that kind alone', async () => {
+    const { http, as, settle, fixture, indexUrl, socket, server } = await setup();
+    const read = async (role: string, kind: 'bundles' | 'modules') => {
+      const connection = await socket({ cookie: as(role).cookie }, 'system');
+      try {
+        return await connection.ask({ t: 'rep.sub', name: `system:updates.${kind}` });
+      } finally {
+        connection.close();
+      }
+    };
+    expect(await read('bundler', 'bundles')).toMatchObject({
+      t: 'rep.snap',
+      value: { updates: [] },
+    });
+    expect(await read('moduler', 'bundles')).toMatchObject({ t: 'err' });
+    expect(await read('bundler', 'modules')).toMatchObject({ t: 'err' });
+    expect(await read('viewer', 'bundles')).toMatchObject({ t: 'err' });
+    expect(await read('moduler', 'modules')).toMatchObject({ t: 'rep.snap' });
+
+    const staged = await settle(
+      await http('POST', '/api/v1/registry/stage', {
+        ...as('bundler'),
+        json: { kind: 'bundle', index: indexId(indexUrl), name: 'ticker' },
+      }),
+    );
+    await settle(
+      await http('POST', `/api/v1/bundles/-/staged/${staged.staged.id}/commit`, {
+        ...as('bundler'),
+        json: {},
+      }),
+    );
+    // Followed while the index changes: the hint arrives without anything being asked.
+    const watching = await socket({ cookie: as('bundler').cookie }, 'system');
+    cleanup.push(() => watching.close());
+    await watching.ask({ t: 'rep.sub', name: 'system:updates.bundles' });
+    fixture.routes.set('/index.json', json(indexOf(['1.0.0', '1.1.0'])));
+    await server.registry.refresh();
+    const deadline = Date.now() + 3000;
+    let hints: unknown;
+    while (Date.now() < deadline) {
+      hints = (await read('bundler', 'bundles')) as { value?: { updates?: unknown[] } };
+      if ((hints as { value: { updates: unknown[] } }).value.updates.length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(hints).toMatchObject({
+      value: {
+        updates: [{ kind: 'bundle', name: 'ticker', installed: '1.0.0', available: '1.1.0' }],
+      },
+    });
+    expect(watching.pushed.some((message) => message.t === 'rep.patch')).toBe(true);
+    // The modules hold nothing of it.
+    expect(await read('moduler', 'modules')).toMatchObject({ value: { updates: [] } });
+  });
+
   it('counts for each manager only the entries of the kinds they may read', async () => {
     const { http, as } = await setup();
     const counted = async (role: string) =>

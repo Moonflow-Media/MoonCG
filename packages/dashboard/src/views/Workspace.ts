@@ -1,8 +1,9 @@
 import { defineComponent, h, watch } from 'vue';
+import { framedUrl } from '../dialogs.js';
 import type { Placement } from '../layout.js';
 import { useBundles, type WorkspacePanel } from '../stores/bundles.js';
 import { useLayout } from '../stores/layout.js';
-import { PANEL_BUNDLE_ATTRIBUTE } from './DialogHost.js';
+import { devOriginOf, PANEL_BUNDLE_ATTRIBUTE } from './DialogHost.js';
 import { counted, pageHead } from './parts.js';
 
 const BUTTONS = [
@@ -66,7 +67,14 @@ export const WorkspaceView = defineComponent({
         ]),
         // The attribute is how the dialog host knows which bundle a panel's window belongs to.
         h('iframe', {
-          src: panel?.url,
+          src:
+            panel === undefined
+              ? undefined
+              : framedUrl(
+                  panel.url,
+                  location.origin,
+                  devOriginOf(bundles.list.find((item) => item.name === panel.bundle)),
+                ),
           title: panel?.title,
           [PANEL_BUNDLE_ATTRIBUTE]: panel?.bundle,
         }),

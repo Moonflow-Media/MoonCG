@@ -19,6 +19,8 @@ import type {
   AuthProvider,
   ModuleContext,
   ModuleDispose,
+  ModulePage,
+  ModuleRegistrySource,
   ModuleRoute,
   ModuleSetup,
 } from '@mooncg/sdk/module';
@@ -36,6 +38,10 @@ const SETUP_TIMEOUT_MS = 10_000;
 /** How long a module may take to stop before the server goes on without it. */
 const DISPOSE_TIMEOUT_MS = 5000;
 const MAX_DESCRIPTION_LENGTH = 200;
+const MAX_PAGE_TITLE_LENGTH = 60;
+/** The id of a page or of an index source of a module. */
+const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MAX_ID_LENGTH = 40;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are the point
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
@@ -82,6 +88,27 @@ export interface ModuleRecord {
   readonly permissions: readonly DefinedPermission[];
   /** How many HTTP routes it registered. */
   readonly routes: number;
+  /** The ids of the registry indexes it provides. */
+  readonly indexSources: readonly string[];
+  /** The ids of the pages it added to the dashboard. */
+  readonly pages: readonly string[];
+}
+
+/** A page a running module added to the dashboard, as the navigation lists it. */
+export interface ListedModulePage {
+  readonly module: string;
+  readonly id: string;
+  readonly title: string;
+  /** Where it is served: `/m/<module><path>`. */
+  readonly url: string;
+  /** Who sees it. */
+  readonly permission: string;
+}
+
+/** Where the registry indexes modules provide go: the registry of the server. */
+export interface ModuleIndexSources {
+  /** Takes up an index a module provides and answers what takes it away again. */
+  provide(module: string, id: string, load: ModuleRegistrySource['load']): () => void;
 }
 
 /** A module that is shipped with the server: a folder with a manifest somewhere on disk. */
@@ -129,6 +156,8 @@ export interface ModuleManagerOptions {
   readonly logger: Logger;
   readonly mooncgVersion: string;
   readonly setupTimeoutMs?: number | undefined;
+  /** Where the indexes of `registry.registerSource` go. Without it, modules cannot add any. */
+  readonly indexSources?: ModuleIndexSources | undefined;
 }
 
 interface Found {
@@ -145,6 +174,10 @@ interface Found {
 interface Running {
   readonly permissions: Map<string, string>;
   readonly routes: Set<Route>;
+  /** The ids of the indexes it provides. */
+  readonly sources: Set<string>;
+  /** Its pages in the dashboard, by id. */
+  readonly pages: Map<string, ModulePage>;
   /** Takes away what was registered elsewhere, such as a provider. */
   readonly undo: (() => void)[];
   /** What the module asked to be run when it stops, in the order it asked. */
@@ -548,7 +581,22 @@ export class ModuleManager {
         description,
       })),
       routes: running?.routes.size ?? 0,
+      indexSources: [...(running?.sources ?? [])],
+      pages: [...(running?.pages.keys() ?? [])],
     };
+  }
+
+  /** The pages running modules added to the dashboard, each with who may see it. */
+  pages(): ListedModulePage[] {
+    return [...this.#entries.values()].flatMap(({ found, running }) =>
+      [...(running?.pages.values() ?? [])].map((page) => ({
+        module: found.name,
+        id: page.id,
+        title: page.title,
+        url: `/m/${found.name}${page.path}`,
+        permission: page.permission,
+      })),
+    );
   }
 
   /** Reads the manifest of a module in the modules folder again. */
@@ -572,6 +620,8 @@ export class ModuleManager {
     const running: Running = {
       permissions: new Map(),
       routes: new Set(),
+      sources: new Set(),
+      pages: new Map(),
       undo: [],
       disposers: [],
       closed: false,
@@ -644,6 +694,8 @@ export class ModuleManager {
     for (const route of running.routes) this.#handlers.delete(route);
     running.routes.clear();
     running.permissions.clear();
+    running.sources.clear();
+    running.pages.clear();
   }
 
   async #import(found: Found): Promise<unknown> {
@@ -684,6 +736,16 @@ export class ModuleManager {
     const log = this.#options.logger.child(`module:${found.name}`);
     const wrong = (problem: string) => new MoonCGError('invalid', problem);
     const open = () => this.#open(found, running);
+    /** A permission the module may name: one the server knows, or one it defined itself. */
+    const known = (permission: unknown) =>
+      typeof permission === 'string' &&
+      (Object.hasOwn(SYSTEM_PERMISSIONS, permission) || running.permissions.has(permission));
+    const idProblem = (id: unknown, what: string) =>
+      typeof id === 'string' && id.length <= MAX_ID_LENGTH && ID_PATTERN.test(id)
+        ? undefined
+        : wrong(
+            `The ${what} id "${String(id)}" must be lowercase letters, digits and single dashes, at most ${MAX_ID_LENGTH} long`,
+          );
     return {
       name: found.name,
       dir: found.dir,
@@ -740,6 +802,64 @@ export class ModuleManager {
           this.#handlers.set(entry, { ...given, public: isPublic ? true : undefined });
           running.routes.add(entry);
           running.undo.push(remove);
+        },
+      },
+      registry: {
+        registerSource: (source: ModuleRegistrySource) => {
+          open();
+          const given = (
+            typeof source === 'object' && source !== null ? source : {}
+          ) as ModuleRegistrySource;
+          const problem = idProblem(given.id, 'index source');
+          if (problem) throw problem;
+          if (typeof given.load !== 'function') {
+            throw wrong(`The index source "${given.id}" needs a load function`);
+          }
+          const sources = this.#options.indexSources;
+          if (sources === undefined) {
+            throw new MoonCGError(
+              'unavailable',
+              'This server takes no registry indexes of modules',
+            );
+          }
+          // Called as the module's own function, never with anything of the server bound to it.
+          const load = given.load;
+          const remove = sources.provide(found.name, given.id, (options) => load(options));
+          running.sources.add(given.id);
+          running.undo.push(remove);
+        },
+      },
+      dashboard: {
+        registerPage: (page: ModulePage) => {
+          open();
+          const given = (typeof page === 'object' && page !== null ? page : {}) as ModulePage;
+          const { id, title, path, permission } = given;
+          const problem = idProblem(id, 'page');
+          if (problem) throw problem;
+          if (running.pages.has(id)) throw wrong(`There is a page "${id}" already`);
+          if (
+            typeof title !== 'string' ||
+            title.trim() === '' ||
+            title.length > MAX_PAGE_TITLE_LENGTH ||
+            CONTROL.test(title) ||
+            /[\p{Cf}\u2028\u2029]/u.test(title)
+          ) {
+            throw wrong(
+              `The title of the page "${id}" must be a text of at most ${MAX_PAGE_TITLE_LENGTH} characters`,
+            );
+          }
+          // A fixed path of a route of the module: the page is that route, nothing else.
+          if (typeof path !== 'string' || !isRoutePattern(path) || /\/:/.test(path)) {
+            throw wrong(
+              `The page "${id}" needs the path of a GET route without parameters, such as /stats`,
+            );
+          }
+          if (!known(permission)) {
+            throw wrong(
+              `The page "${id}" must name who sees it: a system permission or one this module defined, not "${String(permission)}"`,
+            );
+          }
+          running.pages.set(id, { id, title, path, permission });
         },
       },
       permissions: {

@@ -602,6 +602,9 @@ describe('git, while a repository is larger than a bundle may be', () => {
       script,
       `import { mkdirSync, writeFileSync } from 'node:fs';
 const args = process.argv.slice(2);
+if (args.includes('--version')) console.log('git version 2.52.0');
+if (args.includes('--get-url')) console.log(args.at(-1));
+if (args.includes('--get-urlmatch')) process.exit(1);
 if (args.includes('init')) mkdirSync(args.at(-1) + '/.git', { recursive: true });
 if (args.includes('fetch')) {
   const dest = args[args.indexOf('-C') + 1];
@@ -615,6 +618,7 @@ if (args.includes('fetch')) {
     const fetched = fetchGit({ url: 'https://example.org/o/r.git' }, dest, {
       timeoutMs: 20_000,
       command: [process.execPath, script],
+      resolve: async () => [{ address: '93.184.215.14', family: 4 }],
       maxBytes: 50_000,
       pollMs: 100,
     });

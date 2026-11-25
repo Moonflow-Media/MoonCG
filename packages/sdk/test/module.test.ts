@@ -3,6 +3,8 @@ import {
   type AuthProvider,
   defineModule,
   type ModuleContext,
+  type ModulePage,
+  type ModuleRegistrySource,
   type ModuleRoute,
 } from '../src/module/index.js';
 
@@ -12,6 +14,8 @@ function recordingContext(config: ModuleContext['config'] = {}) {
   const routes: ModuleRoute[] = [];
   const permissions: string[] = [];
   const disposers: (() => void | Promise<void>)[] = [];
+  const sources: ModuleRegistrySource[] = [];
+  const pages: ModulePage[] = [];
   const context: ModuleContext = {
     name: 'example',
     dir: '/modules/example',
@@ -25,9 +29,11 @@ function recordingContext(config: ModuleContext['config'] = {}) {
         return `system:module.example.${name}`;
       },
     },
+    registry: { registerSource: (source) => void sources.push(source) },
+    dashboard: { registerPage: (page) => void pages.push(page) },
     onDispose: (dispose) => void disposers.push(dispose),
   };
-  return { context, providers, routes, permissions, disposers };
+  return { context, providers, routes, permissions, disposers, sources, pages };
 }
 
 describe('defineModule', () => {
@@ -47,6 +53,8 @@ describe('defineModule', () => {
         authorize: ({ state }) => `https://id.example/authorize?state=${state}`,
         callback: () => ({ subject: '42' }),
       });
+      ctx.registry.registerSource({ id: 'studio', load: async () => ({ index: 1, entries: [] }) });
+      ctx.dashboard.registerPage({ id: 'hello', title: 'Hello', path: '/hello', permission });
       ctx.onDispose(() => {});
       return () => {};
     });
@@ -57,5 +65,9 @@ describe('defineModule', () => {
     expect(recorded.routes.map((route) => route.path)).toEqual(['/hello', '/health']);
     expect(recorded.permissions).toEqual(['use']);
     expect(recorded.disposers).toHaveLength(1);
+    expect(recorded.sources.map((source) => source.id)).toEqual(['studio']);
+    expect(recorded.pages).toEqual([
+      { id: 'hello', title: 'Hello', path: '/hello', permission: 'system:module.example.use' },
+    ]);
   });
 });

@@ -1,4 +1,4 @@
-import { defineComponent, h, onMounted, ref } from 'vue';
+import { defineComponent, h, onMounted, onUnmounted, ref } from 'vue';
 import { api, messageOf } from '../api.js';
 import {
   type CatalogEntry,
@@ -75,6 +75,9 @@ export const CatalogView = defineComponent({
       await registry.loadIndexes();
       await load();
     };
+    // An index was fetched, or something was installed, updated or removed: the entries, what
+    // is installed of them and the hints are read again.
+    onUnmounted(registry.followUpdates(kinds, () => void again()));
 
     const search = async (event: Event) => {
       event.preventDefault();
@@ -128,6 +131,9 @@ export const CatalogView = defineComponent({
         h('strong', index.title ?? index.url),
         h('span', { class: ['state', `index-${index.status}`] }, index.status),
         index.origin === 'config' ? h('span', { class: 'badge' }, 'configuration') : null,
+        index.origin === 'module'
+          ? h('span', { class: 'badge' }, `module ${index.module ?? ''}`.trim())
+          : null,
         h('span', { class: 'muted' }, index.url),
         h('p', { class: index.status === 'ok' ? 'muted' : 'problem' }, standing(index)),
         registry.canEdit && index.origin === 'added'

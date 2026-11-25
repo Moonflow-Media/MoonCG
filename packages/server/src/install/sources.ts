@@ -70,6 +70,12 @@ export type FetchableSource =
       readonly ref?: string | undefined;
       /** The commit the fetched ref must be, as an index pins it. */
       readonly commit?: string | undefined;
+      /**
+       * The address of the registry index that lists the repository: only an index on this
+       * machine may point to this machine. Set by the server for what comes from the catalog,
+       * never taken from a request, and not kept with the source.
+       */
+      readonly index?: string | undefined;
     }
   | { readonly type: 'path'; readonly path: string }
   | { readonly type: 'zip'; readonly path: string }
@@ -107,8 +113,8 @@ export function publicSource(source: BundleSource): PublicSource {
  * What to fetch to get the bundle again, for an update that names no source. A repository
  * is asked for the same ref as before, which for a branch is its newest commit. An upload
  * cannot be fetched again. What came from an index entry is fetched as that entry said: a
- * repository at the commit it named, an archive with the credentials and the rules of the
- * index, which `indexAddress` gives by its id.
+ * repository at the commit it named, and with the rules of the index, an archive with the
+ * credentials and the rules of the index, which `indexAddress` gives by its id.
  */
 export function refetchable(
   source: BundleSource | undefined,
@@ -116,11 +122,13 @@ export function refetchable(
 ): FetchableSource | undefined {
   const listed = source?.catalog;
   if (source?.type === 'git' && source.url !== undefined) {
+    const index = listed === undefined ? undefined : indexAddress?.(listed.index);
     return {
       type: 'git',
       url: source.url,
       ...(source.ref === undefined ? {} : { ref: source.ref }),
       ...(listed === undefined || source.commit === undefined ? {} : { commit: source.commit }),
+      ...(index === undefined ? {} : { index }),
     };
   }
   if (source?.type === 'url' && source.url !== undefined && source.sha256 !== undefined) {

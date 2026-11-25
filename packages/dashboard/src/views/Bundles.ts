@@ -1,4 +1,4 @@
-import { defineComponent, h, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { defineComponent, h, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { type BundleAction, type BundleInfo, useBundles } from '../stores/bundles.js';
 import { describeSource, jobOver, useInstalls } from '../stores/installs.js';
 import { useOnAir } from '../stores/onAir.js';
@@ -149,10 +149,19 @@ export const BundlesView = defineComponent({
       ]);
     };
     const registry = useRegistry();
+    let unfollow: (() => void) | undefined;
+    let gone = false;
     onMounted(async () => {
       await bundles.refresh();
-      // Update hints are for those who could act on them.
-      if (bundles.canManage) await registry.loadUpdates();
+      // Update hints are for those who could act on them; they then arrive live as well.
+      if (bundles.canManage && !gone) {
+        unfollow = registry.followUpdates(['bundle']);
+        await registry.loadUpdates();
+      }
+    });
+    onUnmounted(() => {
+      gone = true;
+      unfollow?.();
     });
     // What an index offers changes once something was installed or updated.
     watch(

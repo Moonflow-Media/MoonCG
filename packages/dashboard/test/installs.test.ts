@@ -703,7 +703,8 @@ describe('a bundle in the list', () => {
     const { stopped } = setup();
     const view = await show();
     view.unmount();
-    expect(stopped).toEqual(['system:installs']);
+    // The update hints the page follows too.
+    expect(stopped.sort()).toEqual(['system:installs', 'system:updates.bundles']);
   });
 
   it('draws everything without a style attribute, which the page policy would refuse', async () => {

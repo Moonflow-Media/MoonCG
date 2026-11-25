@@ -7,21 +7,32 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { BundleManager } from '../src/bundles/manager.js';
 import type { ExtensionHost } from '../src/extension-host/extension-host.js';
 import { BundleInstaller } from '../src/install/installer.js';
+import { indexId } from '../src/registry/registry.js';
+import { PASSWORD, startAuthServer } from './auth-helpers.js';
 import { memoryLogger } from './helpers.js';
-import { manifest } from './temp-bundles.js';
+import { manifest, temporaryBundles } from './temp-bundles.js';
 
 /**
- * What the other tests stand in for: a real fetch from a public Git repository over https,
- * and a real `npm ci` from the npm registry. They need the network, so they run only when
+ * What the other tests stand in for: a real fetch from a public Git repository over https
+ * (resolved, checked and pinned to the checked address), a real `npm ci` from the npm
+ * registry, and a real https index with its archive. They need the network, so they run only when
  * asked: `MOONCG_NETWORK_TESTS=1 pnpm test`.
  */
 
 const NETWORK = process.env.MOONCG_NETWORK_TESTS === '1';
 /** A tiny public repository that has been there, unchanged, for a long time. It is no bundle. */
 const PUBLIC_REPOSITORY = 'https://github.com/octocat/Hello-World.git';
+/**
+ * The example index of this repository as GitHub serves it raw: `text/plain`, with the
+ * scoreboard archive next to it by a relative path.
+ */
+const PUBLIC_INDEX =
+  'https://raw.githubusercontent.com/Moonflow-Media/MoonCG/main/e2e/registry/index.json';
+const temporary = temporaryBundles();
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
   for (const dispose of cleanup.splice(0).reverse()) await dispose();
+  await temporary.cleanup();
 });
 
 async function setup() {
@@ -120,4 +131,62 @@ describe.skipIf(!NETWORK)('with the network', () => {
     expect(JSON.parse(await readFile(installed, 'utf8')).version).toBe('2.1.3');
     expect(manager.get('counter')?.state).toBe('running');
   }, 180_000);
+
+  it('adds a real https index, reads its catalog and installs the scoreboard from it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'mooncg-network-index-'));
+    const context = await startAuthServer(
+      temporary,
+      { dataDir: join(root, 'data'), modulesDir: join(root, 'modules') },
+      { npmInstall: async () => {} },
+    );
+    cleanup.push(async () => {
+      await context.server.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    });
+    const { http, auth, login, server } = context;
+    await auth.createUser({ name: 'ada', password: PASSWORD, roles: ['admin'] });
+    const cookie = await login('ada');
+
+    // Added through the API, which fetches it at once: a raw GitHub file is `text/plain`.
+    const added = await http('POST', '/api/v1/registry/indexes', {
+      cookie,
+      json: { url: PUBLIC_INDEX },
+    });
+    expect(added.status, added.text).toBe(201);
+    expect(added.json.index, added.text).toMatchObject({ status: 'ok', entries: 1 });
+    const listed = await http('GET', '/api/v1/registry/indexes', { cookie });
+    expect(listed.json.indexes).toEqual([expect.objectContaining({ url: PUBLIC_INDEX })]);
+
+    const catalog = await http('GET', '/api/v1/registry/catalog?kind=bundle', { cookie });
+    expect(catalog.status).toBe(200);
+    const entry = catalog.json.entries.find((item: { name: string }) => item.name === 'scoreboard');
+    expect(entry.versions[0]).toMatchObject({
+      version: '0.1.0',
+      compatible: true,
+      source: {
+        type: 'zip',
+        location:
+          'https://raw.githubusercontent.com/Moonflow-Media/MoonCG/main/e2e/registry/scoreboard-0.1.0.zip',
+      },
+    });
+
+    // Staged through the real download, the SHA-256 check and the ZIP checks.
+    const stage = await http('POST', '/api/v1/registry/stage', {
+      cookie,
+      json: { kind: 'bundle', index: indexId(PUBLIC_INDEX), name: 'scoreboard' },
+    });
+    expect(stage.status, stage.text).toBe(202);
+    const staged = await server.installer.settled(stage.json.job.id);
+    expect(staged.state, staged.error).toBe('succeeded');
+    expect(staged.staged).toMatchObject({ name: 'scoreboard', version: '0.1.0' });
+
+    const commit = await http('POST', `/api/v1/bundles/-/staged/${staged.staged?.id}/commit`, {
+      cookie,
+      json: {},
+    });
+    expect(commit.status, commit.text).toBe(202);
+    const done = await server.installer.settled(commit.json.job.id);
+    expect(done.state, done.error).toBe('succeeded');
+    expect(server.manager.get('scoreboard')?.manifest?.version).toBe('0.1.0');
+  }, 120_000);
 });

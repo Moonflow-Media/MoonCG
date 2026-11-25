@@ -2,9 +2,9 @@ import type { ConnectionStatus } from '@mooncg/sdk/client';
 import { defineComponent, h, onMounted, onUnmounted, ref, watch } from 'vue';
 import { RouterLink, RouterView } from 'vue-router';
 import logoUrl from '../../server/public/logo-mark.svg';
-import { messageOf } from './api.js';
+import { api, messageOf } from './api.js';
 import { followBundles, live } from './live.js';
-import { grouped, type NavItem, navigation } from './nav.js';
+import { grouped, type ModulePageLink, type NavItem, navigation } from './nav.js';
 import { useBundles } from './stores/bundles.js';
 import { useInstances } from './stores/instances.js';
 import { useLogs } from './stores/logs.js';
@@ -28,6 +28,8 @@ export const App = defineComponent({
     const logs = useLogs();
     const onAir = useOnAir();
     const problem = ref('');
+    /** The pages modules added that this user may open; none when they cannot be read. */
+    const modulePages = ref<readonly ModulePageLink[]>([]);
     const connection = ref<ConnectionStatus>('reconnecting');
     /** What a screen reader is told: a change of the connection, not where it stood at first. */
     const announced = ref('');
@@ -82,6 +84,12 @@ export const App = defineComponent({
       } catch (error) {
         problem.value = `Could not load the dashboard: ${messageOf(error)}`;
       }
+      void api
+        .request<{ pages?: ModulePageLink[] }>('GET', '/api/v1/module-pages')
+        .then((answer) => {
+          modulePages.value = answer?.pages ?? [];
+        })
+        .catch(() => {});
       // The list is asked for again whenever the server says a bundle changed.
       stop = followBundles(
         () => void bundles.refresh().catch(() => {}),
@@ -99,32 +107,52 @@ export const App = defineComponent({
     });
 
     const entries = () =>
-      navigation(session.permissions, bundles.workspaces, {
-        panels: Object.fromEntries(
-          bundles.workspaces.map((name) => [name, bundles.panelsOf(name).length]),
-        ),
-        failedBundles: bundles.list.filter((bundle) => bundle.state === 'failed').length,
-        openGraphics: instances.open,
-        unseenLogs: logs.unseen,
-      });
+      navigation(
+        session.permissions,
+        bundles.workspaces,
+        {
+          panels: Object.fromEntries(
+            bundles.workspaces.map((name) => [name, bundles.panelsOf(name).length]),
+          ),
+          failedBundles: bundles.list.filter((bundle) => bundle.state === 'failed').length,
+          openGraphics: instances.open,
+          unseenLogs: logs.unseen,
+        },
+        modulePages.value,
+      );
 
     const link = (item: NavItem) =>
-      h(
-        RouterLink,
-        {
-          key: item.to,
-          to: item.to,
-          class: 'nav-item',
-          // The number alone says nothing to someone who cannot see where it stands.
-          ...(item.hint === undefined ? {} : { 'aria-label': `${item.label}, ${item.hint}` }),
-        },
-        () => [
-          h('span', item.label),
-          item.count === undefined
-            ? null
-            : h('span', { class: ['count', item.tone], title: item.hint }, String(item.count)),
-        ],
-      );
+      item.modulePage !== undefined
+        ? // A page of a module: served by the module with the policy of its routes, in a tab of
+          // its own that gets no handle on the dashboard.
+          h(
+            'a',
+            {
+              key: item.to,
+              href: item.to,
+              class: 'nav-item',
+              target: '_blank',
+              rel: 'noopener noreferrer',
+              'data-module-page': item.modulePage,
+            },
+            [h('span', item.label)],
+          )
+        : h(
+            RouterLink,
+            {
+              key: item.to,
+              to: item.to,
+              class: 'nav-item',
+              // The number alone says nothing to someone who cannot see where it stands.
+              ...(item.hint === undefined ? {} : { 'aria-label': `${item.label}, ${item.hint}` }),
+            },
+            () => [
+              h('span', item.label),
+              item.count === undefined
+                ? null
+                : h('span', { class: ['count', item.tone], title: item.hint }, String(item.count)),
+            ],
+          );
 
     return () =>
       h('div', { class: 'app shell' }, [

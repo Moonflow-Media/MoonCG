@@ -11,7 +11,7 @@ const ORIGIN = 'http://127.0.0.1:9090';
 type Listener = (event: { data: unknown; origin: string; source: unknown }) => void;
 
 /** A page inside a frame: what it posts to its parent is collected, and the test answers. */
-function framed() {
+function framed(extra: Partial<DialogWindow> = {}) {
   const posted: { message: DialogMessage; targetOrigin: string }[] = [];
   const listeners: Record<string, Listener[]> = {};
   const parent = {
@@ -25,6 +25,7 @@ function framed() {
     addEventListener: (type, listener) => {
       listeners[type] = [...(listeners[type] ?? []), listener as Listener];
     },
+    ...extra,
   };
   const emit = (type: string, event: Partial<Parameters<Listener>[0]> = {}) => {
     for (const listener of listeners[type] ?? []) {
@@ -190,5 +191,59 @@ describe('the dialog page', () => {
     await expect(createDialogs(win, { initTimeoutMs: 10 }).current()).rejects.toMatchObject({
       code: 'unavailable',
     });
+  });
+});
+
+describe('a page of a development server, in dev mode', () => {
+  const DEV = 'http://localhost:5173';
+  const SHELL = 'http://localhost:9090';
+
+  it('speaks to the dashboard at the origin its frame address names, on this machine', async () => {
+    const { win, posted, fromShell } = framed({ origin: DEV, host: SHELL });
+    const dialogs = createDialogs(win);
+    const result = dialogs.open('confirm', null);
+    expect(posted).toEqual([
+      { targetOrigin: SHELL, message: expect.objectContaining({ t: 'open', dialog: 'confirm' }) },
+    ]);
+    // Not believed from its own origin, which is not the dashboard's.
+    fromShell({ t: 'result', id: 1, result: 'forged' }, { origin: DEV });
+    fromShell({ t: 'result', id: 1, result: true }, { origin: SHELL });
+    await expect(result).resolves.toBe(true);
+  });
+
+  it('takes no dashboard elsewhere than on this machine, and none another frame names', () => {
+    for (const [origin, host, ancestors] of [
+      [DEV, 'https://evil.example', undefined],
+      ['https://bundle.example', SHELL, undefined],
+      [DEV, 'http://localhost:9090/path', undefined],
+      [DEV, SHELL, ['https://evil.example']],
+    ] as const) {
+      const { win, posted } = framed({ origin, host, ancestors });
+      void createDialogs(win)
+        .open('confirm', null)
+        .catch(() => {});
+      expect(posted[0]?.targetOrigin).toBe(origin);
+    }
+    const { win, posted } = framed({ origin: DEV, host: SHELL, ancestors: [SHELL] });
+    void createDialogs(win).open('confirm', null);
+    expect(posted[0]?.targetOrigin).toBe(SHELL);
+  });
+
+  it('takes a development server on this machine that speaks https', () => {
+    for (const origin of ['https://localhost:5173', 'https://127.0.0.1:5173', 'https://[::1]']) {
+      const { win, posted } = framed({ origin, host: SHELL });
+      void createDialogs(win).open('confirm', null);
+      expect(posted[0]?.targetOrigin).toBe(SHELL);
+    }
+    // And a dashboard on this machine behind https, as the same rule says.
+    const { win, posted } = framed({ origin: DEV, host: 'https://localhost:9443' });
+    void createDialogs(win).open('confirm', null);
+    expect(posted[0]?.targetOrigin).toBe('https://localhost:9443');
+    // Still nothing elsewhere.
+    const other = framed({ origin: 'https://localhost.example', host: SHELL });
+    void createDialogs(other.win)
+      .open('confirm', null)
+      .catch(() => {});
+    expect(other.posted[0]?.targetOrigin).toBe('https://localhost.example');
   });
 });

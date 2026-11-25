@@ -1,6 +1,6 @@
 {
   "name": "@mooncg/server",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "private": true,
   "description": "The MoonCG server: kernel, HTTP, WebSocket transport, extension host.",
   "type": "module",

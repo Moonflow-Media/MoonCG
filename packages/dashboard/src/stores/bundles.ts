@@ -45,6 +45,8 @@ export interface BundleInfo {
   readonly panels: readonly PanelInfo[];
   /** The dialogs the bundle's panels may open. */
   readonly dialogs?: readonly DialogInfo[] | undefined;
+  /** In dev mode, the origin of the development server its pages are sent on to. */
+  readonly devOrigin?: string | undefined;
   readonly graphics: readonly GraphicInfo[];
   readonly assets?: readonly AssetCategoryInfo[] | undefined;
   /** Where the bundle was installed from. Told to those who may manage bundles only. */
