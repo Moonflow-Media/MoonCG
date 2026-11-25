@@ -15,6 +15,35 @@ describe('permissions of modules', () => {
     expect(authorize({ id: 'user:b', roles: ['bundles'] }, MODULES_MANAGE, policy)).toBe(false);
   });
 
+  it('says that it lets its holder run code inside the server', () => {
+    expect(SYSTEM_PERMISSIONS[MODULES_MANAGE]).toMatch(/^Install, enable and configure modules/);
+    expect(SYSTEM_PERMISSIONS[MODULES_MANAGE]).toMatch(/inside the server with full access/);
+  });
+
+  it('is covered by no grant but "*", "system:*" and itself', () => {
+    const grants = [
+      'system:bundles.manage',
+      'system:settings.manage',
+      'system:users.manage',
+      'system:modules.*',
+      'system:module.*',
+      'bundle:*:*',
+      'system:modules',
+    ];
+    for (const grant of grants) {
+      const policy = { roles: { role: [grant] } };
+      expect(authorize({ id: 'user:a', roles: ['role'] }, MODULES_MANAGE, policy), grant).toBe(
+        false,
+      );
+    }
+    for (const grant of ['*', 'system:*', MODULES_MANAGE]) {
+      const policy = { roles: { role: [grant] } };
+      expect(authorize({ id: 'user:a', roles: ['role'] }, MODULES_MANAGE, policy), grant).toBe(
+        true,
+      );
+    }
+  });
+
   it('names what a module defines in a namespace no built-in permission is in', () => {
     const permission = modulePermission('auth-oidc', 'link');
     expect(permission).toBe('system:module.auth-oidc.link');

@@ -1,6 +1,7 @@
 import { defineComponent, h } from 'vue';
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 import { DEFAULT_WORKSPACE, useBundles } from './stores/bundles.js';
+import { AccountView } from './views/Account.js';
 import { AssetsView } from './views/Assets.js';
 import { BundlesView } from './views/Bundles.js';
 import { GraphicsView } from './views/Graphics.js';
@@ -33,6 +34,7 @@ export const routes: RouteRecordRaw[] = [
   { path: '/settings', component: SettingsView },
   { path: '/modules', component: ModulesView },
   { path: '/logs', component: LogsView },
+  { path: '/account', component: AccountView },
 ];
 
 export const createDashboardRouter = () => createRouter({ history: createWebHistory(), routes });

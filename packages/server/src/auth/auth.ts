@@ -316,6 +316,24 @@ export interface Auth {
   /** Takes a link away again and ends the sessions of the user. */
   unlinkIdentity(userId: string, provider: string, subject: string): void;
   /**
+   * A user takes away a link of their own. Refused (`conflict`) when it is the last way the
+   * user has to sign in: no password and no other link. Ends the sessions of the user.
+   */
+  unlinkOwnIdentity(userId: string, provider: string, subject: string): void;
+  /** Whether the user can sign in with a password. */
+  hasPassword(userId: string): boolean;
+  /**
+   * The user and the start of a session that is valid right now, by its secret, for a check
+   * of who started something. Nothing about the session changes.
+   */
+  sessionOf(secret: string): { readonly userId: string; readonly createdAt: number } | undefined;
+  /**
+   * Resolves when `password` is the user's current password; rejects with `bad_request` when
+   * none is given, which does not count, with `forbidden` when it is wrong, and with
+   * `ThrottledError` after too many wrong ones, counted with those of `changeOwnPassword`.
+   */
+  confirmOwnPassword(userId: string, password: unknown): Promise<void>;
+  /**
    * Resolves with a fresh session; all earlier ones of the user are gone. The user's tokens
    * stay unless `revokeTokens` is set. Rejects with `ThrottledError` after too many wrong
    * current passwords.
@@ -903,6 +921,75 @@ export function createAuth(options: AuthOptions): Auth {
         sessions.deleteForUser(userId);
       });
       changed();
+    },
+
+    unlinkOwnIdentity(userId, provider, subject) {
+      checkExternal(provider, subject);
+      store.transaction(() => {
+        changeable(userId);
+        if (identities.get(provider, subject)?.userId !== userId) throw missing('The link');
+        const password = identities.get(LOCAL, userId)?.secret;
+        const others = identities
+          .listExcept(LOCAL)
+          .filter(
+            (link) =>
+              link.userId === userId && !(link.provider === provider && link.subject === subject),
+          );
+        if ((password === undefined || password === null) && others.length === 0) {
+          throw new MoonCGError(
+            'conflict',
+            'This is the only way you can sign in. Link another account or set a password first.',
+          );
+        }
+        identities.delete(provider, subject);
+        sessions.deleteForUser(userId);
+      });
+      changed();
+    },
+
+    hasPassword(userId) {
+      const secret = identities.get(LOCAL, userId)?.secret;
+      return secret !== undefined && secret !== null;
+    },
+
+    sessionOf(secret) {
+      const session = sessions.get(hashSecret(secret));
+      if (!session || session.userId === null) return undefined;
+      if (
+        now() - session.lastSeen > SESSION_IDLE_MS ||
+        now() - session.createdAt > SESSION_MAX_MS
+      ) {
+        return undefined;
+      }
+      const user = users.get(session.userId);
+      if (!user || user.disabled || user.devMode) return undefined;
+      return { userId: user.id, createdAt: session.createdAt };
+    },
+
+    async confirmOwnPassword(userId, password) {
+      const user = existing(userId);
+      // No password is no guess: it does not count towards the throttle.
+      if (typeof password !== 'string' || password === '') {
+        throw new MoonCGError('bad_request', 'Enter your current password');
+      }
+      const stored = identities.get(LOCAL, user.id)?.secret;
+      const wait = byUser.blockedFor(user.id);
+      if (wait > 0) throw new ThrottledError(Math.ceil(wait / 1000));
+      byUser.fail(user.id);
+      let matches: boolean;
+      try {
+        matches =
+          password.length <= MAX_PASSWORD_LENGTH &&
+          stored !== undefined &&
+          stored !== null &&
+          (await verified(password, stored));
+      } catch (error) {
+        if (!(error instanceof LimiterFull)) throw error;
+        byUser.forgive(user.id);
+        throw new ThrottledError(1);
+      }
+      if (!matches) throw new MoonCGError('forbidden', 'The current password is wrong');
+      byUser.succeed(user.id);
     },
 
     async changeOwnPassword(userId, current, next, { revokeTokens = false } = {}) {

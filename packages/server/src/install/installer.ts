@@ -1,9 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
-import { Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
+import { join } from 'node:path';
 import {
   BUNDLE_NAME_PATTERN,
   BUNDLES_MANAGE,
@@ -30,38 +27,27 @@ import { installProblems } from '../bundles/dependencies.js';
 import { privateRoots, publicError } from '../bundles/errors.js';
 import type { BundleManager } from '../bundles/manager.js';
 import { errorMessage, type Logger } from '../kernel/logger.js';
+import { fetchSource, receiveUpload, type StageSource, sourceProblem } from './fetch.js';
 import {
   DEFAULT_INSTALL_LIMITS,
   type InstallLimits,
-  isInside,
-  isNetworkPath,
   measureTree,
   moveDir,
-  realNearest,
   refuse,
   removeDir,
   storageError,
   storageProblem,
 } from './files.js';
-import {
-  fetchGit,
-  type GitOptions,
-  gitRefProblem,
-  gitUrlProblem,
-  withoutCredentials,
-} from './git.js';
-import { copyLocalPath } from './local.js';
+import { type GitOptions, withoutCredentials } from './git.js';
 import { createNpmInstall, type NpmInstall, type NpmNeed, npmNeed } from './npm.js';
 import {
   type BundleSource,
   BundleSources,
-  type FetchableSource,
   type PublicSource,
   publicSource,
   refetchable,
   type SourceRecord,
 } from './sources.js';
-import { bundleRoot, extractZip } from './zip.js';
 
 /**
  * The name of the read-only replicant `{ jobs, staged }`: the latest installations, updates
@@ -82,16 +68,7 @@ export const MAX_STAGE_JOBS = 2;
 /** How many bundles may be fetched, or wait fetched for a decision, in all. */
 export const MAX_STAGED = 5;
 
-/** Where to fetch a bundle from: something the server can reach, or an archive sent to it. */
-export type StageSource =
-  | FetchableSource
-  | {
-      readonly type: 'upload';
-      readonly body: NodeJS.ReadableStream;
-      /** What the request said the archive is long. What arrives is counted either way. */
-      readonly length?: number | undefined;
-      readonly filename?: string | undefined;
-    };
+export type { StageSource } from './fetch.js';
 
 /** The role grants a bundle proposes, and whether installing it makes them. */
 export interface ProposedRoles {
@@ -266,6 +243,91 @@ interface BackupMeta {
 }
 
 const STAGING_ID = /^[0-9a-f]{24}$/;
+/** The note in a staging folder that lets a restart take the bundle up again. */
+const STAGED_NOTE = 'staged.json';
+const SOURCE_TYPES = new Set(['git', 'path', 'zip', 'upload']);
+
+/** How a bundle was fetched and decided about, as a restart needs it. */
+interface StagedNote {
+  readonly id: string;
+  readonly source: BundleSource;
+  readonly trusted: boolean;
+  readonly by: string;
+  readonly stagedAt: string;
+  readonly expiresAt: string;
+  readonly target?: string | undefined;
+}
+
+/** The longest each text of a note may be. A note longer than that was not written here. */
+const NOTE_LIMITS = {
+  url: 4096,
+  ref: 256,
+  commit: 64,
+  path: 4096,
+  filename: 255,
+  by: 200,
+} as const;
+
+/** A text field of a note: absent, or a string no longer than its limit. */
+const noteText = (field: unknown, limit: number) =>
+  field === undefined || (typeof field === 'string' && field.length <= limit);
+
+/**
+ * A note as it was read, or `undefined` for anything that is no note of this folder. The
+ * source is built anew from the fields a source has, so nothing else in the note is kept.
+ */
+function parseNote(
+  value: unknown,
+  id: string,
+):
+  | (Omit<StagedNote, 'stagedAt' | 'expiresAt'> & { stagedAt: number; expiresAt: number })
+  | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const note = value as Record<string, unknown>;
+  const source = note.source as Record<string, unknown> | undefined;
+  const stagedAt = typeof note.stagedAt === 'string' ? Date.parse(note.stagedAt) : Number.NaN;
+  const expiresAt = typeof note.expiresAt === 'string' ? Date.parse(note.expiresAt) : Number.NaN;
+  if (
+    note.id !== id ||
+    typeof note.trusted !== 'boolean' ||
+    typeof note.by !== 'string' ||
+    !noteText(note.by, NOTE_LIMITS.by) ||
+    !Number.isFinite(stagedAt) ||
+    !Number.isFinite(expiresAt) ||
+    !(
+      note.target === undefined ||
+      (typeof note.target === 'string' && BUNDLE_NAME_PATTERN.test(note.target))
+    ) ||
+    typeof source !== 'object' ||
+    source === null ||
+    !SOURCE_TYPES.has(source.type as string) ||
+    !noteText(source.url, NOTE_LIMITS.url) ||
+    !noteText(source.ref, NOTE_LIMITS.ref) ||
+    !noteText(source.commit, NOTE_LIMITS.commit) ||
+    !noteText(source.path, NOTE_LIMITS.path) ||
+    !noteText(source.filename, NOTE_LIMITS.filename)
+  ) {
+    return undefined;
+  }
+  const field = (name: 'url' | 'ref' | 'commit' | 'path' | 'filename') =>
+    source[name] === undefined ? {} : { [name]: source[name] as string };
+  return {
+    id,
+    source: {
+      type: source.type as BundleSource['type'],
+      ...field('url'),
+      ...field('ref'),
+      ...field('commit'),
+      ...field('path'),
+      ...field('filename'),
+    },
+    trusted: note.trusted,
+    by: note.by,
+    stagedAt,
+    expiresAt,
+    ...(note.target === undefined ? {} : { target: note.target as string }),
+  };
+}
 const BACKUP_META = 'backup.json';
 const succeeded: Outcome = { event: 'succeed' };
 
@@ -364,14 +426,33 @@ export class BundleInstaller {
   }
 
   /**
-   * Deletes what earlier runs left behind: a bundle that was fetched but never decided about
-   * does not survive a restart, and neither does a backup folder that was never filled.
-   * Call it once, before anything is staged.
+   * Takes up what earlier runs left in staging. A bundle that was fetched and is still
+   * within its lifetime is kept, with the trust it was fetched with, after it was read and
+   * checked again from its files as if it had just been fetched: nothing stored about what
+   * the files hold is believed. Everything else there is deleted, and so is a backup folder
+   * that was never filled. Call it once, before anything is staged.
    */
   async start(): Promise<void> {
-    await removeDir(this.#stagingRoot).catch((error) => {
-      this.#log.warn(`The staging folder could not be emptied: ${errorMessage(error)}`);
-    });
+    const now = this.#now();
+    let kept = 0;
+    for (const name of await readdir(this.#stagingRoot).catch(() => [] as string[])) {
+      const dir = join(this.#stagingRoot, name);
+      if (STAGING_ID.test(name)) {
+        const notKept =
+          kept >= this.#maxStaged
+            ? 'as many staged bundles as may wait are kept already'
+            : await this.#takeUp(name, dir, now).catch((error: unknown) => errorMessage(error));
+        if (notKept === undefined) {
+          kept++;
+          continue;
+        }
+        this.#log.warn(`The staged bundle ${name} is not kept: ${notKept}`);
+      }
+      // Anything else there, such as what a removal left to be deleted, is no staged bundle.
+      await removeDir(dir).catch((error) => {
+        this.#log.warn(`A staging folder could not be deleted: ${errorMessage(error)}`);
+      });
+    }
     for (const name of await readdir(this.#backupsRoot).catch(() => [])) {
       if (BUNDLE_NAME_PATTERN.test(name)) await this.#prune(name);
     }
@@ -425,51 +506,18 @@ export class BundleInstaller {
           job.bundle = manifest.name;
           const problems = this.#problems(manifest, target);
           if (problems.length > 0) throw refuse(problems.join('; '));
-          const npm = await npmNeed(content, this.#options.npmRegistry);
-          const steering = [...npm.config.map((file) => `it brings ${file}`), ...npm.unusual];
-          if (npm.needed && !trusted && steering.length > 0) {
-            throw refuse(
-              `Installing this bundle would make npm do more than fetch packages from the registry: ${steering.join('; ')}. ` +
-                'That can run programs on the server before the bundle is installed. ' +
-                'Fetch it again with install scripts allowed if you trust it, or bring node_modules in the bundle.',
-            );
-          }
-          const size = await measureTree(content, this.#limits);
-
           const now = this.#now();
-          const summary: StagedBundle = {
+          const { summary } = await this.#check({
             id,
-            name: manifest.name,
-            version: manifest.version,
-            ...(manifest.title === undefined ? {} : { title: manifest.title }),
-            ...(target === undefined
-              ? {}
-              : { target, replaces: this.#options.manager.get(target)?.manifest?.version }),
-            source: publicSource(stored),
-            ...(manifest.engine === undefined ? {} : { engine: manifest.engine.mooncg }),
-            permissions: Object.entries(manifest.permissions).map(([name, description]) => ({
-              name,
-              description,
-            })),
-            capabilities: manifest.capabilities,
-            dependencies: manifest.dependencies,
-            extension: manifest.extension !== undefined,
-            panels: manifest.panels.length,
-            dialogs: manifest.dialogs.length,
-            graphics: manifest.graphics.length,
-            assets: manifest.assets.length,
-            config: manifest.config !== undefined,
-            npm,
-            installCode: !npm.needed ? 'none' : trusted ? 'allowed' : 'on-request',
-            roles: this.#options.roles?.proposed(manifest.name, manifest.defaultRoles) ?? {
-              grants: manifest.defaultRoles,
-              applies: false,
-            },
-            ...size,
+            manifest,
+            content,
+            stored,
+            target,
+            trusted,
             by,
-            stagedAt: new Date(now).toISOString(),
-            expiresAt: new Date(now + this.#ttlMs).toISOString(),
-          };
+            stagedAt: now,
+            expiresAt: now + this.#ttlMs,
+          });
           const entry: Staged = {
             summary,
             dir,
@@ -479,12 +527,24 @@ export class BundleInstaller {
             trusted,
             state: 'staged',
           };
+          // What a restart needs to take it up again: how it was fetched and decided about,
+          // never what its files hold, which is read from them again.
+          const note: StagedNote = {
+            id,
+            source: stored,
+            trusted,
+            by,
+            stagedAt: summary.stagedAt,
+            expiresAt: summary.expiresAt,
+            ...(target === undefined ? {} : { target }),
+          };
+          await writeFile(join(dir, STAGED_NOTE), `${JSON.stringify(note, null, 2)}\n`);
           this.#entries.set(id, entry);
           this.#arm(entry);
           this.#log.info(
             `${by} staged ${manifest.name} ${manifest.version} from ${describeSource(stored)} (staging ${id})`,
           );
-          if (trusted && npm.needed) {
+          if (trusted && summary.npm.needed) {
             this.#log.warn(
               `${by} allowed ${manifest.name} ${manifest.version} to run code while it is installed`,
             );
@@ -550,7 +610,7 @@ export class BundleInstaller {
         if (used.up) await this.#drop(entry);
         else {
           entry.state = 'staged';
-          this.#arm(entry);
+          this.#arm(entry, Math.max(0, Date.parse(entry.summary.expiresAt) - this.#now()));
         }
       }
     });
@@ -701,6 +761,26 @@ export class BundleInstaller {
     return found
       .filter((backup) => backup !== undefined)
       .sort((a, b) => b.time.localeCompare(a.time) || b.id.localeCompare(a.id));
+  }
+
+  /**
+   * Every bundle that has a backup, by name, with its backups and whether a bundle of that
+   * name is installed. One that is not was removed: its backup is how it comes back.
+   */
+  async allBackups(): Promise<
+    { readonly name: string; readonly installed: boolean; readonly backups: BackupInfo[] }[]
+  > {
+    const names = (await readdir(this.#backupsRoot).catch(() => []))
+      .filter((name) => BUNDLE_NAME_PATTERN.test(name))
+      .sort();
+    const found = await Promise.all(
+      names.map(async (name) => ({
+        name,
+        installed: this.#options.manager.get(name) !== undefined,
+        backups: await this.backups(name),
+      })),
+    );
+    return found.filter(({ backups }) => backups.length > 0);
   }
 
   /**
@@ -880,112 +960,28 @@ export class BundleInstaller {
 
   /** Why a request names no source to fetch from, checked before anything is created. */
   #sourceProblem(source: StageSource): string | undefined {
-    const given: Partial<Record<string, unknown>> = source ?? {};
-    if (given.type === 'git') {
-      return (
-        gitUrlProblem(given.url, this.#options.git?.allowFileUrls === true) ??
-        gitRefProblem(given.ref)
-      );
-    }
-    if (given.type === 'path' || given.type === 'zip') {
-      if (typeof given.path !== 'string' || !isAbsolute(given.path)) {
-        return 'The path of the bundle must be an absolute path on the server';
-      }
-      return isNetworkPath(given.path)
-        ? 'A network path is not accepted as the source of a bundle; copy it to a local disk'
-        : undefined;
-    }
-    if (given.type === 'upload') return undefined;
-    return 'The source must be a Git repository, a path on the server or a ZIP archive';
+    return sourceProblem(source, 'bundle', this.#options.git?.allowFileUrls === true);
   }
 
   /** Writes an uploaded archive to `file`, counting what arrives against the limit. */
-  async #receive(body: NodeJS.ReadableStream, file: string, declared?: number): Promise<void> {
-    const max = this.#limits.maxArchiveBytes;
-    const tooLarge = () => refuse(`The archive is larger than ${max} bytes`);
-    if (declared !== undefined && declared > max) throw tooLarge();
-    let received = 0;
-    // An upload that stops sending holds a folder in staging; it is not waited for forever.
-    const idleMs = this.#options.uploadIdleMs ?? UPLOAD_IDLE_MS;
-    const stalled = refuse('The upload stalled and was given up');
-    let idle: ReturnType<typeof setTimeout> | undefined;
-    const counting = new Transform({
-      transform(chunk: Buffer, _encoding, done) {
-        received += chunk.length;
-        idle?.refresh();
-        done(received > max ? tooLarge() : null, chunk);
-      },
+  #receive(body: NodeJS.ReadableStream, file: string, declared?: number): Promise<void> {
+    return receiveUpload(body, file, {
+      maxBytes: this.#limits.maxArchiveBytes,
+      idleMs: this.#options.uploadIdleMs ?? UPLOAD_IDLE_MS,
+      ...(declared === undefined ? {} : { declared }),
     });
-    idle = setTimeout(() => counting.destroy(stalled), idleMs);
-    try {
-      await pipeline(body, counting, createWriteStream(file, { flags: 'wx' }));
-    } catch (error) {
-      if (error instanceof MoonCGError) throw error;
-      const storage = storageProblem(error);
-      if (storage !== undefined) throw storageError(storage);
-      throw refuse(`The upload did not arrive whole: ${errorMessage(error)}`);
-    } finally {
-      clearTimeout(idle);
-    }
   }
 
   /** Brings the files of the bundle into `content` and says where they came from. */
-  async #fetch(source: StageSource, dir: string, content: string): Promise<BundleSource> {
-    const limits = this.#limits;
-    const { bundlesDir, dataDir } = this.#options;
-    const unpack = async (archive: string) => {
-      const unpacked = join(dir, 'unpacked');
-      await mkdir(unpacked);
-      await extractZip(archive, unpacked, limits);
-      await moveDir(await bundleRoot(unpacked), content);
-      await removeDir(unpacked);
-    };
-    if (source.type === 'git') {
-      const { url, ref } = source;
-      const { commit } = await fetchGit({ url, ref }, content, {
-        timeoutMs: this.#timeoutMs,
-        signal: this.#shutdown.signal,
-        // While it is fetched the folder holds the history too; twice the bundle is room.
-        maxBytes: limits.maxUnpackedBytes * 2,
-        ...this.#options.git,
-      });
-      return { type: 'git', url, ...(ref === undefined ? {} : { ref }), commit };
-    }
-    if (source.type === 'upload') {
-      const archive = join(dir, 'upload.zip');
-      await unpack(archive);
-      await removeDir(archive);
-      // The name is shown and logged: only what a file name looks like is kept of it.
-      const filename = source.filename
-        ?.replace(/^.*[\\/]/, '')
-        // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are the point
-        .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
-        .slice(0, 100);
-      return { type: 'upload', ...(filename ? { filename } : {}) };
-    }
-    const { path } = source;
-    const stats = await stat(path).catch(() => undefined);
-    if (source.type === 'path') {
-      if (stats?.isFile()) {
-        throw refuse(
-          'The path is a file, not a folder. Give an archive as { "type": "zip", "path": … }, or upload it',
-        );
-      }
-      await copyLocalPath(path, content, { forbidden: [bundlesDir, dataDir], limits });
-      return { type: 'path', path };
-    }
-    if (!stats?.isFile()) throw refuse('There is no archive at the path given');
-    if (stats.size > limits.maxArchiveBytes) {
-      throw refuse(`The archive is larger than ${limits.maxArchiveBytes} bytes`);
-    }
-    const real = await realNearest(path);
-    for (const folder of [bundlesDir, dataDir]) {
-      if (isInside(await realNearest(folder), real)) {
-        throw refuse('The path is inside the bundles folder or the data folder of the server');
-      }
-    }
-    await unpack(path);
-    return { type: 'zip', path };
+  #fetch(source: StageSource, dir: string, content: string): Promise<BundleSource> {
+    return fetchSource(source, dir, content, {
+      limits: this.#limits,
+      timeoutMs: this.#timeoutMs,
+      signal: this.#shutdown.signal,
+      git: this.#options.git,
+      forbidden: [this.#options.bundlesDir, this.#options.dataDir],
+      noun: 'bundle',
+    });
   }
 
   /** What speaks against installing a bundle with this manifest, as things are now. */
@@ -1236,15 +1232,130 @@ export class BundleInstaller {
     }
   }
 
+  /**
+   * Checks a fetched bundle as staging does, from its files, and says what it declares.
+   * Throws a refusal for one that must not be staged.
+   */
+  async #check(given: {
+    readonly id: string;
+    readonly manifest: Manifest;
+    readonly content: string;
+    readonly stored: BundleSource;
+    readonly target: string | undefined;
+    readonly trusted: boolean;
+    readonly by: string;
+    readonly stagedAt: number;
+    readonly expiresAt: number;
+  }): Promise<{ summary: StagedBundle }> {
+    const { id, manifest, content, stored, target, trusted, by } = given;
+    const npm = await npmNeed(content, this.#options.npmRegistry);
+    const steering = [...npm.config.map((file) => `it brings ${file}`), ...npm.unusual];
+    if (npm.needed && !trusted && steering.length > 0) {
+      throw refuse(
+        `Installing this bundle would make npm do more than fetch packages from the registry: ${steering.join('; ')}. ` +
+          'That can run programs on the server before the bundle is installed. ' +
+          'Fetch it again with install scripts allowed if you trust it, or bring node_modules in the bundle.',
+      );
+    }
+    const size = await measureTree(content, this.#limits);
+    const summary: StagedBundle = {
+      id,
+      name: manifest.name,
+      version: manifest.version,
+      ...(manifest.title === undefined ? {} : { title: manifest.title }),
+      ...(target === undefined
+        ? {}
+        : { target, replaces: this.#options.manager.get(target)?.manifest?.version }),
+      source: publicSource(stored),
+      ...(manifest.engine === undefined ? {} : { engine: manifest.engine.mooncg }),
+      permissions: Object.entries(manifest.permissions).map(([name, description]) => ({
+        name,
+        description,
+      })),
+      capabilities: manifest.capabilities,
+      dependencies: manifest.dependencies,
+      extension: manifest.extension !== undefined,
+      panels: manifest.panels.length,
+      dialogs: manifest.dialogs.length,
+      graphics: manifest.graphics.length,
+      assets: manifest.assets.length,
+      config: manifest.config !== undefined,
+      npm,
+      installCode: !npm.needed ? 'none' : trusted ? 'allowed' : 'on-request',
+      roles: this.#options.roles?.proposed(manifest.name, manifest.defaultRoles) ?? {
+        grants: manifest.defaultRoles,
+        applies: false,
+      },
+      ...size,
+      by,
+      stagedAt: new Date(given.stagedAt).toISOString(),
+      expiresAt: new Date(given.expiresAt).toISOString(),
+    };
+    return { summary };
+  }
+
+  /**
+   * Takes up a staged bundle an earlier run left: `undefined` when it is kept, else why it
+   * is not. The note says how it was fetched, when, by whom, with what trust and for which
+   * update; the files say everything else, and pass the checks of staging once more. It is
+   * kept no longer than its lifetime from when it was staged, whatever the note says.
+   */
+  async #takeUp(id: string, dir: string, now: number): Promise<string | undefined> {
+    const text = await readFile(join(dir, STAGED_NOTE), 'utf8').catch(() => undefined);
+    if (text === undefined) return 'it has no note of how it was fetched';
+    let read: unknown;
+    try {
+      read = JSON.parse(text);
+    } catch {
+      return 'its note is not valid';
+    }
+    const note = parseNote(read, id);
+    if (!note) return 'its note is not valid';
+    if (note.stagedAt > now) return 'its note says it was staged in the future';
+    const expiresAt = Math.min(note.expiresAt, note.stagedAt + this.#ttlMs);
+    if (expiresAt <= now) return 'its time is up';
+    const content = join(dir, 'bundle');
+    if (note.target !== undefined && !this.#options.manager.get(note.target)) {
+      return `the bundle "${note.target}" it was to update is gone`;
+    }
+    const { manifest, errors } = await readManifest(content);
+    if (!manifest) throw refuse(errors.join('; '));
+    const problems = this.#problems(manifest, note.target);
+    if (problems.length > 0) throw refuse(problems.join('; '));
+    const { summary } = await this.#check({
+      ...note,
+      expiresAt,
+      target: note.target,
+      manifest,
+      content,
+      stored: note.source,
+    });
+    const entry: Staged = {
+      summary,
+      dir,
+      content,
+      source: note.source,
+      manifest,
+      trusted: note.trusted,
+      state: 'staged',
+    };
+    this.#entries.set(id, entry);
+    this.#arm(entry, expiresAt - now);
+    this.#log.info(
+      `The staged ${manifest.name} ${manifest.version} (staging ${id}) was kept across the restart until ${summary.expiresAt}`,
+    );
+    return undefined;
+  }
+
   /** Starts the clock after which a staged bundle nobody decided about is deleted. */
-  #arm(entry: Staged): void {
+  #arm(entry: Staged, ms = this.#ttlMs): void {
     clearTimeout(entry.timer);
     entry.timer = setTimeout(() => {
       if (entry.state !== 'staged') return;
       const { name, version } = entry.summary;
       this.#log.info(`The staged ${name} ${version} expired and was deleted`);
       void this.#drop(entry);
-    }, this.#ttlMs);
+    }, ms);
     entry.timer.unref();
     this.#publish();
   }

@@ -37,8 +37,27 @@ and **Remove** on every row. See [docs/dashboard.md](dashboard.md#bundles).
 | Commit  | npm dependencies are installed in staging, the folder is moved into `bundles/<name>/`, it starts | The bundle is there and running |
 | Discard | The staging folder is deleted                                                                    | Nothing                         |
 
-A staged bundle nobody decides about is deleted after 30 minutes, and the staging folder is
-emptied whenever the server starts.
+A staged bundle nobody decides about is deleted after 30 minutes.
+
+**Across a restart** a staged bundle that is still within its 30 minutes is kept, with the
+trust it was fetched with (`scripts`) and for the update it was fetched for. Beside its files
+the staging folder holds a note, `staged.json`, of how it was fetched: the source, who, when,
+the trust and the target. Nothing in it says what the files hold. At the start the bundle is
+read from its files and checked again exactly as when it was fetched (the manifest, the
+MoonCG and the bundles it needs, npm and what would steer it, the size limits), and its
+summary is made anew from that, so what is shown is what is on disk now. Of the note only the
+fields of a source, each within a length limit, are taken; a note that says it was written
+later than now is not believed, and none is kept longer than 30 minutes from when it says the
+bundle was fetched, whatever time it gives. A bundle that no longer passes, whose note is
+missing or does not fit its folder, whose time is up, whose target was removed meanwhile, or
+that is one more than may wait staged (five) is deleted, and the log says why, one line for
+each. Everything else in the staging folder (what an interrupted fetch or removal left) is
+deleted at the start as well. The modules' staging folder is still emptied at every start.
+
+The trust in the note (`"trusted": true`) is believed as it is: whoever can write to the data
+folder can mark a staged bundle as trusted, so that installing it runs its install scripts.
+That is no new way in: whoever can write there can change the database and every installed
+bundle as well. Keep the data folder for the server's account alone.
 
 What is shown before the decision, from the manifest and the files:
 
@@ -67,7 +86,7 @@ A bundle is refused at the stage step, with the reason, when
   permissions, panels, dialogs or graphics, and so on),
 - it would make npm do more than fetch packages from the registry, and was not fetched as
   trusted (see [npm dependencies](#npm-dependencies)),
-- `engine.mooncg` does not allow this MoonCG (`engine.mooncg: needs MoonCG >=1.0.0, but this is 0.9.0`),
+- `engine.mooncg` does not allow this MoonCG (`engine.mooncg: needs MoonCG >=1.0.0, but this is 0.10.0`),
 - a bundle it depends on is not installed or has the wrong version, or it would close a
   dependency cycle,
 - a bundle of that name is installed already (install), or its name is not the name of the
@@ -262,6 +281,9 @@ The newest three earlier versions of each bundle are kept; older ones are delete
 update or a removal. `mooncg bundle backups <name>` lists them, and `mooncg bundle restore <name>
 <backup>` puts one back: the installed version becomes a backup in turn and comes back if the
 restored one does not start. The backup of a removed bundle is installed again by `restore`.
+`GET /api/v1/bundles/-/backups` lists the backups of every bundle at once, with whether a bundle
+of that name is installed: the only list that still names a removed bundle. The dashboard's
+**Backups** card shows it.
 A restore is checked like an update: the MoonCG the backup asks for, the bundles it needs, and
 the installed bundles that need it; a backup that a running bundle could not use is refused and
 nothing is stopped. A backup folder that an interrupted update left without a bundle in it is
@@ -286,8 +308,9 @@ with the reason, so that it can be seen and the purge done by hand.
 A bundle that an enabled bundle depends on is not removed without `--force`. That is all
 `--force` and `"force"` do: they do not remove a bundle while the installation is on air, which
 takes `--on-air` or `"forceOnAir": true` (see below), and a removal that both stand in the way
-of takes both. The dashboard's **Remove** keeps files and data and never removes a bundle
-others still need; the flags are for the command line and the API.
+of takes both. The dashboard's **Remove** offers the same choices: deleting the files and
+purging the data are boxes in its confirmation, and removing a bundle that others need is a
+question of its own (see [dashboard.md](dashboard.md#installing-updating-and-removing)).
 
 ## Who may do this
 
@@ -302,8 +325,10 @@ INFO  [bundles] ada updated scoreboard from 1.1.0 to 1.2.0
 ```
 
 Credentials in a Git address are taken out of everything that is shown or logged. They are
-stored, with the rest of the address, in `<data-dir>/bundle-sources.json`, which is what lets
-an update fetch again.
+stored, with the rest of the address, in `<data-dir>/bundle-sources.json` (for modules,
+`module-sources.json`), which is what lets an update fetch again. The file is written
+readable by the server's account only (mode 0600) where the system has such modes; on
+Windows the access list of the data folder is what protects it.
 
 An update or removal goes through the same lock as enable, disable and reload, so none of them
 can cross another for the same bundle.
@@ -333,7 +358,7 @@ mooncg bundle enable <name>
 mooncg bundle disable|reload <name> [--on-air]
 mooncg bundle backups <name>
 mooncg bundle restore <name> <backup> [--yes] [--on-air]
-mooncg bundle create <name> [--template html] [--dir <bundles folder>] [--config <file>]
+mooncg bundle create <name> [--template html|vue] [--dir <bundles folder>] [--config <file>]
 ```
 
 `--on-air` on `update`, `remove`, `disable`, `reload` and `restore` goes ahead although the
@@ -381,6 +406,7 @@ with the `id` to commit or discard.
 | `POST /api/v1/bundles/<name>/update`               | `{ "source"?: … }`                                          | 202, a `stage` job                              |
 | `POST /api/v1/bundles/<name>/remove`               | `{ "force"?, "forceOnAir"?, "deleteFiles"?, "purgeData"? }` | 202, a job                                      |
 | `GET /api/v1/bundles/<name>/backups`               |                                                             | `{ backups: […] }`                              |
+| `GET /api/v1/bundles/-/backups`                    |                                                             | `{ bundles: [{ name, installed, backups }] }`   |
 | `POST /api/v1/bundles/<name>/backups/<id>/restore` | `{ "forceOnAir"?: true }`                                   | 202, a job                                      |
 
 A `source` is `{ "type": "git", "url": …, "ref"?: … }`, `{ "type": "path", "path": … }` or

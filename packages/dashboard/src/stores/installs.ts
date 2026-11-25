@@ -68,6 +68,34 @@ export interface JobInfo {
   readonly rollbackError?: string | undefined;
 }
 
+/** A bundle's earlier version, kept when it was updated, removed or replaced by a restore. */
+export interface BackupInfo {
+  readonly id: string;
+  readonly version: string;
+  /** When it was moved aside, as an ISO 8601 time. */
+  readonly time: string;
+  readonly reason: 'update' | 'remove' | 'restore';
+}
+
+/** The backups of one bundle, and whether a bundle of that name is installed now. */
+export interface BundleBackups {
+  readonly name: string;
+  readonly installed: boolean;
+  readonly backups: readonly BackupInfo[];
+}
+
+/** How a bundle is removed. Each is said only when it is chosen. */
+export interface RemoveOptions {
+  /** Remove although the installation is on air. */
+  readonly forceOnAir?: boolean | undefined;
+  /** Remove although enabled bundles need it. */
+  readonly force?: boolean | undefined;
+  /** Delete the files instead of moving them to the backups. */
+  readonly deleteFiles?: boolean | undefined;
+  /** Delete the bundle's settings, uploaded assets and stored values as well. */
+  readonly purgeData?: boolean | undefined;
+}
+
 /** Where a bundle came from, in a few words. */
 export function describeSource({ type, location, ref, commit }: SourceInfo): string {
   if (type === 'git') {
@@ -97,6 +125,12 @@ export const useInstalls = defineStore('installs', () => {
   const mine = ref<readonly string[]>([]);
   /** A request is on its way. */
   const sending = ref(false);
+  /** The backups of every bundle that has one; loaded by `loadBackups`. */
+  const backups = ref<readonly BundleBackups[]>([]);
+  /** Why the backups could not be read; empty when they could. Apart from `problem`. */
+  const backupsProblem = ref('');
+  /** The last `loadBackups` asked: an earlier answer that comes later is not used. */
+  let backupsAsked = 0;
 
   /** Follows the replicant `system:installs`. Returns the function that stops it. */
   function follow(): () => void {
@@ -179,14 +213,39 @@ export const useInstalls = defineStore('installs', () => {
 
   /**
    * `forceOnAir` removes although the installation is on air, and that is all it does. A
-   * bundle that others still need is refused by the server either way: the dashboard has
-   * no way to remove it from under them.
+   * bundle that others still need is refused by the server unless `force` is given as well,
+   * which the page asks about on its own.
    */
-  const remove = (name: string, forceOnAir = false) =>
+  const remove = (name: string, options: RemoveOptions = {}) =>
     start(() =>
       api.request(
         'POST',
         `/api/v1/bundles/${part(name)}/remove`,
+        Object.fromEntries(Object.entries(options).filter(([, value]) => value === true)),
+      ),
+    );
+
+  async function loadBackups(): Promise<void> {
+    const asked = ++backupsAsked;
+    try {
+      const answer = await api.request<{ bundles?: readonly BundleBackups[] }>(
+        'GET',
+        `${INSTALLS}/backups`,
+      );
+      if (asked !== backupsAsked) return;
+      backups.value = answer?.bundles ?? [];
+      backupsProblem.value = '';
+    } catch (error) {
+      if (asked === backupsAsked) backupsProblem.value = messageOf(error);
+    }
+  }
+
+  /** Puts a backup back in place; `forceOnAir` replaces an installed version while on air. */
+  const restore = (name: string, id: string, forceOnAir = false) =>
+    start(() =>
+      api.request(
+        'POST',
+        `/api/v1/bundles/${part(name)}/backups/${part(id)}/restore`,
         forceOnAir ? { forceOnAir: true } : {},
       ),
     );
@@ -207,6 +266,10 @@ export const useInstalls = defineStore('installs', () => {
     commit,
     discard,
     remove,
+    backups,
+    backupsProblem,
+    loadBackups,
+    restore,
     busy,
   };
 });

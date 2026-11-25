@@ -286,9 +286,11 @@ describe('the bundles page and live reload', () => {
     });
 
     await button('board', 'Remove')?.trigger('click');
+    await button('board', 'Remove board')?.trigger('click');
     await flushPromises();
 
-    expect(confirm).toHaveBeenCalledTimes(2);
+    // The removal is confirmed on the page; the lock is the one question asked.
+    expect(confirm).toHaveBeenCalledTimes(1);
     // Not `force`: that would also take the bundle away from under the ones that need it,
     // which nobody was asked about.
     expect(calls.find((call) => call.path.endsWith('/remove'))?.body).toEqual({
@@ -335,7 +337,7 @@ describe('what the stores send while on air', () => {
     await installs.stageGit('https://example.com/a.git', '', 'board');
     await installs.refetch('board');
     await installs.commit('s1', false, true);
-    await installs.remove('board', true);
+    await installs.remove('board', { forceOnAir: true });
     await installs.stageUpload(new File(['x'], 'a.zip'), 'board');
     await installs.commit('s1', true);
     await installs.remove('board');

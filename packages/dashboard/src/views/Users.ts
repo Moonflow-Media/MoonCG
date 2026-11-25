@@ -49,6 +49,8 @@ export const UsersView = defineComponent({
     const users = ref<User[]>([]);
     const roles = ref<string[]>([]);
     const external = ref<Identities>(NO_IDENTITIES);
+    /** Whether users may link accounts to themselves; unknown on a server without modules. */
+    const selfLinking = ref<{ enabled: boolean; disabledProviders: string[] }>();
     /** The user chosen for each account that waits to be linked, by provider and subject. */
     const chosenUser = ref<Record<string, string>>({});
     /** The roles ticked in the form for a new user. */
@@ -62,7 +64,64 @@ export const UsersView = defineComponent({
         .request<Identities | undefined>('GET', '/api/v1/identities')
         .catch(() => undefined);
       external.value = linked ?? NO_IDENTITIES;
+      selfLinking.value = await api
+        .request<{ enabled: boolean; disabledProviders: string[] }>('GET', '/api/v1/self-linking')
+        .catch(() => undefined);
     });
+    /** Switches self-linking for all providers, or for one. */
+    const switchSelfLinking = (provider: string | undefined, on: boolean) => {
+      const state = selfLinking.value;
+      if (!state) return;
+      const disabledProviders =
+        provider === undefined
+          ? state.disabledProviders
+          : on
+            ? state.disabledProviders.filter((id) => id !== provider)
+            : [...state.disabledProviders, provider];
+      return send('PUT', '/api/v1/self-linking', {
+        enabled: provider === undefined ? on : state.enabled,
+        disabledProviders,
+      });
+    };
+    const selfLinkingCard = () => {
+      const state = selfLinking.value;
+      const { providers } = external.value;
+      if (!state || providers.length === 0) return null;
+      const box = (label: string, checked: boolean, change: (on: boolean) => void, key: string) =>
+        h('label', { class: 'check', key }, [
+          h('input', {
+            type: 'checkbox',
+            name: key,
+            checked,
+            onChange: (event: Event) => change((event.target as HTMLInputElement).checked),
+          }),
+          ` ${label}`,
+        ]);
+      return h('section', { class: 'card', 'data-self-linking': '' }, [
+        h('div', { class: 'card-head' }, h('h2', 'Self-linking')),
+        h('div', { class: 'card-body stack' }, [
+          h(
+            'p',
+            { class: 'field-note' },
+            'Whether users may link an account of a provider to themselves on their Account page, after their password or a fresh sign-in.',
+          ),
+          box(
+            'Users may link accounts',
+            state.enabled,
+            (on) => switchSelfLinking(undefined, on),
+            'self-linking',
+          ),
+          ...providers.map(({ id, name }) =>
+            box(
+              name,
+              !state.disabledProviders.includes(id),
+              (on) => switchSelfLinking(id, on),
+              `self-linking-${id}`,
+            ),
+          ),
+        ]),
+      ]);
+    };
     onMounted(() => run(async () => {}));
 
     const create = async (event: Event) => {
@@ -357,6 +416,7 @@ export const UsersView = defineComponent({
           ),
           h('div', { class: 'column' }, [
             unlinked(),
+            selfLinkingCard(),
             h('section', { class: 'card' }, [
               h('div', { class: 'card-head' }, h('h2', 'New user')),
               h(

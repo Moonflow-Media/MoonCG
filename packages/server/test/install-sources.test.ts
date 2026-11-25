@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -79,6 +79,21 @@ describe('BundleSources', () => {
     await sources.set('board', record(git));
     expect(await new BundleSources({ dataDir: dir }).get('board')).toEqual(record(git));
   });
+
+  // Windows knows no such modes: there the access list of the data folder protects the file.
+  it.skipIf(process.platform === 'win32')(
+    'writes the file only its owner can read, as a Git address in it may hold credentials',
+    async () => {
+      const dir = await dataDir();
+      // A file beside it that a crash left behind, readable by everyone.
+      await writeFile(join(dir, 'module-sources.json.tmp'), '{}', { mode: 0o644 });
+      for (const file of ['bundle-sources.json', 'module-sources.json']) {
+        const sources = new BundleSources({ dataDir: dir, file });
+        await sources.set('board', record(git));
+        expect((await stat(join(dir, file))).mode & 0o777).toBe(0o600);
+      }
+    },
+  );
 
   it('is not fooled by a name that every object has', async () => {
     const sources = new BundleSources({ dataDir: await dataDir() });

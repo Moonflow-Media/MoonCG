@@ -1,6 +1,6 @@
 import type { ProviderRegistry } from '../modules/providers.js';
 
-const escapeHtml = (text: string) =>
+export const escapeHtml = (text: string) =>
   text
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')

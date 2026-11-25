@@ -1,7 +1,11 @@
 import { defineComponent, h, onMounted, ref } from 'vue';
 import { api } from '../api.js';
+import { useOnAir } from '../stores/onAir.js';
 import { part, sure, useActions } from './admin.js';
+import { ModuleInstall, outcomeOf, settled } from './ModuleInstall.js';
 import { pageHead } from './parts.js';
+
+export { moduleInstallTiming } from './ModuleInstall.js';
 
 interface Module {
   readonly name: string;
@@ -27,7 +31,7 @@ const ABOUT = [
   'A module is code that runs inside the server, with everything the server may do. Enable only what you trust.',
   'A module in the modules folder does nothing until it is enabled here. Enabling starts it at once, and the server remembers the choice.',
   'Disabling stops it and takes away what it added: its ways to sign in, its routes and its permissions.',
-  'To install a module, copy its folder into the modules folder of the installation and restart the server.',
+  'Install a module below: it is fetched and checked first, and installed disabled. A module that came with MoonCG is updated with MoonCG.',
 ] as const;
 
 /** The modules of the installation: what runs inside the server, and switching it on and off. */
@@ -39,6 +43,32 @@ export const ModulesView = defineComponent({
       modules.value = (await api.request<{ modules: Module[] }>('GET', '/api/v1/modules')).modules;
     });
     onMounted(() => run(async () => {}));
+    const onAir = useOnAir();
+    const installer = ref<{ update(name: string): Promise<void> }>();
+    const removed = ref<{ text: string; ok: boolean }>();
+
+    const remove = (module: Module) => {
+      const question =
+        `Remove the module "${module.name}"? It is stopped and its files are deleted. ` +
+        'Its configuration is kept for when it is installed again.';
+      if (!sure(question)) return;
+      // Removing an enabled module interrupts what it does: that is the lock's question.
+      const override = module.enabled
+        ? onAir.overrideFor(`Remove the module "${module.name}"`)
+        : false;
+      if (override === undefined) return;
+      return run(async () => {
+        removed.value = undefined;
+        const job = await settled(
+          await api.request(
+            'POST',
+            `/api/v1/modules/${part(module.name)}/remove`,
+            override ? { forceOnAir: true } : {},
+          ),
+        );
+        removed.value = outcomeOf(job);
+      });
+    };
 
     const change = (module: Module, action: 'enable' | 'disable') =>
       send('POST', `/api/v1/modules/${part(module.name)}/${action}`, {});
@@ -53,6 +83,31 @@ export const ModulesView = defineComponent({
 
     const actions = (module: Module) => {
       if (module.internal) return h('span', { class: 'muted' }, 'part of the server');
+      // What came with MoonCG is updated with it; what was installed can be updated here.
+      const installed = module.builtin
+        ? []
+        : [
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'small',
+                'data-action': 'update',
+                onClick: () => installer.value?.update(module.name),
+              },
+              'Update',
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'small danger',
+                'data-action': 'remove',
+                onClick: () => remove(module),
+              },
+              'Remove',
+            ),
+          ];
       return [
         module.config ? h('a', { href: '/settings' }, 'Settings') : null,
         module.state === 'running'
@@ -89,6 +144,7 @@ export const ModulesView = defineComponent({
               'Disable',
             )
           : null,
+        ...installed,
       ];
     };
 
@@ -118,6 +174,13 @@ export const ModulesView = defineComponent({
             'Code that runs inside the server, such as sign-in with an external account.',
         }),
         alert(),
+        removed.value
+          ? h(
+              'p',
+              { class: removed.value.ok ? 'done' : 'problem', role: 'status' },
+              removed.value.text,
+            )
+          : null,
         h('div', { class: 'split' }, [
           h('section', { class: 'card' }, h('ul', { class: 'rows' }, modules.value.map(row))),
           h('section', { class: 'card', 'data-help': 'modules' }, [
@@ -133,6 +196,7 @@ export const ModulesView = defineComponent({
             ),
           ]),
         ]),
+        h(ModuleInstall, { ref: installer, onChanged: () => run(async () => {}) }),
       ]);
   },
 });

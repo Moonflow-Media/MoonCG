@@ -591,3 +591,68 @@ describe('the configuration of the module', () => {
     expect((await mooncg.http('GET', '/login')).text).not.toContain('class="providers"');
   });
 });
+
+describe('several OpenID Connect providers', () => {
+  it('offers oidc2 and oidc3 beside oidc, each with its own secret and its own links', async () => {
+    const dataDir = await temporary.create({
+      'config/modules/auth-oidc.json': {
+        oidc: { enabled: false },
+        oidc2: {
+          enabled: true,
+          name: 'Second',
+          issuer: idp.issuer,
+          clientId: idp.clientId,
+          clientSecret: idp.clientSecret,
+        },
+      },
+    });
+    server = await startModuleServer(
+      temporary,
+      {},
+      ['auth-oidc'],
+      { dataDir },
+      {
+        builtinModules: [{ dir: moduleDir, load: () => import('../src/index.js') }],
+      },
+    );
+    const mooncg = server;
+    const listed = await mooncg.http('GET', '/api/v1/auth/providers');
+    expect(listed.json.providers.map((provider: { id: string }) => provider.id)).toEqual([
+      'local',
+      'oidc2',
+    ]);
+
+    const started = await mooncg.http('GET', '/auth/oidc2/start');
+    const location = new URL(started.headers.get('location') as string);
+    expect(location.searchParams.get('redirect_uri')).toBe(
+      `http://127.0.0.1:${mooncg.server.port}/auth/oidc2/callback`,
+    );
+    const ada = mooncg.auth.findUser('ada');
+    mooncg.auth.linkIdentity(ada?.id as string, 'oidc2', ADA.sub);
+    const back = await mooncg.http(
+      'GET',
+      `/auth/oidc2/callback?state=${location.searchParams.get('state')}&code=${encodeURIComponent(idp.approve(location, ADA))}`,
+      { cookie: cookieOf(started, 'mooncg_oauth') },
+    );
+    expect(back.status).toBe(302);
+    expect(back.setCookies.some((cookie) => cookie.startsWith('mooncg_session='))).toBe(true);
+    // The link of oidc2 is bound to its issuer; one of oidc would be a link of its own.
+    expect(mooncg.server.storage.auth.identities.get('oidc2', ADA.sub)).toMatchObject({
+      provider: 'oidc2',
+      realm: idp.issuer,
+    });
+
+    const settings = await mooncg.http('GET', '/api/v1/modules/auth-oidc/config', {
+      cookie: mooncg.admin,
+    });
+    expect(settings.json.secrets).toEqual(['/oidc2/clientSecret']);
+    expect(JSON.stringify(settings.json.values)).not.toContain(idp.clientSecret);
+    expect(Object.keys(settings.json.schema.properties)).toEqual([
+      'oidc',
+      'oidc2',
+      'oidc3',
+      'twitch',
+      'discord',
+    ]);
+  });
+});

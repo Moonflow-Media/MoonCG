@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, api } from '../src/api.js';
 import { live } from '../src/live.js';
-import { describeSource } from '../src/stores/installs.js';
+import { describeSource, useInstalls } from '../src/stores/installs.js';
 import { useOnAir } from '../src/stores/onAir.js';
 import { BundlesView } from '../src/views/Bundles.js';
 
@@ -17,6 +17,8 @@ const GIT = {
   commit: 'abcdef1234567890',
 };
 const kept = { backups: 3 };
+/** Bundles listed after the three every test has. */
+const more: object[] = [];
 const bundles = (canManage: boolean) => ({
   canManage,
   ...(canManage ? { backupsKept: kept.backups } : {}),
@@ -33,6 +35,7 @@ const bundles = (canManage: boolean) => ({
     },
     { name: 'ticker', state: 'running', version: '0.2.0', errors: [], panels: [], graphics: [] },
     { name: 'off', state: 'disabled', version: '3.0.0', errors: [], panels: [], graphics: [] },
+    ...more,
   ],
 });
 const STAGED = {
@@ -86,6 +89,7 @@ function setup(canManage = true) {
     if (path === '/api/v1/bundles') return structuredClone(bundles(canManage));
     const answer = answers.get(`${method} ${path}`);
     if (answer instanceof Error) throw answer;
+    if (answer === undefined && method === 'GET') return { bundles: [] };
     return answer ?? { job: job(`job-${next++}`) };
   }) as typeof api.request;
   const uploads: { path: string; name: string }[] = [];
@@ -119,6 +123,7 @@ const choose = (view: VueWrapper, choice: string) =>
 beforeEach(() => {
   setActivePinia(createPinia());
   kept.backups = 3;
+  more.length = 0;
 });
 afterEach(() => {
   api.upload = realUpload;
@@ -497,25 +502,112 @@ describe('a bundle in the list', () => {
     view.unmount();
   });
 
-  it('removes it after a question that says what is kept', async () => {
-    const { calls, asked, confirms } = setup();
+  it('removes it after a confirmation that says what is kept and what is lost', async () => {
+    const { calls } = setup();
     const view = await show();
-    confirms.answer = false;
     await button(row(view, 'ticker'), 'Remove')?.trigger('click');
-    await flushPromises();
-    expect(asked).toHaveLength(1);
-    expect(asked[0]).toMatch(/^Remove "ticker"\?/);
-    expect(asked[0]).toMatch(/backup/);
-    expect(asked[0]).toMatch(/kept/);
+    const panel = row(view, 'ticker').find('[data-remove]');
+    expect(panel.text()).toMatch(/files are moved to the backups/);
+    expect(panel.text()).toMatch(
+      /settings, uploaded assets, stored values and the role grants for it are kept/,
+    );
     expect(calls.filter(({ method }) => method !== 'GET')).toEqual([]);
 
-    confirms.answer = true;
+    await button(panel, 'Cancel')?.trigger('click');
+    expect(row(view, 'ticker').find('[data-remove]').exists()).toBe(false);
+    expect(calls.filter(({ method }) => method !== 'GET')).toEqual([]);
+
     await button(row(view, 'ticker'), 'Remove')?.trigger('click');
+    await button(row(view, 'ticker').find('[data-remove]'), 'Remove ticker')?.trigger('click');
     await flushPromises();
-    expect(calls.at(-1)).toEqual({
+    expect(calls.filter(({ method }) => method === 'POST').at(-1)).toEqual({
       method: 'POST',
       path: '/api/v1/bundles/ticker/remove',
       body: {},
+    });
+    view.unmount();
+  });
+
+  it('deletes the files and purges the data only when that is chosen, and says what is lost', async () => {
+    const { calls } = setup();
+    const view = await show();
+    await button(row(view, 'ticker'), 'Remove')?.trigger('click');
+    const panel = () => row(view, 'ticker').find('[data-remove]');
+    await panel().find('input[name="deleteFiles"]').setValue(true);
+    await panel().find('input[name="purgeData"]').setValue(true);
+    expect(panel().text()).toMatch(/files are deleted/);
+    expect(panel().text()).toMatch(/no backup of this version is kept, and there is no older one/i);
+    expect(panel().text()).toMatch(
+      /settings, uploaded assets, stored values and the role grants for it are deleted/,
+    );
+    await button(panel(), 'Remove ticker')?.trigger('click');
+    await flushPromises();
+    expect(calls.filter(({ method }) => method === 'POST').at(-1)).toEqual({
+      method: 'POST',
+      path: '/api/v1/bundles/ticker/remove',
+      body: { deleteFiles: true, purgeData: true },
+    });
+    view.unmount();
+  });
+
+  it('says that purging the data takes the role grants for the bundle as well', async () => {
+    setup();
+    const view = await show();
+    await button(row(view, 'ticker'), 'Remove')?.trigger('click');
+    const purge = row(view, 'ticker').find('input[name="purgeData"]');
+    expect(purge.element.parentElement?.textContent).toMatch(/role grants for it/);
+    view.unmount();
+  });
+
+  it('says how many older backups remain when the files of this version are deleted', async () => {
+    const { answers } = setup();
+    const older = (version: string) => ({
+      id: `${version}-20261120T100000000Z`,
+      version,
+      time: '2026-11-20T10:00:00.000Z',
+      reason: 'update',
+    });
+    answers.set('GET /api/v1/bundles/-/backups', {
+      bundles: [{ name: 'ticker', installed: true, backups: [older('0.1.0'), older('0.1.1')] }],
+    });
+    const view = await show();
+    await button(row(view, 'ticker'), 'Remove')?.trigger('click');
+    const panel = () => row(view, 'ticker').find('[data-remove]');
+    await panel().find('input[name="deleteFiles"]').setValue(true);
+    expect(panel().text()).toMatch(/No backup of this version is kept; 2 older backups remain/);
+    expect(panel().text()).not.toMatch(/nothing to restore|no backup to restore/i);
+    view.unmount();
+  });
+
+  it('asks separately before it removes a bundle that others need', async () => {
+    more.push({
+      name: 'crawl',
+      state: 'running',
+      version: '1.0.0',
+      errors: [],
+      panels: [],
+      graphics: [],
+      dependencies: ['ticker'],
+    });
+    const { calls, asked, confirms } = setup();
+    const view = await show();
+    const removeTicker = async () => {
+      await button(row(view, 'ticker'), 'Remove')?.trigger('click');
+      await button(row(view, 'ticker').find('[data-remove]'), 'Remove ticker')?.trigger('click');
+      await flushPromises();
+    };
+    confirms.answer = false;
+    await removeTicker();
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatch(/"ticker" is needed by crawl/);
+    expect(calls.filter(({ method }) => method === 'POST')).toEqual([]);
+
+    confirms.answer = true;
+    await removeTicker();
+    expect(calls.filter(({ method }) => method === 'POST').at(-1)).toEqual({
+      method: 'POST',
+      path: '/api/v1/bundles/ticker/remove',
+      body: { force: true },
     });
     view.unmount();
   });
@@ -528,6 +620,7 @@ describe('a bundle in the list', () => {
     );
     const view = await show();
     await button(row(view, 'ticker'), 'Remove')?.trigger('click');
+    await button(row(view, 'ticker').find('[data-remove]'), 'Remove ticker')?.trigger('click');
     await flushPromises();
     expect(view.find('.install .problem').text()).toContain('needed by crawl');
     view.unmount();
@@ -723,14 +816,114 @@ describe('what the review asked of the page', () => {
     kept.view.unmount();
   });
 
-  it('says in the question that the files are deleted where no backups are kept', async () => {
+  it('says that the files are deleted where no backups are kept, and offers no choice', async () => {
     kept.backups = 0;
-    const { asked } = setup();
+    setup();
     const view = await show();
     await button(row(view, 'ticker'), 'Remove')?.trigger('click');
+    const panel = row(view, 'ticker').find('[data-remove]');
+    expect(panel.text()).toMatch(/files are deleted/);
+    expect(panel.find('input[name="deleteFiles"]').exists()).toBe(false);
+    view.unmount();
+  });
+});
+
+describe('backups', () => {
+  const backup = (version: string, day: string, reason: string) => ({
+    id: `${version}-202611${day}T100000000Z`,
+    version,
+    time: `2026-11-${day}T10:00:00.000Z`,
+    reason,
+  });
+  const BACKUPS = {
+    bundles: [
+      { name: 'gone', installed: false, backups: [backup('2.0.0', '20', 'remove')] },
+      { name: 'ticker', installed: true, backups: [backup('0.1.0', '21', 'update')] },
+    ],
+  };
+  const card = (view: VueWrapper) => view.find('[data-backups]');
+  const entry = (view: VueWrapper, name: string) => card(view).find(`[data-backup-of="${name}"]`);
+
+  it('lists the backups of every bundle, also of one that was removed', async () => {
+    const { answers, calls } = setup();
+    answers.set('GET /api/v1/bundles/-/backups', BACKUPS);
+    const view = await show();
+    expect(calls.some(({ path }) => path === '/api/v1/bundles/-/backups')).toBe(true);
+    expect(entry(view, 'gone').text()).toContain('2.0.0');
+    expect(entry(view, 'gone').text()).toContain('removed');
+    expect(entry(view, 'ticker').text()).toContain('0.1.0');
+    expect(entry(view, 'ticker').text()).toContain('before an update');
+    view.unmount();
+  });
+
+  it('says so when there is no backup', async () => {
+    const { answers } = setup();
+    answers.set('GET /api/v1/bundles/-/backups', { bundles: [] });
+    const view = await show();
+    expect(card(view).text()).toContain('No backups');
+    view.unmount();
+  });
+
+  it('restores one after a question that says what happens to the installed version', async () => {
+    const { answers, asked, confirms, calls } = setup();
+    answers.set('GET /api/v1/bundles/-/backups', BACKUPS);
+    const view = await show();
+    const posts = () => calls.filter(({ method }) => method === 'POST');
+
+    confirms.answer = false;
+    await button(entry(view, 'ticker'), 'Restore')?.trigger('click');
     await flushPromises();
-    expect(asked[0]).toMatch(/its files are deleted/);
-    expect(asked[0]).not.toMatch(/backup/);
+    expect(asked[0]).toMatch(/^Restore "ticker" 0\.1\.0/);
+    expect(asked[0]).toMatch(/installed version 0\.2\.0 is stopped and moved to the backups/);
+    // The backup is put in place: it is gone from the list afterwards.
+    expect(asked[0]).toMatch(/This backup is used up/);
+    expect(posts()).toEqual([]);
+
+    confirms.answer = true;
+    await button(entry(view, 'gone'), 'Restore')?.trigger('click');
+    await flushPromises();
+    expect(asked[1]).toMatch(/installed again/);
+    expect(posts().at(-1)).toEqual({
+      method: 'POST',
+      path: '/api/v1/bundles/gone/backups/2.0.0-20261120T100000000Z/restore',
+      body: {},
+    });
+    view.unmount();
+  });
+
+  it('keeps the newest list when an earlier request answers last', async () => {
+    setup();
+    const installs = useInstalls();
+    const pending: ((value: unknown) => void)[] = [];
+    api.request = vi.fn(
+      () => new Promise((resolve) => pending.push(resolve)),
+    ) as unknown as typeof api.request;
+    const first = installs.loadBackups();
+    const second = installs.loadBackups();
+    pending[1]?.(BACKUPS);
+    await second;
+    pending[0]?.({ bundles: [] });
+    await first;
+    expect(installs.backups.map((of) => of.name)).toEqual(['gone', 'ticker']);
+  });
+
+  it('shows why the list could not be read in the card, apart from the jobs', async () => {
+    const { answers } = setup();
+    answers.set(
+      'GET /api/v1/bundles/-/backups',
+      new ApiError(500, 'internal', 'The backups could not be read'),
+    );
+    const view = await show();
+    expect(card(view).find('.problem').text()).toContain('The backups could not be read');
+    expect(useInstalls().problem).toBe('');
+    view.unmount();
+  });
+
+  it('is not shown to those who may not manage bundles', async () => {
+    const { calls } = setup(false);
+    const view = await show();
+    expect(card(view).exists()).toBe(false);
+    expect(calls.some(({ path }) => path.endsWith('/backups'))).toBe(false);
     view.unmount();
   });
 });

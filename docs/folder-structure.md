@@ -124,10 +124,14 @@ as `auth-oidc`, come with the server and not from this folder. A module of your 
 folder you put there; it runs only once an administrator has enabled it. See
 [modules.md](modules.md).
 
-`staging/` is emptied whenever the server starts, and a staged bundle nobody decides about is
-deleted after 30 minutes. `backups/` keeps the newest three versions of each bundle
-(`--bundle-backups-kept`). `bundle-sources.json` may hold credentials, as part of a Git
-address. [bundles.md](bundles.md) says how bundles get in and out.
+A staged bundle nobody decides about is deleted after 30 minutes; one that is still within
+them is kept across a restart, everything else in `staging/` is deleted at the start (see
+[bundles.md](bundles.md#the-steps)). `backups/` keeps the newest three versions of each bundle
+(`--bundle-backups-kept`). `bundle-sources.json` and `module-sources.json` may hold
+credentials, as part of a Git address. They are written readable by the server's account only
+(mode 0600) where the system has such modes; on Windows, which has not, the access list of the
+data folder is what protects them, so keep it for the server's account and administrators.
+[bundles.md](bundles.md) says how bundles get in and out.
 
 ### Differences
 

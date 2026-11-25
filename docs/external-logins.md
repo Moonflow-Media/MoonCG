@@ -1,7 +1,7 @@
 # External logins: OpenID Connect, Twitch, Discord
 
 People can sign in to MoonCG with an account they have elsewhere. The module `auth-oidc`,
-shipped with MoonCG, does it: one generic OpenID Connect provider, and presets for Twitch and
+shipped with MoonCG, does it: up to three generic OpenID Connect providers, and presets for Twitch and
 Discord. Signing in with user name and password stays as it is.
 
 - [Quick path](#quick-path)
@@ -138,8 +138,15 @@ Register the application with the provider as a **confidential web application**
 provider asks whether to require PKCE, say yes. A client without a secret (a public client)
 works with providers that allow it: leave the secret empty.
 
-There is one generic provider. An installation that needs two OpenID Connect providers at the
-same time cannot have that yet.
+**Up to three OpenID Connect providers.** The settings have three sections for the generic
+provider: _OpenID Connect_ (id `oidc`), _OpenID Connect 2_ (`oidc2`) and _OpenID Connect 3_
+(`oidc3`), each with the fields above and its own client secret. The redirect address of each
+is `<public address>/auth/<id>/callback`. They are fixed named slots rather than a list on
+purpose: the settings form edits objects, not lists of them, and a secret inside a list item
+could not be kept write-only per item. Three slots cover a company directory, a partner's and
+one for tests. The first slot is `oidc` as before, so existing settings and links keep working
+unchanged. An account is linked per slot: a link of `oidc` is no link of `oidc2`, also when both
+point at the same issuer.
 
 ## Twitch
 
@@ -220,11 +227,56 @@ administrator cannot link their own Twitch account to an administrator.
 **Unlinking signs the user out everywhere**, as a new password does. Their password, if they
 have one, is untouched.
 
-**Linking your own account** from inside the dashboard is not there: there is no profile page
-yet. An administrator links it.
-
 **A user without a password.** A user that signing up created has no password and can sign in
 through the linked account only. An administrator can give them one on the Users page.
+
+## Linking your own account
+
+A signed-in user can link and unlink accounts for themselves on the **Account** page (the name
+at the top of the dashboard), which also shows their name and roles and, for a user with a
+password, changes it.
+
+**Linking** an account of a provider:
+
+1. The user presses **Link <provider>**. That is a `POST` with a JSON body, which passes the
+   origin and forgery checks every request that changes something passes.
+2. It takes what signing in takes. A user with a password types it, and a wrong one is counted
+   like a wrong current password when the password is changed (and slowed down the same way).
+   A request without a password is answered 400 and is not counted.
+   **A user without a password** must have signed in within the last **five minutes**: their
+   session is the fresh external sign-in that stands in for the password. Sign out, sign in
+   again with the account you have, and link within five minutes.
+3. The browser goes to the provider, as for signing in, and comes back to the callback. The
+   started flow is bound to the **session that started it**: it is finished only by a browser
+   that comes back with that session, still valid, and with the ticket of the flow. Another
+   user's browser, or the same browser after signing out, gets nothing linked.
+4. The account the provider vouched for is linked to the user, for the realm it reports. Then
+   the browser goes back to the Account page, still signed in as before.
+
+What is refused, with the reason on the Account page:
+
+- an account that is **linked to another user** (`elsewhere`): it is never moved, by the user
+  or by anyone but an administrator who first unlinks it;
+- an account the user has already linked **for another realm** (`realm`): it stays bound to
+  the realm it was linked for, as at sign-in;
+- the **user of dev mode**, a token, and anyone not signed in: only a user in a session of
+  their own links accounts to themselves;
+- a provider for which self-linking is **switched off** (403).
+
+**Unlinking** one's own account takes the same as linking: the current password (in the JSON
+body, `{ "password": "…" }`), or for a user without a password a sign-in of the last five
+minutes, so a stolen session cookie alone cannot take a way of signing in away from the user.
+It signs the user out everywhere, as when an administrator unlinks. A user **cannot unlink
+their only way of signing in**: without a password and without another linked account it is
+refused with 409. Set a password or link another account first.
+
+**Switching it off.** On the **Users** page, the _Self-linking_ card switches it for all
+providers, and for each provider (`GET` and `PUT /api/v1/self-linking`, with
+`system:users.manage`). It is **on** by default: a link a user makes for themselves gives them
+nothing they do not hold, since the account signs in as that same user, and it takes the
+password or a fresh sign-in, so a stolen session cookie alone does not add a way in. Switch it
+off for a provider whose accounts you want to hand out yourself, for example when the realm of
+a company directory decides who is who. A stored setting that cannot be read switches it off.
 
 ## The realm of a link
 
@@ -417,6 +469,10 @@ so at once, with the reason, and the Modules page shows the module as `failed`.
 | `GET /api/v1/identities`                                         | `system:users.manage`  | `{ identities, providers, unlinked }`, each with its `realm` |
 | `PUT /api/v1/users/:id/identities/:provider` `{subject, realm?}` | `system:users.manage`  | Links an account; 409 if another user has it                 |
 | `DELETE /api/v1/users/:id/identities/:provider/:subject`         | `system:users.manage`  | Unlinks it and ends the user's sessions                      |
+| `GET /api/v1/me/identities`                                      | a session              | `{ identities, providers, password }` of the user itself     |
+| `POST /api/v1/me/identities/:provider/link` `{password?}`        | a session              | Starts linking: sets the cookie, answers `{ url }`           |
+| `DELETE /api/v1/me/identities/:provider/:subject` `{password?}`  | a session              | Unlinks one's own account; 409 for the only way in           |
+| `GET`, `PUT /api/v1/self-linking` `{enabled, disabledProviders}` | `system:users.manage`  | The switch for self-linking                                  |
 
 `PUT` answers 404 for a provider that is not registered, which is most likely a typing
 mistake; `DELETE` works for a provider that is gone, so that its links can be removed. `PUT`

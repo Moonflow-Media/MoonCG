@@ -31,6 +31,7 @@ import { devOrigins } from './http/origin.js';
 import { attachWebSocket } from './http/ws.js';
 import { DEFAULT_INSTALL_LIMITS } from './install/files.js';
 import { BundleInstaller } from './install/installer.js';
+import { ModuleInstaller } from './install/module-installer.js';
 import type { NpmInstall } from './install/npm.js';
 import { devModeProblem, type ServerConfig } from './kernel/config.js';
 import { createLifecycle } from './kernel/lifecycle.js';
@@ -46,6 +47,7 @@ import { authLocalModule } from './modules/auth-local.js';
 import { ExternalLogins } from './modules/external-login.js';
 import { type BuiltinModule, ModuleManager } from './modules/manager.js';
 import { ProviderRegistry } from './modules/providers.js';
+import { SelfLinking } from './modules/self-linking.js';
 import { createPersistence } from './replicants/persistence.js';
 import { openSqliteStorage, type Storage } from './storage/replicant-store.js';
 
@@ -128,6 +130,8 @@ export interface RunningServer {
   readonly manager: BundleManager;
   /** Installs, updates and removes bundles. */
   readonly installer: BundleInstaller;
+  /** Installs, updates and removes the modules of the modules folder. */
+  readonly moduleInstaller: ModuleInstaller;
   readonly host: ExtensionHost;
   /** Accounts, sessions, tokens and roles. */
   readonly auth: Auth;
@@ -427,6 +431,13 @@ export async function startServer(
     // or to start shows as failed and stops nothing else.
     const providers = new ProviderRegistry();
     const externalLogins = new ExternalLogins({ auth, providers, logger });
+    const selfLinking = new SelfLinking(storage.settings);
+    await selfLinking.load().catch((error) => {
+      logger.error(
+        `The self-linking setting could not be read, so users cannot link accounts to themselves: ${errorMessage(error)}`,
+      );
+      return selfLinking.set({ enabled: false, disabledProviders: [] }).catch(() => {});
+    });
     const modules = new ModuleManager({
       modulesDir: config.modulesDir,
       builtin: options.builtinModules,
@@ -441,6 +452,31 @@ export async function startServer(
     });
     lifecycle.add('modules', () => modules.close());
     await modules.load();
+    const moduleInstaller = new ModuleInstaller({
+      dataDir: config.dataDir,
+      modulesDir: config.modulesDir,
+      bundlesDir: config.bundlesDir,
+      modules,
+      registry,
+      logger,
+      mooncgVersion: MOONCG_VERSION,
+      onAir: () => onAir.state.onAir,
+      limits: {
+        ...DEFAULT_INSTALL_LIMITS,
+        maxArchiveBytes: config.bundleMaxArchiveBytes,
+        maxUnpackedBytes: config.bundleMaxUnpackedBytes,
+        maxFiles: config.bundleMaxFiles,
+      },
+      timeoutMs: config.bundleInstallTimeoutMs,
+      stagingTtlMs: options.stagingTtlMs,
+      npmInstall: options.npmInstall,
+      npmRegistry: config.bundleNpmRegistry,
+      git: { allowFileUrls: options.allowFileGitUrls === true },
+      purge: (name) => moduleConfigs.remove(name),
+    });
+    // Closed before the modules are: a job that still runs ends first.
+    lifecycle.add('module-installer', () => moduleInstaller.close());
+    await moduleInstaller.start();
 
     const app = await createApp({
       bundles: () => manager.list(),
@@ -455,6 +491,7 @@ export async function startServer(
       routes,
       lifecycle: bundleLifecycle,
       installer,
+      moduleInstaller,
       instances,
       assets,
       config: configs,
@@ -473,6 +510,7 @@ export async function startServer(
         configs: moduleConfigs,
         publicUrl: config.publicUrl,
         logger,
+        selfLinking,
       },
     });
     lifecycle.add('http', () => app.close());
@@ -536,6 +574,7 @@ export async function startServer(
       },
       manager,
       installer,
+      moduleInstaller,
       host,
       started,
       stats: () => ({

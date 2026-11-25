@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseManifest } from '@mooncg/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig, readConfigFile } from '../../server/src/kernel/config.js';
@@ -102,6 +103,7 @@ describe('mooncg init', () => {
       '.gitignore',
       'bundles',
       'data',
+      'modules',
       'mooncg.config.json',
     ]);
     const sources = { argv: [], env: {}, cwd: dir };
@@ -111,6 +113,7 @@ describe('mooncg init', () => {
       host: '127.0.0.1',
       bundlesDir: join(dir, 'bundles'),
       dataDir: join(dir, 'data'),
+      modulesDir: join(dir, 'modules'),
       allowedOrigins: [],
       dev: false,
       watch: false,
@@ -289,6 +292,145 @@ describe('mooncg bundle create', () => {
     const { files } = await createBundle({ name: 'demo', bundlesDir });
     expect((await readdir(join(bundlesDir, 'demo'))).length).toBeGreaterThan(0);
     expect(files.length).toBeGreaterThan(1);
+  });
+
+  it('creates a Vite and Vue bundle from the vue template', async () => {
+    const { mooncg, cwd } = await workspace();
+    expect(TEMPLATES).toContain('vue');
+
+    expect(await mooncg('bundle', 'create', 'lower-third', '--template', 'vue')).toBe(0);
+
+    const dir = join(cwd, 'bundles', 'lower-third');
+    const read = (file: string) => readFile(join(dir, file), 'utf8');
+    const parsed = parseManifest(JSON.parse(await read('mooncg.json')));
+    expect(parsed).toMatchObject({
+      ok: true,
+      manifest: {
+        name: 'lower-third',
+        panels: [{ file: 'dashboard/control.html' }],
+        graphics: [{ file: 'graphics/overlay.html' }],
+        // Served below the same path as by MoonCG, so the page knows its bundle and graphic.
+        dev: { url: 'http://localhost:5173/b/lower-third/' },
+      },
+    });
+    const pkg = JSON.parse(await read('package.json'));
+    expect(Object.keys(pkg.devDependencies).sort()).toEqual([
+      '@mooncg/sdk',
+      '@vitejs/plugin-vue',
+      'vite',
+      'vue',
+    ]);
+    // Only built files are served: nothing is installed when the bundle is.
+    expect(pkg.dependencies).toBeUndefined();
+    // The SDK is not on npm: it is taken from the MoonCG this command belongs to.
+    expect(pkg.devDependencies['@mooncg/sdk']).toMatch(/^file:.+sdk$/);
+    const config = await read('vite.config.js');
+    expect(config).toContain("base: '/b/lower-third/'");
+    for (const file of [
+      'src/dashboard/control.html',
+      'src/dashboard/Control.vue',
+      'src/graphics/overlay.html',
+      'src/graphics/Overlay.vue',
+      'src/client.js',
+      'schemas/message.json',
+      'README.md',
+      '.gitignore',
+    ]) {
+      expect(await read(file)).not.toMatch(/\{\{\w+\}\}/);
+    }
+    expect(await read('src/dashboard/Control.vue')).toContain("from '@mooncg/sdk/vue'");
+  });
+
+  it('has Vite hand nothing on to MoonCG for a client of another computer', async () => {
+    const { mooncg, cwd } = await workspace();
+    expect(await mooncg('bundle', 'create', 'demo', '--template', 'vue')).toBe(0);
+    const dir = join(cwd, 'bundles', 'demo');
+
+    // Every proxied path, HTTP and WebSocket, goes through the guard.
+    const config = await readFile(join(dir, 'vite.config.js'), 'utf8');
+    expect(config).toContain("import { localOnly } from './local-only.js'");
+    const proxy = config.slice(config.indexOf('proxy: {'), config.indexOf('build:'));
+    const paths = proxy.match(/^ {6}'[^']+': \{/gm) ?? [];
+    expect(paths).toHaveLength(4);
+    expect(proxy.match(/bypass: localOnly/g)).toHaveLength(paths.length);
+
+    const { localOnly } = await import(pathToFileURL(join(dir, 'local-only.js')).href);
+    const request = (remoteAddress: string) => {
+      const sent: string[] = [];
+      return {
+        sent,
+        req: {
+          url: '/api/v1/me',
+          socket: { remoteAddress, end: (text: string) => sent.push(text) },
+        },
+      };
+    };
+    const response = () => {
+      const res = {
+        status: 0,
+        body: '',
+        writeHead(status: number) {
+          res.status = status;
+        },
+        end(text: string) {
+          res.body = text;
+        },
+      };
+      return res;
+    };
+    for (const address of ['127.0.0.1', '127.5.0.1', '::1', '::ffff:127.0.0.1']) {
+      const res = response();
+      expect(localOnly(request(address).req, res)).toBeUndefined();
+      expect(res.status).toBe(0);
+    }
+    for (const address of ['192.168.178.20', '::ffff:10.0.0.2', 'fe80::1', '', undefined]) {
+      const res = response();
+      const { req } = request(address as string);
+      // Vite takes a returned address as "dealt with" and does not proxy.
+      expect(localOnly(req, res)).toBe('/api/v1/me');
+      expect(res.status).toBe(403);
+      expect(res.body).toContain('--host');
+    }
+    // A WebSocket connection: Vite passes no response, the socket is answered.
+    const { req, sent } = request('192.168.178.20');
+    expect(localOnly(req, undefined)).toBe('/api/v1/me');
+    expect(sent.join('')).toMatch(/^HTTP\/1\.1 403 Forbidden\r\n/);
+  });
+
+  it('names the SDK by its path in package.json whatever characters the path holds', async () => {
+    const { cwd } = await workspace();
+    const bundlesDir = join(cwd, 'bundles');
+    const odd = `D:\\Studio "A" $& $' $1\\packages\\sdk`;
+
+    await createBundle({
+      name: 'demo',
+      bundlesDir,
+      template: 'vue',
+      resolveSdk: () => `${odd}\\dist\\client\\index.js`,
+    });
+
+    const pkg = JSON.parse(await readFile(join(bundlesDir, 'demo', 'package.json'), 'utf8'));
+    expect(pkg.devDependencies['@mooncg/sdk']).toBe(`file:${odd.replaceAll('\\', '/')}`);
+  });
+
+  it('says so clearly when the SDK cannot be found, and leaves nothing behind', async () => {
+    const { cwd } = await workspace();
+    const bundlesDir = join(cwd, 'bundles');
+    const missing = Object.assign(new Error("Cannot find module '@mooncg/sdk/client'"), {
+      code: 'MODULE_NOT_FOUND',
+    });
+
+    const creating = createBundle({
+      name: 'demo',
+      bundlesDir,
+      template: 'vue',
+      resolveSdk: () => {
+        throw missing;
+      },
+    });
+
+    await expect(creating).rejects.toThrow(/@mooncg\/sdk.*could not be found.*--template html/s);
+    expect(await readdir(cwd)).toEqual([]);
   });
 
   it('names the templates when asked for one it does not have', async () => {

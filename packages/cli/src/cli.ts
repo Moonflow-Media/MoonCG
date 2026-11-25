@@ -10,7 +10,7 @@ import { writeTypes } from './types-command.js';
 const USAGE = `Usage: mooncg <command>
 
   init [folder]
-      Create an installation folder: bundles/, data/ and mooncg.config.json. The folder
+      Create an installation folder: bundles/, modules/, data/ and mooncg.config.json. The folder
       defaults to the current directory. Nothing that exists is overwritten.
 
   start [server flags]
@@ -23,7 +23,7 @@ const USAGE = `Usage: mooncg <command>
       every request from this machine as an administrator without a password. It listens
       on loopback only and refuses any other host. Never use it for a show.
 
-  bundle create <name> [--template html] [--dir <bundles folder>] [--config <file>]
+  bundle create <name> [--template html|vue] [--dir <bundles folder>] [--config <file>]
       Create a bundle from a template in the bundles folder: the one --dir names, else the
       one of the configuration file (mooncg.config.json, or the file --config or
       MOONCG_CONFIG names), else ./bundles. Needs no running server.
@@ -72,10 +72,16 @@ const USAGE = `Usage: mooncg <command>
   module list
   module enable <name>
   module disable <name>
+  module install <git-url|zip|folder> [--ref <ref>] [--scripts] [--yes]
+  module update <name> [<git-url|zip|folder>] [--ref <ref>] [--scripts] [--yes] [--on-air]
+  module remove <name> [--purge-data] [--yes] [--on-air]
       Manage the modules of a running server through its API. A module is code that runs
-      inside the server, such as a login provider: one in the modules folder runs only
-      once it is enabled, which starts it at once and is remembered. To install a module,
-      copy its folder into the modules folder and restart the server.
+      inside the server with full access to it, such as a login provider: one in the
+      modules folder runs only once it is enabled, which starts it at once and is
+      remembered. install and update fetch the module, show what it declares and ask, as
+      for a bundle; an installed module is disabled until it is enabled. remove deletes
+      its files and keeps its configuration unless --purge-data is given. While the
+      installation is on air, updating or removing an enabled module takes --on-air.
 
   bundle and module commands take --url <url> (default: http://127.0.0.1:9090, or
   MOONCG_URL) and an API token, from MOONCG_TOKEN or --token <token>, that holds
@@ -210,8 +216,23 @@ export async function run(
           url: values.url ?? env.MOONCG_URL ?? 'http://127.0.0.1:9090',
           token: values.token ?? env.MOONCG_TOKEN,
           insecure: values.insecure ?? false,
+          yes: values.yes ?? false,
+          ref: values.ref,
+          scripts: values.scripts ?? false,
+          onAir: values['on-air'] ?? false,
+          purgeData: values['purge-data'] ?? false,
         },
-        { log: (line) => io.log(line), warn: (line) => io.error(line), fetch: io.fetch },
+        {
+          cwd: io.cwd,
+          log: (line) => io.log(line),
+          warn: (line) => io.error(line),
+          fetch: io.fetch,
+          confirm:
+            io.confirm === undefined
+              ? undefined
+              : (question) => io.confirm?.(question) ?? Promise.resolve(false),
+          pollMs: options.pollMs,
+        },
       );
       return 0;
     }

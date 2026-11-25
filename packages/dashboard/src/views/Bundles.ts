@@ -1,8 +1,9 @@
-import { defineComponent, h, nextTick, onMounted, ref } from 'vue';
+import { defineComponent, h, nextTick, onMounted, reactive, ref } from 'vue';
 import { type BundleAction, type BundleInfo, useBundles } from '../stores/bundles.js';
 import { describeSource, useInstalls } from '../stores/installs.js';
 import { useOnAir } from '../stores/onAir.js';
 import { sure } from './admin.js';
+import { BundleBackupsCard } from './BundleBackups.js';
 import { BundleInstall } from './BundleInstall.js';
 import { counted, dot, pageHead, segmented } from './parts.js';
 
@@ -44,18 +45,107 @@ export const BundlesView = defineComponent({
       // The form is below the list; whoever pressed the button is taken to it.
       document.querySelector('.install')?.scrollIntoView?.({ block: 'nearest' });
     };
+    /** The bundle whose removal is being confirmed, and what is chosen for it. */
+    const removing = ref<string>();
+    const choices = reactive({ deleteFiles: false, purgeData: false });
+    const askRemove = (name: string) => {
+      removing.value = name;
+      choices.deleteFiles = false;
+      choices.purgeData = false;
+    };
+    /** Whether the files go for good: chosen, or because this server keeps no backups. */
+    const filesDeleted = () => choices.deleteFiles || bundles.backupsKept === 0;
+    /** What is left to restore a bundle from once the files of this version are deleted. */
+    const olderBackups = (name: string) => {
+      if (installs.backupsProblem) {
+        return 'No backup of this version is kept. Whether older ones remain could not be read.';
+      }
+      const count = installs.backups.find((of) => of.name === name)?.backups.length ?? 0;
+      if (count === 0) return 'No backup of this version is kept, and there is no older one.';
+      return `No backup of this version is kept; ${count === 1 ? '1 older backup remains' : `${count} older backups remain`}.`;
+    };
+    /** The enabled bundles that need `name`, as far as the list shows them. */
+    const dependents = (name: string) =>
+      bundles.list
+        .filter((other) => other.state !== 'disabled' && other.dependencies?.includes(name))
+        .map((other) => other.name);
     const remove = (name: string) => {
-      // A server that keeps no backups deletes the files; the question says what happens.
-      const files =
-        bundles.backupsKept === 0 ? 'its files are deleted' : 'its files are moved to the backups';
-      const question =
-        `Remove "${name}"? It is stopped and ${files}. ` +
-        'Its settings, uploaded assets and stored values are kept.';
-      if (!sure(question)) return;
-      // A second question, about being on air alone. It overrides the lock and nothing
-      // else: a bundle that others still need is refused by the server as it always was.
+      // A question of its own, about the bundles that need this one: they fail without it.
+      const needed = dependents(name);
+      const force =
+        needed.length > 0 &&
+        sure(
+          `"${name}" is needed by ${needed.join(', ')}. Remove it anyway? ` +
+            `${needed.length === 1 ? 'That bundle fails' : 'Those bundles fail'} until it is back.`,
+        );
+      if (needed.length > 0 && !force) return;
+      // Then the lock, alone. Overriding it never stands in for the question above.
       const override = onAir.overrideFor(`Remove "${name}"`);
-      if (override !== undefined) void installs.remove(name, override);
+      if (override === undefined) return;
+      removing.value = undefined;
+      void installs.remove(name, {
+        force,
+        forceOnAir: override,
+        deleteFiles: choices.deleteFiles,
+        purgeData: choices.purgeData,
+      });
+    };
+
+    /** The confirmation of a removal, in the bundle's row: the choices and what is lost. */
+    const removePanel = (name: string) => {
+      const option = (key: 'deleteFiles' | 'purgeData', text: string) =>
+        h('label', { class: 'check' }, [
+          h('input', {
+            type: 'checkbox',
+            name: key,
+            checked: choices[key],
+            onChange: (event: Event) => {
+              choices[key] = (event.target as HTMLInputElement).checked;
+            },
+          }),
+          ` ${text}`,
+        ]);
+      const files = filesDeleted()
+        ? `Its files are deleted. ${olderBackups(name)}`
+        : 'Its files are moved to the backups, from where it can be restored.';
+      const data = choices.purgeData
+        ? 'Its settings, uploaded assets, stored values and the role grants for it are deleted for good.'
+        : 'Its settings, uploaded assets, stored values and the role grants for it are kept for when it comes back.';
+      return h('div', { class: 'remove-panel', 'data-remove': name, role: 'group' }, [
+        h('p', [h('strong', `Remove "${name}"?`), ` It is stopped. ${files} ${data}`]),
+        h('div', { class: 'checks stack-checks' }, [
+          bundles.backupsKept === 0
+            ? null
+            : option('deleteFiles', 'Also delete its files instead of keeping a backup'),
+          option(
+            'purgeData',
+            'Also delete its data: settings, uploaded assets, stored values and the role grants for it',
+          ),
+        ]),
+        h('div', { class: 'form-actions' }, [
+          h(
+            'button',
+            {
+              type: 'button',
+              class: 'ghost',
+              onClick: () => {
+                removing.value = undefined;
+              },
+            },
+            'Cancel',
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              class: 'danger',
+              disabled: installs.busy(name),
+              onClick: () => remove(name),
+            },
+            `Remove ${name}`,
+          ),
+        ]),
+      ]);
     };
     onMounted(() => void bundles.refresh());
     const actions = (bundle: BundleInfo): BundleAction[] =>
@@ -146,7 +236,7 @@ export const BundlesView = defineComponent({
                         type: 'button',
                         class: 'small danger',
                         disabled: installs.busy(bundle.name),
-                        onClick: () => remove(bundle.name),
+                        onClick: () => askRemove(bundle.name),
                       },
                       'Remove',
                     ),
@@ -154,6 +244,7 @@ export const BundlesView = defineComponent({
                 : [],
             ),
           ]),
+          removing.value === bundle.name && bundles.canManage ? removePanel(bundle.name) : null,
           ...bundle.errors.map((error) => h('p', { class: 'problem' }, error)),
           // The files on disk could not be loaded; what ran before keeps running.
           ...(bundle.reloadErrors ?? []).map((error) =>
@@ -249,6 +340,7 @@ export const BundlesView = defineComponent({
               },
             })
           : null,
+        bundles.canManage ? h(BundleBackupsCard) : null,
       ]);
     };
   },

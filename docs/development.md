@@ -27,12 +27,12 @@ In this repository the command is `node packages/cli/dist/main.js` after `pnpm b
 
 ## The command line
 
-| Command                                                                            | What it does                                              |
-| ---------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `mooncg init [folder]`                                                             | Creates an installation folder. Overwrites nothing        |
-| `mooncg bundle create <name> [--template html] [--dir <folder>] [--config <file>]` | Creates a bundle from a template. Needs no running server |
-| `mooncg start [server flags]`                                                      | Starts the server in the current directory                |
-| `mooncg dev [server flags]`                                                        | Starts the server in [dev mode](#dev-mode)                |
+| Command                                                                                   | What it does                                              |
+| ----------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `mooncg init [folder]`                                                                    | Creates an installation folder. Overwrites nothing        |
+| `mooncg bundle create <name> [--template html \| vue] [--dir <folder>] [--config <file>]` | Creates a bundle from a template. Needs no running server |
+| `mooncg start [server flags]`                                                             | Starts the server in the current directory                |
+| `mooncg dev [server flags]`                                                               | Starts the server in [dev mode](#dev-mode)                |
 
 `mooncg init` creates `bundles/`, `data/`, `mooncg.config.json` and, unless there is one, a
 `.gitignore` that keeps `data/` out of a repository: the database in it holds password hashes
@@ -44,9 +44,10 @@ in the current directory: `MOONCG_BUNDLES_DIR`, else `bundlesDir` of the configu
 (`mooncg.config.json`, or the file `--config` or `MOONCG_CONFIG` names, as for the server),
 else `./bundles`. A folder that exists is never written to. If a file cannot be written, the
 folder the command created is removed again, so that nothing half-written stays and the
-command can simply be run once more. There is one template, `html`: a panel, a graphic, an
-extension and a replicant with a schema, in plain HTML and JavaScript without a build step.
-A Vite and Vue template does not exist yet.
+command can simply be run once more. There are two templates: `html` (the default), a panel,
+a graphic, an extension and a replicant with a schema, in plain HTML and JavaScript without a
+build step; and `vue`, a panel and a graphic as Vue components built by Vite, set up for a
+development server (see [below](#the-vue-template)).
 
 `mooncg start` and `mooncg dev` take every flag of the server (see the
 [README](../README.md#configuration)). `mooncg dev` is `mooncg start --dev`.
@@ -216,10 +217,16 @@ The third is why dev mode is fenced in:
   - the request carries no proxy header (`Forwarded`, `Via`, `X-Forwarded-*`, `X-Real-IP`);
   - its `Host` header names this machine (`localhost`, `127.x.x.x` or `[::1]`), which keeps a
     website whose name was pointed at `127.0.0.1` (DNS rebinding) out;
-  - it states no `Origin`, or one on this machine: the server's own, that of another server
-    here, or that of a `dev.url`, which can only be on this machine. A browser on this
-    machine connects from loopback whatever page it shows, so the address says nothing about
-    the page; its origin does;
+  - it does not come from a page of another site. A browser on this machine connects from
+    loopback whatever page it shows, so the address says nothing about the page. Two headers
+    that a browser sets itself, and that no page can forge, do:
+    - a request that states an `Origin` must state one on this machine: the server's own,
+      that of another server here, or that of a `dev.url`, which can only be on this machine;
+    - a request that states none (the `GET` of a tag, a link, a redirect) must not carry
+      `Sec-Fetch-Site: cross-site`. `none` (the address bar, a bookmark), `same-origin` and
+      `same-site` are let in; any other value counts as `cross-site`;
+    - a request with neither header is let in. It comes from no browser of today: `curl`, the
+      command line, a browser source of an older OBS;
   - it brings **no credentials at all**: no session or token cookie, no `Authorization`
     header, no `token` in its address. Credentials that are not accepted (a session that
     ended, a token that was revoked or mistyped) are answered with `401` as they are outside
@@ -237,15 +244,43 @@ exactly:
   `403` for its origin, as outside dev mode. A request that is signed in by dev mode and
   changes something needs a JSON body or the header `X-MoonCG-CSRF`, exactly as with a
   session cookie, which a form on another site cannot send.
-- What a browser sends **without** an `Origin` is signed in: a link or redirect to MoonCG
-  that the browser follows, and the `GET` of an `<img>`, `<script>` or `<iframe>` tag. A
-  session cookie would not go along with the last three; the sign-in of dev mode does. The
-  other site cannot read the answers (MoonCG sends no CORS headers, the dashboard and the
-  login page refuse to be framed, and a bundle's pages may be framed by MoonCG only), with
-  the exception that is as old as the web: a JavaScript file it loads with a `<script>` tag
-  runs in its page. And such a request does reach a bundle's own `GET` routes. So keep the
-  `GET` routes of an extension free of side effects, and while dev mode runs, do not browse
-  sites you do not trust in the browser you develop in.
+- What a browser sends **without** an `Origin` on behalf of that page is not signed in
+  either: the `GET` of an `<img>`, `<script>`, `<link>` or `<iframe>` tag, and a link or
+  redirect to MoonCG that the browser follows. Every browser that sends Fetch Metadata marks
+  those `Sec-Fetch-Site: cross-site` (Chrome and Edge since 76, Firefox since 90, Safari
+  since 16.4), and MoonCG answers them like anyone who is not signed in: `401` from the API,
+  from a bundle's pages and from a bundle's own `GET` routes.
+- **A link on another site to the dashboard** is the one case where that gets in the way of
+  something harmless: you click a link to `http://localhost:9090/bundles` in a chat or an
+  issue tracker. It is not signed in. Instead of a login page nobody has a password for,
+  MoonCG answers with a short page that says so and has one link, to the address you were
+  going to. Clicking it is a request of a page of MoonCG itself, which is signed in. Nothing
+  follows that link by itself, so another site still cannot make your browser open a page
+  signed in; it takes your click. This is for the pages of the dashboard only. A link on
+  another site to a bundle's page or route gets `401`: open it from the dashboard, or paste
+  the address.
+
+What `same-site` means, since it is let in: the same scheme and the same host name, on any
+port. `http://localhost:5173` is same-site with `http://localhost:9090`, so a page of a
+development server may load an image or a script from MoonCG. The request is addressed to a
+loopback name, so a page that is same-site with it was loaded from this machine as well. That
+is any page of any server on this machine, not only of yours: a page of another program's
+local server on another port can make the browser send `GET`s that dev mode signs in. It
+cannot read the answers (no CORS headers, no framing), and whatever it sends to change
+something states its `Origin` and needs a JSON body or `X-MoonCG-CSRF`, as above. So keep
+the `GET` routes of an extension free of side effects.
+`http://127.0.0.1:5173` and `http://localhost:9090` are **not** the same site, and neither
+are `https://localhost:5173` and `http://localhost:9090`: tags on such a page that point at
+MoonCG get `401`. Their `fetch` calls and WebSockets state an `Origin` on this machine and
+work. Use the same scheme and host name for both servers and none of this is noticed.
+
+What is left open, exactly: a browser so old that it sends no `Sec-Fetch-Site` at all is
+treated like `curl`, so in such a browser a tag or link on another site is still signed in,
+as it was for every browser before 0.10. The other site cannot read the answers (MoonCG
+sends no CORS headers, the dashboard and the login page refuse to be framed, and a bundle's
+pages may be framed by MoonCG only), but the request does reach a bundle's own `GET` routes.
+So keep the `GET` routes of an extension free of side effects, and develop in a current
+browser.
 
 ### The user `dev`
 
@@ -282,8 +317,10 @@ credentials; an API request with one is answered `401`.
 
 What dev mode does not protect against: other people and other programs **on the same
 machine**, and whatever passes connections on to it (see the warning above). Anything that
-can open a connection to loopback is an administrator. Do not run dev mode on a machine
-others log in to, and never for a show. `mooncg start` has none of it.
+can open a connection to loopback is an administrator, and so holds every permission,
+`system:modules.manage` included: any local process can install and enable a module, which
+runs its code inside the server, as the account the server runs as. Do not run dev mode on a
+machine others log in to, and never for a show. `mooncg start` has none of it.
 
 ## A development server: `dev.url`
 
@@ -314,27 +351,79 @@ origin is allowed and the policy is the built-in one to the letter. So a bundle 
 `dev.url` in its manifest when it is installed for a show, as long as its built files are in
 `dashboard/` and `graphics/`.
 
-A page served by the development server is not under `/b/<bundle>/`, so it says who it is:
+### The `vue` template
+
+`mooncg bundle create <name> --template vue` creates a bundle that is set up for this: Vue
+components in `src/`, built by Vite into `dashboard/` and `graphics/`, and
+`"dev": { "url": "http://localhost:5173/b/<name>/" }` in its manifest.
+
+```sh
+mooncg bundle create lower-third --template vue
+cd bundles/lower-third
+npm install
+npm run build        # the files MoonCG serves outside dev mode
+npm run dev          # Vite on port 5173, while "mooncg dev" runs in the installation folder
+```
+
+Its `vite.config.js` does two things that make a page of the development server work exactly
+like the built one:
+
+- **`base: '/b/<name>/'`.** Vite serves the pages below the same path as MoonCG does, so
+  `createClient()` learns the bundle, and on a graphic which graphic it is, from the page's
+  address, as on MoonCG. Nothing has to be passed to it.
+- **A proxy to MoonCG** for `/ws` (the WebSocket), `/api`, `/sdk` and the bundle's own
+  `/b/<name>/api` and `/b/<name>/assets`. The page talks to its own origin, and Vite hands that
+  on to MoonCG (`MOONCG_URL`, default `http://localhost:9090`). The sign-in of dev mode works
+  through it: Vite adds no proxy header, and its connection to MoonCG is one from this
+  machine.
+
+**Keep Vite on this machine while `mooncg dev` runs**: no `--host`, no `server.host`. Vite's
+proxy is a proxy like those in the warning above. Listening on the network, it would hand the
+request of any computer that reaches it on to MoonCG from this machine, and MoonCG would sign
+it in as the administrator: Vite sends no proxy header, and it puts `localhost` into `Host`.
+**MoonCG cannot detect that**: it sees only the connection from Vite, never the address of
+the computer behind it. So the template guards the proxy itself. `local-only.js`, the
+`bypass` of every proxied path in `vite.config.js`, answers `403` with the reason to every
+request and every WebSocket connection whose own address is not one of this machine
+(`127.x.x.x`, `::1`), before Vite passes anything on. Keep it there if you change the proxy,
+and give every path you add `bypass: localOnly`. It does not make `--host` safe for the pages
+Vite serves itself, which are your source files; it only keeps MoonCG out of reach.
+
+`@mooncg/sdk` is not published on npm. The template's `package.json` names the copy of the
+MoonCG it was created with by its path (`"@mooncg/sdk": "file:…/packages/sdk"`); on another
+machine, change that path. Everything is a development dependency: the built files hold all
+they need, so installing the bundle runs no npm. `resolve.dedupe: ['vue']` keeps one copy of
+Vue for the bundle and `@mooncg/sdk/vue`.
+
+The port is 5173 with `strictPort`, in `vite.config.js` and in `dev.url`; for a second bundle
+of this kind change both. Start Vite from the folder's long name on Windows: Vite started from
+a short `8.3` path (`C:\Users\JOHNSM~1\…`) answers 404 for its own client script.
+
+### Another development server
+
+A page served elsewhere, or not below `/b/<bundle>/`, says who it is:
 
 ```js
 import { createClient } from '@mooncg/sdk/client';
 
-const mc = createClient({ bundle: 'lower-third', url: 'ws://localhost:9090/ws' });
+const mc = createClient({
+  bundle: 'lower-third',
+  url: 'ws://localhost:9090/ws',
+  graphic: 'graphics/overlay.html', // on a graphic only, to be listed as an instance
+});
 ```
 
 Limits to know:
 
 - Use the same host name for both servers (`localhost` and `localhost`, not `localhost` and
-  `127.0.0.1`), so that a session cookie is sent along. With the sign-in of dev mode it works
-  either way.
-- `import '/sdk/mooncg.js'` resolves against the development server. Bundle the SDK, or let
-  the development server proxy `/sdk` to MoonCG.
-- Dialogs (`mc.dialogs.open`) talk to the dashboard by `postMessage` between pages of one
-  origin, so they do not work from a page of the development server. Test dialogs against the
-  built files.
-- A graphic says which graphic it is by its path under `/b/<bundle>/graphics/`. A page of the
-  development server passes `graphic: 'graphics/overlay.html'` to `createClient` to be listed
-  as an instance.
+  `127.0.0.1`), so that a session cookie is sent along: cookies do not care for the port. With
+  the sign-in of dev mode it works either way.
+- `import '/sdk/mooncg.js'` resolves against the development server. Import
+  `@mooncg/sdk/client` instead, or let the development server proxy `/sdk` to MoonCG, as the
+  `vue` template does.
+- **Dialogs** (`mc.dialogs.open`) talk to the dashboard by `postMessage` between pages of one
+  origin, and the dashboard believes no other. They do not work from a page of a development
+  server, the `vue` template's included. Test dialogs against the built files.
 
 ## The On Air lock
 

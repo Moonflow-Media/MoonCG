@@ -167,18 +167,27 @@ node packages/cli/dist/main.js start --bundles-dir examples --port 9090
 TypeScript is compiled with `tsc -b` and the server runs the JavaScript in `dist/`. Nothing runs
 TypeScript directly, so rebuild after changing sources. Tests need no build.
 
+Two kinds of tests are left out unless asked for, because they need the network:
+
+| Command                            | What it adds                                                                                                        |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `MOONCG_NETWORK_TESTS=1 pnpm test` | Stages a public Git repository over https, and runs a real `npm ci` from the registry for a bundle with one package |
+| `MOONCG_VITE_E2E=1 pnpm test:e2e`  | The `vue` template with a real Vite development server and MoonCG in dev mode in Chromium (installs Vite from npm)  |
+
+The normal `pnpm test` and `pnpm test:e2e` need no network.
+
 ## Repository layout
 
-| Path                        | Content                                                                                                                                                                                                                                           |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/core`             | Pure logic without IO: manifest parser, replicant engine, message bus, route table, bundle state machine, wire protocol, permissions, session handler                                                                                             |
-| `packages/server`           | Config, logger and lifecycle, bundle manager and installer, schema validation, storage, accounts, worker-thread extension host, HTTP and WebSocket transport                                                                                      |
-| `packages/sdk`              | What bundle and module authors use: `@mooncg/sdk/client` (browser and Node client), `/extension` (extension context), `/module` (module context), `/vue` and `/react` adapters                                                                    |
-| `packages/module-auth-oidc` | The module `auth-oidc`, shipped with the server: sign-in with OpenID Connect, Twitch and Discord; see [docs/external-logins.md](docs/external-logins.md)                                                                                          |
-| `docs/`                     | `permissions.md` (accounts, roles, tokens, setup), `bundles.md` (installing, updating, removing), `development.md` (live reload, dev mode, On Air), `modules.md`, `external-logins.md`, `extensions.md`, `dashboard.md` and `folder-structure.md` |
-| `packages/cli`              | The `mooncg` command line: `mooncg init`, `start`, `dev`, `types`, `user`, `token`, `bundle` and `module`, with the bundle templates                                                                                                              |
-| `packages/dashboard`        | The dashboard: a Vue application the server serves at `/`; see [docs/dashboard.md](docs/dashboard.md)                                                                                                                                             |
-| `examples/scoreboard`       | A reference bundle with a panel, a dialog, a graphic, an extension, an asset category and a config schema with a secret                                                                                                                           |
+| Path                        | Content                                                                                                                                                                                                                                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/core`             | Pure logic without IO: manifest parser, replicant engine, message bus, route table, bundle state machine, wire protocol, permissions, session handler                                                                                                                                                             |
+| `packages/server`           | Config, logger and lifecycle, bundle manager and installer, schema validation, storage, accounts, worker-thread extension host, HTTP and WebSocket transport                                                                                                                                                      |
+| `packages/sdk`              | What bundle and module authors use: `@mooncg/sdk/client` (browser and Node client), `/extension` (extension context), `/module` (module context), `/vue` and `/react` adapters                                                                                                                                    |
+| `packages/module-auth-oidc` | The module `auth-oidc`, shipped with the server: sign-in with OpenID Connect, Twitch and Discord; see [docs/external-logins.md](docs/external-logins.md)                                                                                                                                                          |
+| `docs/`                     | `permissions.md` (accounts, roles, tokens, setup), `bundles.md` (installing, updating, removing), `development.md` (live reload, dev mode, On Air), `modules.md`, `external-logins.md`, `extensions.md`, `dashboard.md`, `folder-structure.md`, and [`roadmap.md`](docs/roadmap.md) (milestones, what comes next) |
+| `packages/cli`              | The `mooncg` command line: `mooncg init`, `start`, `dev`, `types`, `user`, `token`, `bundle` and `module`, with the bundle templates                                                                                                                                                                              |
+| `packages/dashboard`        | The dashboard: a Vue application the server serves at `/`; see [docs/dashboard.md](docs/dashboard.md)                                                                                                                                                                                                             |
+| `examples/scoreboard`       | A reference bundle with a panel, a dialog, a graphic, an extension, an asset category and a config schema with a secret                                                                                                                                                                                           |
 
 ## Writing a bundle
 
@@ -394,8 +403,11 @@ running on the server, or the handshake is refused with `not_found`.
 
 ### Vue and React
 
-Bundles with a build step can install `@mooncg/sdk` and use its adapters. `vue` and `react` are
-optional peer dependencies; the plain `/sdk/mooncg.js` contains neither.
+Bundles with a build step can depend on `@mooncg/sdk` and use its adapters. It is not
+published on npm: name the `packages/sdk` folder of a MoonCG by its path
+(`"@mooncg/sdk": "file:…"`), as `mooncg bundle create <name> --template vue` does for you (see
+[docs/development.md](docs/development.md#the-vue-template)). `vue` and `react` are optional
+peer dependencies; the plain `/sdk/mooncg.js` contains neither.
 
 ```ts
 // Vue: a readonly shallow ref that stops following when the component is unmounted.

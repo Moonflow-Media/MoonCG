@@ -93,15 +93,6 @@ interface Staged {
   readonly bytes: number;
 }
 
-interface Job {
-  readonly id: string;
-  readonly state: 'queued' | 'running' | 'succeeded' | 'failed' | 'rolled-back';
-  readonly step?: string;
-  readonly staged?: Staged;
-  readonly error?: string;
-  readonly rollbackError?: string;
-}
-
 interface Listed {
   readonly name: string;
   readonly state: string;
@@ -113,10 +104,218 @@ interface Listed {
 const POLL_MS = 500;
 const API = '/api/v1/bundles';
 const part = encodeURIComponent;
+
+/** What a fetched bundle or module has in common, as far as the flow below needs it. */
+export interface StagedCommon {
+  readonly id: string;
+  readonly name: string;
+  readonly version: string;
+  readonly target?: string;
+  readonly replaces?: string;
+}
+
+export interface FlowJob {
+  readonly id: string;
+  readonly state: 'queued' | 'running' | 'succeeded' | 'failed' | 'rolled-back';
+  readonly step?: string;
+  readonly staged?: StagedCommon;
+  readonly error?: string;
+  readonly rollbackError?: string;
+}
+
+/**
+ * Fetching, showing, asking and installing, the same for bundles and modules: `api` is where
+ * their part of the API is, `summary` says what a fetched one declares, and `locked` whether
+ * the update of a target is something the On Air lock stands in the way of.
+ */
+export function installFlow(options: {
+  readonly api: string;
+  readonly noun: string;
+  readonly summary: (staged: StagedCommon) => string[];
+  readonly locked: (target: string) => Promise<boolean>;
+  /** What is said once a new one is installed. */
+  readonly installed?: ((staged: StagedCommon) => string) | undefined;
+  readonly args: Pick<BundleArgs, 'yes' | 'ref' | 'scripts' | 'onAir'>;
+  readonly deps: Pick<BundleDeps, 'cwd' | 'confirm' | 'pollMs'>;
+  readonly call: ReturnType<typeof createApiClient>;
+  readonly log: (line: string) => void;
+}) {
+  const { api, noun, summary, locked, installed, args, deps, call, log } = options;
+  type Job = FlowJob;
+  /** Follows a job to its end, naming each step as it begins. */
+  const finished = async ({ job }: { job: Job }): Promise<Job> => {
+    let current = job;
+    let step: string | undefined;
+    for (;;) {
+      if (current.step !== undefined && current.step !== step) {
+        step = current.step;
+        log(`  ... ${step}`);
+      }
+      if (['succeeded', 'failed', 'rolled-back'].includes(current.state)) return current;
+      await new Promise((done) => setTimeout(done, deps.pollMs ?? POLL_MS));
+      current = (await call<{ job: Job }>('GET', `${api}/-/jobs/${part(current.id)}`)).job;
+    }
+  };
+  const failure = (job: Job) =>
+    new Error(
+      printable(
+        (job.error ?? 'The server gave no reason') +
+          (job.rollbackError === undefined
+            ? ''
+            : `. The earlier version could not be restored either: ${job.rollbackError}`),
+      ) +
+        // What the server calls allowing install scripts is a flag here.
+        (/install scripts allowed/.test(job.error ?? '') && !args.scripts
+          ? ' (That is --scripts on this command line.)'
+          : ''),
+    );
+
+  /** Whether to go ahead: `--yes`, or the answer of whoever sits at the terminal. */
+  const confirmed = async (question: string): Promise<boolean> => {
+    if (args.yes) return true;
+    if (!deps.confirm) {
+      throw new Error(
+        'Nothing was changed: there is nobody to ask. Run the command again with --yes to go ahead.',
+      );
+    }
+    return deps.confirm(printable(question));
+  };
+
+  /** Fetches a bundle into staging: from `text`, or for an update from where it came from. */
+  const stage = async (text: string | undefined, target: string | undefined): Promise<Job> => {
+    const { scripts } = args;
+    if (text === undefined) {
+      if (args.ref !== undefined) throw new Error('--ref needs a Git address to go with');
+      return finished(await call('POST', `${api}/${part(target ?? '')}/update`, { scripts }));
+    }
+    const isGit =
+      /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text) ||
+      /^[^\\/\s@]+@[^\\/\s:]+:/.test(text) ||
+      text.includes('::');
+    if (isGit) {
+      const source = {
+        type: 'git',
+        url: text,
+        ...(args.ref === undefined ? {} : { ref: args.ref }),
+      };
+      return finished(await call('POST', `${api}/-/stage`, { source, target, scripts }));
+    }
+    if (args.ref !== undefined) throw new Error('--ref is for Git addresses only');
+    const path = resolve(deps.cwd, text);
+    const stats = await stat(path).catch(() => undefined);
+    if (!stats) {
+      throw new Error(
+        `There is no file or folder "${text}". A Git address starts with https:// or ssh://, or looks like user@host:path.`,
+      );
+    }
+    if (stats.isDirectory()) {
+      return finished(
+        await call('POST', `${api}/-/stage`, {
+          source: { type: 'path', path },
+          target,
+          scripts,
+        }),
+      );
+    }
+    // A file is sent to the server, which may be another machine.
+    const query = new URLSearchParams({ filename: basename(path) });
+    if (target !== undefined) query.set('target', target);
+    if (scripts) query.set('scripts', 'true');
+    return finished(await call('PUT', `${api}/-/stage?${query}`, await openAsBlob(path)));
+  };
+
+  /** What goes along with a change that the "On Air" lock may stand in the way of. */
+  const override = args.onAir ? { forceOnAir: true } : {};
+  /** Whether the installation is on air. A server that does not say counts as off air. */
+  const isOnAir = async () =>
+    (await call<{ onAir?: boolean }>('GET', '/api/v1/on-air').catch(() => undefined))?.onAir ===
+    true;
+  /** Why an update does not go ahead while the installation is on air. */
+  const onAirRefusal = (target: string, when: string, fetched: string) =>
+    new Error(
+      `MoonCG ${when}: updating "${target}" would interrupt what it shows, so it is blocked. ` +
+        `${fetched}Nothing was changed. Switch On Air off first, or run the command again with --on-air to update anyway.`,
+    );
+
+  /** Stages, shows what was fetched, asks, and installs. */
+  const install = async (text: string | undefined, target: string | undefined) => {
+    // Fetching would be allowed, but this command fetches in order to install: where that
+    // is going to be refused, it is said before anything is fetched or asked.
+    if (target !== undefined && !args.onAir && (await locked(target)) && (await isOnAir())) {
+      throw onAirRefusal(target, 'is on air', '');
+    }
+    log(target === undefined ? `Fetching the ${noun}` : `Fetching the new version of ${target}`);
+    const fetched = await stage(text, target);
+    const { staged } = fetched;
+    if (fetched.state !== 'succeeded' || !staged) throw failure(fetched);
+    for (const line of summary(staged)) log(line);
+
+    const discard = () => call('DELETE', `${api}/-/staged/${part(staged.id)}`, {}).catch(() => {});
+    let go: boolean;
+    try {
+      go = await confirmed(
+        staged.target === undefined
+          ? `Install ${noun === 'bundle' ? '' : `${noun} `}${staged.name} ${staged.version}? [y/N] `
+          : `Update ${staged.target} from ${staged.replaces ?? 'an unknown version'} to ${staged.version}? [y/N] `,
+      );
+    } catch (error) {
+      await discard();
+      throw error;
+    }
+    if (!go) {
+      await discard();
+      throw new Error('Nothing was changed.');
+    }
+    const commit = async () => {
+      try {
+        return await call<{ job: Job }>('POST', `${api}/-/staged/${part(staged.id)}/commit`, {
+          scripts: args.scripts,
+          ...override,
+        });
+      } catch (error) {
+        // Refused, for instance because the installation went on air while the question
+        // waited for its answer. Nobody is left to install what was fetched, so it is not
+        // left behind.
+        await discard();
+        if (
+          staged.target === undefined ||
+          args.onAir ||
+          !(await locked(staged.target)) ||
+          !(await isOnAir())
+        ) {
+          throw error;
+        }
+        throw onAirRefusal(
+          staged.target,
+          'went on air meanwhile',
+          'The fetched version was discarded. ',
+        );
+      }
+    };
+    const done = await finished(await commit());
+    if (done.state === 'rolled-back') {
+      throw new Error(
+        printable(
+          `The update was rolled back; ${staged.replaces ?? 'the earlier version'} is in place again. ` +
+            `The new version failed: ${done.error ?? 'no reason given'}`,
+        ),
+      );
+    }
+    if (done.state !== 'succeeded') throw failure(done);
+    log(
+      staged.target === undefined
+        ? (installed?.(staged) ?? `Installed ${staged.name} ${staged.version}`)
+        : `Updated ${staged.name} to ${staged.version}`,
+    );
+  };
+
+  return { finished, failure, confirmed, stage, install, override, isOnAir };
+}
+
 const counted = (count: number, one: string, many = `${one}s`) =>
   `${count} ${count === 1 ? one : many}`;
 
-function describeSource({ type, location, ref, commit }: Source): string {
+export function describeSource({ type, location, ref, commit }: Source): string {
   if (type === 'git') {
     const at = ref === undefined ? '' : ` at ${ref}`;
     return `Git repository ${location}${at}${commit === undefined ? '' : ` (${commit.slice(0, 10)})`}`;
@@ -210,164 +409,18 @@ export async function bundleCommand(
 
   const call = createApiClient(args, deps, 'system:bundles.manage');
 
-  /** Follows a job to its end, naming each step as it begins. */
-  const finished = async ({ job }: { job: Job }): Promise<Job> => {
-    let current = job;
-    let step: string | undefined;
-    for (;;) {
-      if (current.step !== undefined && current.step !== step) {
-        step = current.step;
-        log(`  ... ${step}`);
-      }
-      if (['succeeded', 'failed', 'rolled-back'].includes(current.state)) return current;
-      await new Promise((done) => setTimeout(done, deps.pollMs ?? POLL_MS));
-      current = (await call<{ job: Job }>('GET', `${API}/-/jobs/${part(current.id)}`)).job;
-    }
-  };
-  const failure = (job: Job) =>
-    new Error(
-      printable(
-        (job.error ?? 'The server gave no reason') +
-          (job.rollbackError === undefined
-            ? ''
-            : `. The earlier version could not be restored either: ${job.rollbackError}`),
-      ) +
-        // What the server calls allowing install scripts is a flag here.
-        (/install scripts allowed/.test(job.error ?? '') && !args.scripts
-          ? ' (That is --scripts on this command line.)'
-          : ''),
-    );
-
-  /** Whether to go ahead: `--yes`, or the answer of whoever sits at the terminal. */
-  const confirmed = async (question: string): Promise<boolean> => {
-    if (args.yes) return true;
-    if (!deps.confirm) {
-      throw new Error(
-        'Nothing was changed: there is nobody to ask. Run the command again with --yes to go ahead.',
-      );
-    }
-    return deps.confirm(printable(question));
-  };
-
-  /** Fetches a bundle into staging: from `text`, or for an update from where it came from. */
-  const stage = async (text: string | undefined, target: string | undefined): Promise<Job> => {
-    const { scripts } = args;
-    if (text === undefined) {
-      if (args.ref !== undefined) throw new Error('--ref needs a Git address to go with');
-      return finished(await call('POST', `${API}/${part(target ?? '')}/update`, { scripts }));
-    }
-    const isGit =
-      /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text) ||
-      /^[^\\/\s@]+@[^\\/\s:]+:/.test(text) ||
-      text.includes('::');
-    if (isGit) {
-      const source = {
-        type: 'git',
-        url: text,
-        ...(args.ref === undefined ? {} : { ref: args.ref }),
-      };
-      return finished(await call('POST', `${API}/-/stage`, { source, target, scripts }));
-    }
-    if (args.ref !== undefined) throw new Error('--ref is for Git addresses only');
-    const path = resolve(deps.cwd, text);
-    const stats = await stat(path).catch(() => undefined);
-    if (!stats) {
-      throw new Error(
-        `There is no file or folder "${text}". A Git address starts with https:// or ssh://, or looks like user@host:path.`,
-      );
-    }
-    if (stats.isDirectory()) {
-      return finished(
-        await call('POST', `${API}/-/stage`, {
-          source: { type: 'path', path },
-          target,
-          scripts,
-        }),
-      );
-    }
-    // A file is sent to the server, which may be another machine.
-    const query = new URLSearchParams({ filename: basename(path) });
-    if (target !== undefined) query.set('target', target);
-    if (scripts) query.set('scripts', 'true');
-    return finished(await call('PUT', `${API}/-/stage?${query}`, await openAsBlob(path)));
-  };
-
-  /** What goes along with a change that the "On Air" lock may stand in the way of. */
-  const override = args.onAir ? { forceOnAir: true } : {};
-  /** Whether the installation is on air. A server that does not say counts as off air. */
-  const isOnAir = async () =>
-    (await call<{ onAir?: boolean }>('GET', '/api/v1/on-air').catch(() => undefined))?.onAir ===
-    true;
-  /** Why an update does not go ahead while the installation is on air. */
-  const onAirRefusal = (target: string, when: string, fetched: string) =>
-    new Error(
-      `MoonCG ${when}: updating "${target}" would interrupt what it shows, so it is blocked. ` +
-        `${fetched}Nothing was changed. Switch On Air off first, or run the command again with --on-air to update anyway.`,
-    );
-
-  /** Stages, shows what was fetched, asks, and installs. */
-  const install = async (text: string | undefined, target: string | undefined) => {
-    // Fetching would be allowed, but this command fetches in order to install: where that
-    // is going to be refused, it is said before anything is fetched or asked.
-    if (target !== undefined && !args.onAir && (await isOnAir())) {
-      throw onAirRefusal(target, 'is on air', '');
-    }
-    log(target === undefined ? 'Fetching the bundle' : `Fetching the new version of ${target}`);
-    const fetched = await stage(text, target);
-    const { staged } = fetched;
-    if (fetched.state !== 'succeeded' || !staged) throw failure(fetched);
-    for (const line of summary(staged, args.scripts)) log(line);
-
-    const discard = () => call('DELETE', `${API}/-/staged/${part(staged.id)}`, {}).catch(() => {});
-    let go: boolean;
-    try {
-      go = await confirmed(
-        staged.target === undefined
-          ? `Install ${staged.name} ${staged.version}? [y/N] `
-          : `Update ${staged.target} from ${staged.replaces ?? 'an unknown version'} to ${staged.version}? [y/N] `,
-      );
-    } catch (error) {
-      await discard();
-      throw error;
-    }
-    if (!go) {
-      await discard();
-      throw new Error('Nothing was changed.');
-    }
-    const commit = async () => {
-      try {
-        return await call<{ job: Job }>('POST', `${API}/-/staged/${part(staged.id)}/commit`, {
-          scripts: args.scripts,
-          ...override,
-        });
-      } catch (error) {
-        // The installation may have gone on air while the question waited for its answer.
-        // Nobody is left to install what was fetched, so it is not left behind.
-        if (staged.target === undefined || args.onAir || !(await isOnAir())) throw error;
-        await discard();
-        throw onAirRefusal(
-          staged.target,
-          'went on air meanwhile',
-          'The fetched version was discarded. ',
-        );
-      }
-    };
-    const done = await finished(await commit());
-    if (done.state === 'rolled-back') {
-      throw new Error(
-        printable(
-          `The update was rolled back; ${staged.replaces ?? 'the earlier version'} is in place again. ` +
-            `The new version failed: ${done.error ?? 'no reason given'}`,
-        ),
-      );
-    }
-    if (done.state !== 'succeeded') throw failure(done);
-    log(
-      staged.target === undefined
-        ? `Installed ${staged.name} ${staged.version}`
-        : `Updated ${staged.name} to ${staged.version}`,
-    );
-  };
+  const { finished, failure, confirmed, install, override } = installFlow({
+    api: API,
+    noun: 'bundle',
+    summary: (staged) => summary(staged as Staged, args.scripts),
+    // Fetching would be allowed, but this command fetches in order to install: an update
+    // that the lock is going to refuse is refused before anything is fetched or asked.
+    locked: async () => true,
+    args,
+    deps,
+    call,
+    log,
+  });
 
   switch (action) {
     case 'list': {

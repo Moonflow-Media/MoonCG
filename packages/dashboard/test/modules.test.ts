@@ -6,7 +6,7 @@ import { ApiError, api } from '../src/api.js';
 import { navigation } from '../src/nav.js';
 import { routes } from '../src/router.js';
 import { useSession } from '../src/stores/session.js';
-import { ModulesView } from '../src/views/Modules.js';
+import { ModulesView, moduleInstallTiming } from '../src/views/Modules.js';
 import { RolesView } from '../src/views/Roles.js';
 import { SettingsView } from '../src/views/Settings.js';
 import { UsersView } from '../src/views/Users.js';
@@ -163,6 +163,161 @@ describe('the modules page', () => {
     await row(view, 'hello').find('[data-action="enable"]').trigger('click');
     await flushPromises();
     expect(view.find('[role="alert"]').text()).toBe('Missing permission');
+  });
+});
+
+describe('installing, updating and removing modules', () => {
+  const STAGED = {
+    id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+    kind: 'module',
+    name: 'greeter',
+    version: '1.0.0',
+    title: 'Greeter',
+    source: { type: 'git', location: 'https://example.org/o/greeter.git', ref: 'main' },
+    main: 'index.js',
+    config: false,
+    access: 'Its code runs inside the MoonCG server process with full access to the server.',
+    npm: { needed: false, lockfile: false, dependencies: [], installed: false },
+    installCode: 'none',
+    files: 2,
+    bytes: 300,
+  };
+  const done = (extra: object) => ({ job: { id: 'j1', state: 'succeeded', ...extra } });
+  async function show(table: Record<string, unknown> = {}) {
+    moduleInstallTiming.pollMs = 0;
+    const calls = serve({
+      'GET /api/v1/modules': MODULES,
+      'POST /api/v1/modules/-/stage': { job: { id: 'j1', state: 'queued' } },
+      'GET /api/v1/modules/-/jobs/j1': done({ operation: 'stage', staged: STAGED }),
+      'POST /api/v1/modules/-/staged/aaaaaaaaaaaaaaaaaaaaaaaa/commit': {
+        job: { id: 'j2', state: 'queued' },
+      },
+      'GET /api/v1/modules/-/jobs/j2': done({ id: 'j2', operation: 'install', module: 'greeter' }),
+      ...table,
+    });
+    const view = mount(ModulesView);
+    await flush();
+    return { view, calls };
+  }
+  /** A job is asked about after a timer, so a few rounds are flushed. */
+  const flush = async () => {
+    for (let round = 0; round < 6; round++) {
+      await flushPromises();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  };
+  const row = (view: ReturnType<typeof mount>, name: string) =>
+    view.find(`[data-module="${name}"]`);
+  const buttonOf = (wrapper: { findAll: ReturnType<typeof mount>['findAll'] }, label: string) =>
+    wrapper.findAll('button').find((candidate) => candidate.text() === label);
+
+  it('fetches a module, shows that it runs inside the server, and installs it disabled', async () => {
+    const { view, calls } = await show();
+    const form = view.find('[data-module-install] form');
+    await form.find('input[name="url"]').setValue('https://example.org/o/greeter.git');
+    await form.find('input[name="ref"]').setValue('main');
+    await form.trigger('submit');
+    await flush();
+    expect(sent(calls)[0]).toEqual({
+      method: 'POST',
+      path: '/api/v1/modules/-/stage',
+      body: { source: { type: 'git', url: 'https://example.org/o/greeter.git', ref: 'main' } },
+    });
+    const card = view.find('[data-staged-module]');
+    expect(card.text()).toContain('Greeter greeter 1.0.0');
+    expect(card.find('[data-access]').text()).toContain(
+      'inside the MoonCG server process with full access',
+    );
+    expect(card.text()).toContain('disabled until you enable it');
+
+    await buttonOf(card, 'Install')?.trigger('click');
+    await flush();
+    expect(sent(calls).at(-1)).toEqual({
+      method: 'POST',
+      path: '/api/v1/modules/-/staged/aaaaaaaaaaaaaaaaaaaaaaaa/commit',
+      body: { scripts: false },
+    });
+    expect(view.find('[data-staged-module]').exists()).toBe(false);
+    expect(view.find('[data-module-install] .done').text()).toContain('Installing greeter is done');
+    // The list is read again.
+    expect(calls.filter((call) => call.path === '/api/v1/modules').length).toBeGreaterThan(1);
+  });
+
+  it('discards what was fetched', async () => {
+    const { view, calls } = await show({
+      'DELETE /api/v1/modules/-/staged/aaaaaaaaaaaaaaaaaaaaaaaa': undefined,
+    });
+    const form = view.find('[data-module-install] form');
+    await form.find('input[name="url"]').setValue('https://example.org/o/greeter.git');
+    await form.trigger('submit');
+    await flush();
+    await buttonOf(view.find('[data-staged-module]'), 'Discard')?.trigger('click');
+    await flush();
+    expect(sent(calls).at(-1)?.method).toBe('DELETE');
+    expect(view.find('[data-staged-module]').exists()).toBe(false);
+  });
+
+  it('says why a fetch failed', async () => {
+    const { view } = await show({
+      'GET /api/v1/modules/-/jobs/j1': {
+        job: {
+          id: 'j1',
+          state: 'failed',
+          operation: 'stage',
+          error: 'kind: Expected a module, found a bundle',
+        },
+      },
+    });
+    const form = view.find('[data-module-install] form');
+    await form.find('input[name="url"]').setValue('https://example.org/o/board.git');
+    await form.trigger('submit');
+    await flush();
+    expect(view.find('[data-module-install] .problem').text()).toContain('Expected a module');
+  });
+
+  it('updates a module from where it came from, and removes one after a question that names what is lost', async () => {
+    const asked: string[] = [];
+    vi.stubGlobal('confirm', (question: string) => {
+      asked.push(question);
+      return true;
+    });
+    const { view, calls } = await show({
+      'POST /api/v1/modules/hello/update': { job: { id: 'j1', state: 'queued' } },
+      'GET /api/v1/modules/-/jobs/j1': done({
+        operation: 'stage',
+        staged: { ...STAGED, name: 'hello', target: 'hello', replaces: '2.1.0' },
+      }),
+      'POST /api/v1/modules/hello/remove': { job: { id: 'j3', state: 'queued' } },
+      'GET /api/v1/modules/-/jobs/j3': done({ id: 'j3', operation: 'remove' }),
+    });
+    await buttonOf(row(view, 'hello'), 'Update')?.trigger('click');
+    await flush();
+    expect(sent(calls)[0]).toEqual({
+      method: 'POST',
+      path: '/api/v1/modules/hello/update',
+      body: {},
+    });
+    expect(view.find('[data-staged-module]').text()).toContain('Update of 2.1.0');
+    expect(buttonOf(view.find('[data-staged-module]'), 'Update')).toBeDefined();
+
+    await buttonOf(row(view, 'hello'), 'Remove')?.trigger('click');
+    await flush();
+    expect(asked.at(-1)).toMatch(
+      /^Remove the module "hello"\? .*files are deleted.*configuration is kept/,
+    );
+    expect(sent(calls).at(-1)).toEqual({
+      method: 'POST',
+      path: '/api/v1/modules/hello/remove',
+      body: {},
+    });
+  });
+
+  it('offers no update or removal of a module shipped with MoonCG', async () => {
+    const { view } = await show();
+    for (const name of ['auth-local', 'auth-oidc']) {
+      expect(buttonOf(row(view, name), 'Update')).toBeUndefined();
+      expect(buttonOf(row(view, name), 'Remove')).toBeUndefined();
+    }
   });
 });
 
@@ -414,6 +569,56 @@ describe('external accounts on the users page', () => {
     });
     expect(view.findAll('[data-user]')).toHaveLength(3);
     expect(view.find('[role="alert"]').exists()).toBe(false);
+  });
+});
+
+describe('self-linking on the users page', () => {
+  it('switches it for all providers and for one', async () => {
+    const calls = serve({
+      'GET /api/v1/users': { users: [] },
+      'GET /api/v1/roles': { roles: [] },
+      'GET /api/v1/identities': {
+        identities: [],
+        providers: [
+          { id: 'twitch', name: 'Twitch' },
+          { id: 'oidc', name: 'Company' },
+        ],
+        unlinked: [],
+      },
+      'GET /api/v1/self-linking': { enabled: true, disabledProviders: ['twitch'] },
+      'PUT /api/v1/self-linking': { enabled: true, disabledProviders: [] },
+    });
+    const view = mount(UsersView);
+    await flushPromises();
+    const card = view.find('[data-self-linking]');
+    expect((card.find('input[name="self-linking"]').element as HTMLInputElement).checked).toBe(
+      true,
+    );
+    expect(
+      (card.find('input[name="self-linking-twitch"]').element as HTMLInputElement).checked,
+    ).toBe(false);
+    await card.find('input[name="self-linking-twitch"]').setValue(true);
+    await flushPromises();
+    expect(sent(calls).at(-1)).toEqual({
+      method: 'PUT',
+      path: '/api/v1/self-linking',
+      body: { enabled: true, disabledProviders: [] },
+    });
+    await view.find('input[name="self-linking"]').setValue(false);
+    await flushPromises();
+    expect(sent(calls).at(-1)?.body).toMatchObject({ enabled: false });
+  });
+
+  it('is not shown without providers', async () => {
+    serve({
+      'GET /api/v1/users': { users: [] },
+      'GET /api/v1/roles': { roles: [] },
+      'GET /api/v1/identities': { identities: [], providers: [], unlinked: [] },
+      'GET /api/v1/self-linking': { enabled: true, disabledProviders: [] },
+    });
+    const view = mount(UsersView);
+    await flushPromises();
+    expect(view.find('[data-self-linking]').exists()).toBe(false);
   });
 });
 

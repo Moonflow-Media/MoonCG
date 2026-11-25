@@ -515,6 +515,180 @@ describe('staging folder', () => {
   });
 });
 
+describe('a restart', () => {
+  /** The installer of the next start, on the same folders, at the time `now` says. */
+  async function restart(
+    context: Awaited<ReturnType<typeof setup>>,
+    now = Date.now,
+    options: Partial<InstallerOptions> = {},
+  ) {
+    await context.installer.close();
+    const { logger, lines } = memoryLogger();
+    const next = new BundleInstaller({
+      dataDir: context.dataDir,
+      bundlesDir: context.bundlesDir,
+      manager: context.manager,
+      registry: new ReplicantRegistry(),
+      logger,
+      mooncgVersion: '0.6.0',
+      npmInstall: async () => {},
+      now,
+      ...options,
+    });
+    cleanup.push(() => next.close());
+    await next.start();
+    return { next, lines };
+  }
+
+  it('keeps a staged bundle that is still within its lifetime, and it can be installed', async () => {
+    const context = await setup();
+    const job = await context.stage(board('1.0.0'));
+    const before = job.staged as StagedBundle;
+
+    const { next, lines } = await restart(context);
+
+    expect(next.staged()).toEqual([before]);
+    expect(lines.join('\n')).toMatch(/kept across the restart/);
+    const done = await next.settled(next.commit(before.id, { by: 'ada' }).id);
+    expect(done.state).toBe('succeeded');
+    expect(context.states()).toMatchObject({ board: 'running' });
+  });
+
+  it('believes nothing stored about the files: they are read and checked again', async () => {
+    const context = await setup();
+    const job = await context.stage(board('1.0.0'));
+    const id = job.staged?.id as string;
+    const files = join(context.dataDir, 'staging', id, 'bundle');
+    // Changed on disk while the server was down: what is shown is what is there now.
+    await writeFile(
+      join(files, 'mooncg.json'),
+      JSON.stringify(manifest('board', { version: '6.6.6', capabilities: ['bus.any'] })),
+    );
+
+    const { next } = await restart(context);
+
+    expect(next.staged()).toMatchObject([{ id, version: '6.6.6', extension: false }]);
+    expect(next.staged()[0]?.capabilities).toEqual(['bus.any']);
+  });
+
+  it('drops one whose files no longer pass, with the trust it was fetched with', async () => {
+    const context = await setup();
+    const job = await context.stage(board('1.0.0'));
+    const id = job.staged?.id as string;
+    const files = join(context.dataDir, 'staging', id, 'bundle');
+    // It was fetched untrusted; now it would make npm fetch from elsewhere.
+    await writeFile(join(files, '.npmrc'), 'registry=https://evil.example/\n');
+    await writeFile(
+      join(files, 'package.json'),
+      JSON.stringify({ name: 'board', dependencies: { left: '1.0.0' } }),
+    );
+
+    const { next, lines } = await restart(context);
+
+    expect(next.staged()).toEqual([]);
+    expect(await context.stagingDirs()).toEqual([]);
+    expect(lines.join('\n')).toMatch(/is not kept: Installing this bundle would make npm/);
+  });
+
+  it('drops one whose lifetime ran out, one without its note, and one whose note was tampered with', async () => {
+    const context = await setup();
+    const old = (await context.stage(board('1.0.0'))).staged as StagedBundle;
+    const bare = (await context.stage(board('1.1.0', { name: 'other' }))).staged as StagedBundle;
+    const forged = (await context.stage(board('1.2.0', { name: 'third' }))).staged as StagedBundle;
+    await rm(join(context.dataDir, 'staging', bare.id, 'staged.json'));
+    const noteOf = join(context.dataDir, 'staging', forged.id, 'staged.json');
+    const note = JSON.parse(await readFile(noteOf, 'utf8'));
+    await writeFile(noteOf, JSON.stringify({ ...note, id: '0123456789abcdef01234567' }));
+
+    const later = Date.parse(old.expiresAt) + 1;
+    const { next, lines } = await restart(context, () => later);
+
+    expect(next.staged()).toEqual([]);
+    expect(await context.stagingDirs()).toEqual([]);
+    // One line each, with the reason.
+    const log = lines.join('\n');
+    expect(log).toMatch(new RegExp(`${bare.id} is not kept: it has no note`));
+    expect(log).toMatch(new RegExp(`${forged.id} is not kept: its note is not valid`));
+    expect(log).toMatch(new RegExp(`${old.id} is not kept: its time is up`));
+  });
+
+  it('drops one whose note says it was staged later than now, and says so', async () => {
+    const context = await setup();
+    const job = (await context.stage(board('1.0.0'))).staged as StagedBundle;
+
+    const earlier = Date.now() - 60 * 60 * 1000;
+    const { next, lines } = await restart(context, () => earlier);
+
+    expect(next.staged()).toEqual([]);
+    expect(lines.join('\n')).toMatch(new RegExp(`${job.id} is not kept: .*in the future`));
+  });
+
+  it('keeps one no longer than its lifetime from when it was staged, whatever its note says', async () => {
+    const context = await setup();
+    const job = (await context.stage(board('1.0.0'))).staged as StagedBundle;
+    const noteOf = join(context.dataDir, 'staging', job.id, 'staged.json');
+    const note = JSON.parse(await readFile(noteOf, 'utf8'));
+    const stagedAt = Date.parse(note.stagedAt);
+    await writeFile(
+      noteOf,
+      JSON.stringify({ ...note, expiresAt: new Date(stagedAt + 365 * 86_400_000).toISOString() }),
+    );
+
+    const { next } = await restart(context);
+
+    expect(next.staged()[0]?.expiresAt).toBe(new Date(stagedAt + 30 * 60 * 1000).toISOString());
+  });
+
+  it('takes only the known fields of the source from the note, and refuses overlong ones', async () => {
+    const context = await setup();
+    const kept = (await context.stage(board('1.0.0'))).staged as StagedBundle;
+    const long = (await context.stage(board('1.0.0', { name: 'other' }))).staged as StagedBundle;
+    const rewrite = async (id: string, change: (source: object) => object) => {
+      const noteOf = join(context.dataDir, 'staging', id, 'staged.json');
+      const note = JSON.parse(await readFile(noteOf, 'utf8'));
+      await writeFile(noteOf, JSON.stringify({ ...note, source: change(note.source) }));
+    };
+    await rewrite(kept.id, (source) => ({ ...source, injected: { deep: 'x'.repeat(1000) } }));
+    await rewrite(long.id, (source) => ({ ...source, path: 'x'.repeat(100_000) }));
+
+    const { next, lines } = await restart(context);
+
+    expect(next.staged().map((staged) => staged.id)).toEqual([kept.id]);
+    expect(lines.join('\n')).toMatch(new RegExp(`${long.id} is not kept: its note is not valid`));
+    await next.settled(next.commit(kept.id, { by: 'ada' }).id);
+    const sources = await readFile(join(context.dataDir, 'bundle-sources.json'), 'utf8');
+    expect(sources).not.toContain('injected');
+  });
+
+  it('keeps no more staged bundles than may wait, and says which it drops', async () => {
+    const context = await setup();
+    for (const name of ['one', 'two', 'three']) {
+      await context.stage(board('1.0.0', { name }));
+    }
+
+    const { next, lines } = await restart(context, Date.now, { maxStaged: 2 });
+
+    expect(next.staged()).toHaveLength(2);
+    expect(await context.stagingDirs()).toHaveLength(2);
+    expect(lines.join('\n')).toMatch(/is not kept: as many staged bundles as may wait are kept/);
+  });
+
+  it('drops the update of a bundle that is gone', async () => {
+    const context = await setup({}, { board: board('1.0.0') });
+    await context.manager.start();
+    const job = await context.stage(board('1.1.0'), 'board');
+    expect(job.staged?.target).toBe('board');
+    await context.manager.remove('board', { force: true }, async () => {
+      await rm(join(context.bundlesDir, 'board'), { recursive: true });
+    });
+
+    const { next, lines } = await restart(context);
+
+    expect(next.staged()).toEqual([]);
+    expect(lines.join('\n')).toMatch(/is not kept: the bundle "board" it was to update is gone/);
+  });
+});
+
 describe('shutting down', () => {
   it('ends a fetch that is under way instead of waiting for it', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'mooncg-fake-git-'));

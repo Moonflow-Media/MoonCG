@@ -14,6 +14,121 @@ initial commit of the repository.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-25
+
+### Added
+
+- Dashboard: **Remove** on the Bundles page opens a confirmation in the bundle's row that says
+  what is lost, with **Also delete its files** (the text then says how many older backups of
+  the bundle remain, or that none does) and **Also delete its data** (purge: settings,
+  uploaded assets, stored values and the role grants for the bundle). Removing a bundle that
+  enabled bundles need is a separate question that names them and only then sends
+  `"force": true`.
+- Dashboard: a **Backups** card on the Bundles page lists the backups of every bundle, also
+  of one that was removed, and restores one after a question that says what happens to the
+  installed version and that the chosen backup is used up. When the list cannot be read, the
+  card says why, apart from the jobs; an earlier answer that arrives late is ignored.
+- `GET /api/v1/bundles/-/backups`: the backups of every bundle at once, with whether a bundle
+  of that name is installed.
+- Installing, updating and removing modules through the installer, with the same steps and
+  checks as bundles (staging, archive and size bounds, Git hardening, npm trust opt-in):
+  `mooncg module install <source>`, `module update <name> [<source>]`,
+  `module remove <name> [--purge-data]`, the API below `/api/v1/modules/-/` and
+  `/api/v1/modules/<name>/update|remove`, and **Install module**, **Update** and **Remove** on
+  the Modules page. It takes `system:modules.manage`. The summary says that a module runs
+  inside the server with full access; an installed module is disabled until it is enabled;
+  updating or removing an enabled module is blocked while On Air unless overridden; a bundle
+  is refused as a module and a module as a bundle. An update that does not start is rolled
+  back. See `docs/modules.md`.
+- `mooncg init` creates `modules/` and names it in the configuration file.
+- `mooncg bundle create <name> --template vue`: a bundle with a panel and a graphic as Vue
+  components, built by Vite 8 with `@vitejs/plugin-vue` 6 into `dashboard/` and `graphics/`,
+  using `@mooncg/sdk/vue`, with `dev.url` set up for dev mode. Its Vite configuration serves
+  the pages below `/b/<name>/` and proxies `/ws`, `/api`, `/sdk` and the bundle's routes and
+  assets to MoonCG, so a page of the development server needs no `bundle`, `url` or `graphic`
+  for `createClient` and no copy of `/sdk/mooncg.js`. `@mooncg/sdk` is named by its path, as
+  it is not on npm; a path with quotes or `$` in it is written correctly, and a command line
+  that cannot find `@mooncg/sdk` says so instead of `MODULE_NOT_FOUND`. The proxy answers 403
+  to every client that is not on this machine (`local-only.js`, see Security). See
+  `docs/development.md`.
+- Self-linking: a signed-in user links and unlinks accounts of external providers for
+  themselves on the new **Account** page (`/account`, also name, roles and password change).
+  Linking starts with a `POST` (`/api/v1/me/identities/:provider/link`) that takes the
+  current password, or for a user without one a sign-in of the last five minutes, and so does
+  unlinking (`DELETE /api/v1/me/identities/:provider/:subject`); the flow is bound to the
+  session that started it; an account linked to another user is never moved;
+  realm bindings are kept; the user of dev mode cannot; a user cannot unlink their only way
+  of signing in. An administrator switches it off globally or per provider on the Users page
+  (`/api/v1/self-linking`); it is on by default, and off when its setting cannot be read. A
+  `/account?linked=` in the address is reported only for a provider there is. See
+  `docs/external-logins.md`.
+- `auth-oidc`: up to three generic OpenID Connect providers, as the fixed sections `oidc`,
+  `oidc2` and `oidc3` of its settings, each with its own write-only client secret and its own
+  redirect address `/auth/<id>/callback`. `oidc` and its links work as before.
+- An opt-in browser test (`MOONCG_VITE_E2E=1 pnpm test:e2e`) of the `vue` template with a real
+  Vite development server and MoonCG in dev mode: the panel is sent on to Vite, connects,
+  reads and writes a replicant, a graphic is listed as an instance, a saved component is
+  applied by hot module replacement without a reload, and the built files work without
+  `dev.url`.
+
+- Opt-in tests with the network (`MOONCG_NETWORK_TESTS=1 pnpm test`): staging a public Git
+  repository over https, and a real `npm ci` from the registry for a bundle with one small
+  dependency. Skipped in the normal run, which needs no network.
+
+### Changed
+
+- A staged bundle that is still within its 30 minutes survives a restart of the server, with
+  the trust it was fetched with. It is read and checked again from its files at the start, as
+  when it was fetched, and its summary is made anew; only how it was fetched (source, who,
+  when, trust, target) is kept in `staged.json` beside it, and of its source only the known
+  fields within length limits are taken. One that no longer passes, whose note is missing or
+  invalid, whose time is up (never later than 30 minutes after it was staged, whatever the
+  note says), whose note says it was staged in the future, whose target is gone, or that is
+  one more than may wait staged, is deleted with one line in the log that says why. The trust
+  in the note is believed: whoever can write to the data folder can set it. See
+  `docs/bundles.md`.
+- `system:modules.manage` now lets its holder install modules, and so run code inside the
+  server with full access, as the server process: **roles and API tokens that hold it already
+  (also through `system:*`) can now do that.** Its description says so: "Install, enable and
+  configure modules. Modules run inside the server with full access." Check who holds it.
+  Only `*`, `system:*` and the permission itself cover it. In dev mode every process on the
+  machine holds it, as it holds everything.
+- Confirming one's own password (linking, unlinking): a request without a password is a `400`
+  and does not count towards the throttle; only a wrong password does.
+- Installing a module: when the server does not take the module, or where it came from cannot
+  be written, after its folder was moved into `modules/`, the folder is moved back to staging
+  (the module can be installed again) and the module is forgotten, so the folder and the list
+  agree. An update that runs is kept when only its source cannot be written; the log says so.
+
+### Security
+
+- Dev mode no longer signs in what a page of another site makes the browser ask for without
+  an `Origin`: the `GET` of an `<img>`, `<script>`, `<link>` or `<iframe>` tag and a link or
+  redirect the browser follows. A request without `Origin` that says
+  `Sec-Fetch-Site: cross-site` (or any value but `none`, `same-origin` and `same-site`) is
+  answered like anyone who is not signed in. A link on another site to a page of the
+  dashboard gets a short page with a link to the same address instead, which signs in on
+  the visitor's click only. Requests without the header (`curl`, older browser sources)
+  behave as before, and so do `GET`s a page of any server on this machine causes
+  (`same-site`): their answers cannot be read, and what changes something is checked as
+  before. See `docs/development.md`.
+- The `vue` template's Vite proxy no longer makes dev mode reachable from the network: run
+  with `--host`, Vite handed the requests and WebSocket connections of other computers on to
+  MoonCG from this machine, which dev mode signed in as the administrator (MoonCG cannot see
+  the address behind a proxy). Its `bypass` (`local-only.js`) now answers 403 to every client
+  whose address is not loopback, and the docs say to keep Vite on loopback while
+  `mooncg dev` runs.
+- Self-linking fails closed: when its setting cannot be read at the start, it is off in
+  memory, whether or not switching it off can be written.
+- Unlinking one's own external account takes the password, or a sign-in of the last five
+  minutes, as linking does.
+- `bundle-sources.json` and `module-sources.json`, which may hold Git credentials, are written
+  with mode 0600 (also the file beside them they are written to first) where the system has
+  such modes; on Windows the access list of the data folder protects them.
+- Development dependencies: `glob` is held at `^14.0.2` and `minimatch` at `^11.0.1`
+  through pnpm overrides (GHSA-3g3m-2fjr-6pw4, GHSA-g3hv-75wg-m249). Both came in through
+  `@vue/test-utils` → `js-beautify` and are not part of any published package.
+
 ## [0.9.0] - 2026-11-25
 
 Wire protocol: 6 (unchanged). Database: version 8 (was 6), migrated at the first start.

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { errorMessage } from '../kernel/logger.js';
 import { withoutCredentials } from './git.js';
@@ -83,17 +83,25 @@ const SOURCES_FILE = 'bundle-sources.json';
 /**
  * Remembers where each installed bundle came from, in `<data-dir>/bundle-sources.json`. The
  * file may hold credentials, as part of a Git address; like the rest of the data folder it
- * is for the server alone.
+ * is for the server alone, and it is written readable by its owner only (mode 0600) where the
+ * platform has such modes.
  */
 export class BundleSources {
   readonly #dataDir: string;
+  readonly #file: string;
   readonly #warn: (message: string) => void;
   #records: Map<string, SourceRecord> | undefined;
   /** The last write, so that two changes do not cross. */
   #tail: Promise<unknown> = Promise.resolve();
 
-  constructor(options: { readonly dataDir: string; readonly warn?: (message: string) => void }) {
+  constructor(options: {
+    readonly dataDir: string;
+    readonly warn?: (message: string) => void;
+    /** The file in the data folder, for another kind of thing installed than bundles. */
+    readonly file?: string | undefined;
+  }) {
     this.#dataDir = options.dataDir;
+    this.#file = options.file ?? SOURCES_FILE;
     this.#warn = options.warn ?? (() => {});
   }
 
@@ -117,7 +125,7 @@ export class BundleSources {
     if (this.#records) return this.#records;
     let records = new Map<string, SourceRecord>();
     try {
-      const stored: unknown = JSON.parse(await readFile(join(this.#dataDir, SOURCES_FILE), 'utf8'));
+      const stored: unknown = JSON.parse(await readFile(join(this.#dataDir, this.#file), 'utf8'));
       if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) {
         throw new Error('it is no object');
       }
@@ -125,7 +133,7 @@ export class BundleSources {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         this.#warn(
-          `${SOURCES_FILE} could not be read, so where the bundles came from is not known: ${errorMessage(error)}`,
+          `${this.#file} could not be read, so where what is installed came from is not known: ${errorMessage(error)}`,
         );
       }
     }
@@ -142,8 +150,12 @@ export class BundleSources {
         const sorted = Object.fromEntries([...records].sort(([a], [b]) => a.localeCompare(b)));
         // Written beside the file and moved over it: the file is whole at every moment.
         await mkdir(this.#dataDir, { recursive: true });
-        const file = join(this.#dataDir, SOURCES_FILE);
-        await writeFile(`${file}.tmp`, `${JSON.stringify(sorted, null, 2)}\n`);
+        const file = join(this.#dataDir, this.#file);
+        // For the owner alone, as a Git address may hold credentials. The mode is set again
+        // for a file left over that was made with another. On Windows, where files have no
+        // such mode, the access list of the data folder is what protects it.
+        await writeFile(`${file}.tmp`, `${JSON.stringify(sorted, null, 2)}\n`, { mode: 0o600 });
+        if (process.platform !== 'win32') await chmod(`${file}.tmp`, 0o600);
         await rename(`${file}.tmp`, file);
       });
     this.#tail = done;

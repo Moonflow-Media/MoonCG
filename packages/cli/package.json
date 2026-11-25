@@ -1,6 +1,6 @@
 {
   "name": "mooncg",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "description": "The MoonCG command line.",
   "type": "module",
@@ -16,6 +16,7 @@
   ],
   "dependencies": {
     "@mooncg/core": "workspace:*",
+    "@mooncg/sdk": "workspace:*",
     "@mooncg/server": "workspace:*"
   }
 }

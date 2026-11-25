@@ -90,6 +90,11 @@ interface Pending {
   readonly expires: number;
   /** The address that started it. */
   readonly address: string;
+  /**
+   * Set for a user linking an account to themselves: the user, and the hash of the session
+   * that started it. Only that session finishes it.
+   */
+  readonly link?: { readonly userId: string; readonly session: string } | undefined;
 }
 
 /** An account that tried to sign in and belongs to no user, or to one for another realm. */
@@ -106,6 +111,18 @@ export interface UnlinkedAttempt {
 
 export type CompleteResult =
   | { readonly ok: true; readonly session: string; readonly returnTo: string }
+  /** A user linked an account to themselves. Nobody was signed in. */
+  | { readonly ok: true; readonly linked: true; readonly returnTo: string }
+  | {
+      readonly ok: false;
+      /**
+       * Of linking: `session` the browser is not signed in with the session that started it,
+       * `elsewhere` the account is another user's, `realm` the user's link of it is bound to
+       * another realm, `provider` the provider refused or could not be asked.
+       */
+      readonly reason: 'session' | 'elsewhere' | 'realm' | 'provider';
+      readonly link: true;
+    }
   | {
       readonly ok: false;
       /**
@@ -117,7 +134,8 @@ export type CompleteResult =
   | { readonly ok: false; readonly reason: 'throttled'; readonly retryAfterSeconds: number };
 
 export interface ExternalLoginsOptions {
-  readonly auth: Pick<Auth, 'externalLogin'>;
+  readonly auth: Pick<Auth, 'externalLogin'> &
+    Partial<Pick<Auth, 'linkIdentity' | 'listIdentities' | 'sessionOf'>>;
   readonly providers: ProviderRegistry;
   readonly logger: Logger;
   readonly now?: () => number;
@@ -167,6 +185,8 @@ export class ExternalLogins {
       readonly redirectUri: string;
       readonly returnTo: string;
       readonly address: string;
+      /** A user links an account to themselves, from the session with this hash. */
+      readonly link?: { readonly userId: string; readonly session: string } | undefined;
     },
   ): Promise<{ readonly url: string; readonly ticket: string }> {
     const registered = this.#options.providers.get(providerId);
@@ -186,6 +206,7 @@ export class ExternalLogins {
       returnTo: request.returnTo,
       expires: this.#now() + FLOW_TTL_MS,
       address: request.address,
+      ...(request.link === undefined ? {} : { link: request.link }),
     };
     let url: string;
     try {
@@ -225,6 +246,8 @@ export class ExternalLogins {
       readonly ticket: string | undefined;
       readonly query: Readonly<Record<string, string>>;
       readonly address: string;
+      /** The secret of the session the browser is signed in with, if any. */
+      readonly session?: string | undefined;
     },
   ): Promise<CompleteResult> {
     const { ticket, query, address } = request;
@@ -254,6 +277,19 @@ export class ExternalLogins {
     }
     const registered = providers.get(providerId);
     if (!registered) return { ok: false, reason: 'state' };
+    // A link is finished by the session that started it, still valid, and by nobody else:
+    // asked before the provider is.
+    const { link } = pending;
+    if (link !== undefined) {
+      const current = request.session === undefined ? undefined : auth.sessionOf?.(request.session);
+      if (
+        request.session === undefined ||
+        current?.userId !== link.userId ||
+        !sameSecret(hashSecret(request.session), link.session)
+      ) {
+        return { ok: false, reason: 'session', link: true };
+      }
+    }
 
     let subject: unknown;
     let name: unknown;
@@ -285,9 +321,12 @@ export class ExternalLogins {
       // Why goes to the log, for whoever runs the installation. The browser learns nothing:
       // what a provider says may hold what only the two of them should know.
       logger.warn(`Signing in with "${providerId}" was refused: ${errorMessage(error)}`);
-      return { ok: false, reason: 'provider' };
+      return link === undefined
+        ? { ok: false, reason: 'provider' }
+        : { ok: false, reason: 'provider', link: true };
     }
     const shown = typeof name === 'string' ? name : undefined;
+    if (link !== undefined) return this.#link(providerId, link.userId, subject, realm, pending);
     let result: ReturnType<Auth['externalLogin']>;
     try {
       result = auth.externalLogin(
@@ -338,6 +377,49 @@ export class ExternalLogins {
       `${user} signed in with "${providerId}" (${account}) from ${printable(address, 64)}`,
     );
     return { ok: true, session: result.session, returnTo: pending.returnTo };
+  }
+
+  /**
+   * Links the account a provider vouched for to the user who asked for it, under the rules an
+   * administrator's link follows and one more: a link of this account that is bound to
+   * another realm is not rebound by the user.
+   */
+  #link(
+    providerId: string,
+    userId: string,
+    subject: string,
+    realm: string | undefined,
+    pending: Pending,
+  ): CompleteResult {
+    const { auth, logger } = this.#options;
+    const account = `subject ${JSON.stringify(printable(subject))}`;
+    const held = auth
+      .listIdentities?.()
+      .find((link) => link.provider === providerId && link.subject === subject);
+    if (held !== undefined && held.userId !== userId) {
+      logger.warn(
+        `A user tried to link the account of "${providerId}" (${account}), which is linked to another user`,
+      );
+      return { ok: false, reason: 'elsewhere', link: true };
+    }
+    if (held?.realm !== undefined && held.realm !== realm) {
+      return { ok: false, reason: 'realm', link: true };
+    }
+    try {
+      auth.linkIdentity?.(userId, providerId, subject, realm);
+    } catch (error) {
+      logger.warn(`Linking an account of "${providerId}" was refused: ${errorMessage(error)}`);
+      return error instanceof MoonCGError && error.code === 'conflict'
+        ? { ok: false, reason: 'elsewhere', link: true }
+        : { ok: false, reason: 'provider', link: true };
+    }
+    this.#byAddress.forgive(pending.address);
+    this.forgetUnlinked(providerId, subject);
+    logger.info(
+      `A user linked the account of "${providerId}" (${account}) to themselves` +
+        (realm === undefined ? '' : `, for the realm ${JSON.stringify(printable(realm))}`),
+    );
+    return { ok: true, linked: true, returnTo: pending.returnTo };
   }
 
   /** The latest attempts of accounts that belong to no user, newest first. */

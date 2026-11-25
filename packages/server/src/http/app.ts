@@ -12,6 +12,7 @@ import {
   type HttpMethod,
   isSafeRelativePath,
   LOGS_VIEW,
+  MODULES_MANAGE,
   MoonCGError,
   normalizeRoutePath,
   type Policy,
@@ -29,6 +30,7 @@ import type { BundleConfigs } from '../config/bundle-config.js';
 import type { OnAirLock } from '../dev/on-air.js';
 import type { GraphicInstances } from '../graphics/instances.js';
 import type { BundleInstaller } from '../install/installer.js';
+import type { ModuleInstaller } from '../install/module-installer.js';
 import type { FetchableSource } from '../install/sources.js';
 import type { LogBuffer } from '../kernel/logger.js';
 import { localPasswordProvider } from '../modules/auth-local.js';
@@ -37,7 +39,9 @@ import { jsonBody, registerAuthRoutes } from './auth-routes.js';
 import {
   createIdentify,
   credentialsOf,
+  devLinkTarget,
   devLoginAllowed,
+  devLoginHeldBack,
   type Identify,
   type RequestIdentity,
   type ResolvePrincipal,
@@ -49,6 +53,7 @@ import {
   type Transport,
   viaHttps,
 } from './identity.js';
+import { escapeHtml } from './login-page.js';
 import { type ModuleHttp, registerModuleRoutes } from './module-routes.js';
 import { devOrigins, devServerUrl, originAllowed } from './origin.js';
 import {
@@ -109,11 +114,18 @@ export type BundleInstalls = Pick<
   | 'update'
   | 'remove'
   | 'backups'
+  | 'allBackups'
   | 'restore'
   | 'jobs'
   | 'job'
   | 'sources'
   | 'limits'
+>;
+
+/** What the API needs of the module installer. */
+export type ModuleInstalls = Pick<
+  ModuleInstaller,
+  'stage' | 'staged' | 'commit' | 'discard' | 'update' | 'remove' | 'jobs' | 'job' | 'sources'
 >;
 
 export interface AppOptions {
@@ -145,6 +157,8 @@ export interface AppOptions {
   readonly lifecycle?: BundleLifecycle | undefined;
   /** Installs, updates and removes bundles. Without it that part of the API answers 404. */
   readonly installer?: BundleInstalls | undefined;
+  /** Installs, updates and removes modules. Without it that part of the API answers 404. */
+  readonly moduleInstaller?: ModuleInstalls | undefined;
   /** The connected graphic pages. Without it no instance can be reloaded. */
   readonly instances?: Pick<GraphicInstances, 'get' | 'reload' | 'disconnect' | 'of'> | undefined;
   /** The files uploaded for each bundle. Without it there are no assets. */
@@ -200,6 +214,7 @@ export const DASHBOARD_ROUTES = [
   '/settings',
   '/modules',
   '/logs',
+  '/account',
 ] as const;
 const LIFECYCLE_ACTIONS = ['enable', 'disable', 'reload'] as const;
 /**
@@ -261,6 +276,9 @@ const STATUS: Readonly<Record<ErrorCode, number>> = {
   unavailable: 503,
   timeout: 504,
 };
+
+/** Where the page for a link from another site in dev mode has its target put in. */
+const DEV_LINK_SLOT = '<!-- target -->';
 
 const publicFile = (name: string) => new URL(`../../public/${name}`, import.meta.url);
 
@@ -536,6 +554,22 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
           ])
           .redirect(request.raw.url ?? '/', 302);
       }
+    }
+    // Dev mode signs in nothing that a page of another site caused, and a link there to a
+    // page here is that. A login page would be of no use: nobody has a password. So the
+    // answer is a page that says what happened, with a link to where the visitor was going.
+    // Following it is a request of a page of this server, which is signed in. Nothing does
+    // that by itself: it takes the visitor's own click.
+    if (
+      auth &&
+      options.devLogin &&
+      anonymous(request) &&
+      devLoginHeldBack(request.raw, secure(request))
+    ) {
+      const target = devLinkTarget(request.raw.url);
+      return sendPage(reply.header('cache-control', 'no-store'), 'dev-link.html', (page) =>
+        page.replace(DEV_LINK_SLOT, () => escapeHtml(target)),
+      );
     }
     // Whoever is not signed in is sent where that can be done.
     if (auth && anonymous(request)) {
@@ -833,6 +867,12 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     return job ? { job } : notFound(reply);
   });
 
+  // The backups of every bundle at once: the only way to learn of a bundle that was removed
+  // and can be brought back, since nothing else lists it any more.
+  app.get(`${INSTALLS}/backups`, installs, async () => ({
+    bundles: (await installer?.allBackups()) ?? [],
+  }));
+
   app.get<{ Params: { name: string } }>(
     '/api/v1/bundles/:name/backups',
     installs,
@@ -848,6 +888,117 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         const forceOnAir = overridesOnAir(request);
         if (record(name)) assertNotOnAir(name, 'update', forceOnAir);
         const job = await installer?.restore(name, id, actor(request), { forceOnAir });
+        return reply.code(202).send({ job });
+      } catch (error) {
+        return failWith(reply, error);
+      }
+    },
+  );
+
+  // Installing, updating and removing modules: the same steps as for bundles, and all of it
+  // for whoever may manage modules. A module runs inside the server, so nothing of it is
+  // told to anyone else, not even whether something exists.
+  const { moduleInstaller } = options;
+  const MODULE_INSTALLS = '/api/v1/modules/-';
+  const moduleInstalls = {
+    preHandler: async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!can(request, MODULES_MANAGE)) return deny(request, reply, MODULES_MANAGE);
+      if (!moduleInstaller) return notFound(reply);
+    },
+  };
+
+  app.post(`${MODULE_INSTALLS}/stage`, moduleInstalls, async (request, reply) => {
+    try {
+      const body = jsonBody(request);
+      const job = await moduleInstaller?.stage({
+        source: fetchableSource(body.source),
+        target: targetOf(body.target),
+        scripts: body.scripts === true,
+        by: actor(request),
+      });
+      return reply.code(202).send({ job });
+    } catch (error) {
+      return failWith(reply, error);
+    }
+  });
+
+  app.get(`${MODULE_INSTALLS}/staged`, moduleInstalls, async () => ({
+    staged: moduleInstaller?.staged() ?? [],
+  }));
+
+  app.post<{ Params: { id: string } }>(
+    `${MODULE_INSTALLS}/staged/:id/commit`,
+    moduleInstalls,
+    async (request, reply) => {
+      try {
+        const { scripts, forceOnAir } = jsonBody(request);
+        const job = moduleInstaller?.commit(request.params.id, {
+          scripts: scripts === true,
+          forceOnAir: forceOnAir === true,
+          by: actor(request),
+        });
+        return reply.code(202).send({ job });
+      } catch (error) {
+        return failWith(reply, error);
+      }
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    `${MODULE_INSTALLS}/staged/:id`,
+    moduleInstalls,
+    async (request, reply) => {
+      const discarded = await moduleInstaller?.discard(request.params.id, actor(request));
+      return discarded ? reply.code(204).send() : notFound(reply);
+    },
+  );
+
+  app.get(`${MODULE_INSTALLS}/jobs`, moduleInstalls, async () => ({
+    jobs: moduleInstaller?.jobs() ?? [],
+  }));
+
+  app.get<{ Params: { id: string } }>(
+    `${MODULE_INSTALLS}/jobs/:id`,
+    moduleInstalls,
+    async (request, reply) => {
+      const job = moduleInstaller?.job(request.params.id);
+      return job ? { job } : notFound(reply);
+    },
+  );
+
+  app.get(`${MODULE_INSTALLS}/sources`, moduleInstalls, async () => ({
+    sources: (await moduleInstaller?.sources()) ?? {},
+  }));
+
+  app.post<{ Params: { name: string } }>(
+    '/api/v1/modules/:name/update',
+    moduleInstalls,
+    async (request, reply) => {
+      try {
+        const { source, scripts } = jsonBody(request);
+        const job = await moduleInstaller?.update(request.params.name, {
+          source: source === undefined ? undefined : fetchableSource(source),
+          scripts: scripts === true,
+          by: actor(request),
+        });
+        return reply.code(202).send({ job });
+      } catch (error) {
+        return failWith(reply, error);
+      }
+    },
+  );
+
+  app.post<{ Params: { name: string } }>(
+    '/api/v1/modules/:name/remove',
+    moduleInstalls,
+    async (request, reply) => {
+      try {
+        const { forceOnAir, purgeData } = jsonBody(request);
+        const job = moduleInstaller?.remove(request.params.name, {
+          forceOnAir: forceOnAir === true,
+          purgeData: purgeData === true,
+          by: actor(request),
+        });
         return reply.code(202).send({ job });
       } catch (error) {
         return failWith(reply, error);
@@ -1020,6 +1171,30 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         return reply.code(202).send({ job });
       } catch (error) {
         // What is left of a refused upload is not waited for.
+        reply.header('connection', 'close');
+        return failWith(reply, error);
+      }
+    });
+    // The same for a module.
+    uploads.put<{
+      Querystring: { filename?: string; target?: string; scripts?: string };
+    }>(`${MODULE_INSTALLS}/stage`, moduleInstalls, async (request, reply) => {
+      const length = request.headers['content-length'];
+      try {
+        const job = await moduleInstaller?.stage({
+          source: {
+            type: 'upload',
+            body: request.raw,
+            length: length === undefined ? undefined : Number(length),
+            filename:
+              typeof request.query.filename === 'string' ? request.query.filename : undefined,
+          },
+          target: targetOf(request.query.target),
+          scripts: request.query.scripts === 'true',
+          by: actor(request),
+        });
+        return reply.code(202).send({ job });
+      } catch (error) {
         reply.header('connection', 'close');
         return failWith(reply, error);
       }

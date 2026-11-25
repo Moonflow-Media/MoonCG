@@ -33,8 +33,8 @@ export default function setup(ctx) {
   });
 }
 EOF
-# Restart the server so that it finds the folder, then, with a token that holds
-# system:modules.manage:
+# Restart the server so that it finds the folder (or use "mooncg module install",
+# see below), then, with a token that holds system:modules.manage:
 mooncg module enable hello
 curl http://127.0.0.1:9090/m/hello/greeting
 ```
@@ -50,7 +50,7 @@ curl http://127.0.0.1:9090/m/hello/greeting
 | Reaches       | Its own replicants, messages, routes, config     | The server: sign-in, routes, permissions               |
 | On by default | Yes, unless disabled                             | No: it runs only once an administrator enabled it      |
 | Managed by    | `system:bundles.manage`                          | `system:modules.manage`                                |
-| Installed     | Through the dashboard or `mooncg bundle install` | By copying its folder into `modules/`                  |
+| Installed     | Through the dashboard or `mooncg bundle install` | Through the dashboard or `mooncg module install`       |
 
 **A module is trusted code.** It runs with everything the server may do: it can read the
 database, the configuration of every bundle with its secrets, and every request. MoonCG does
@@ -99,10 +99,68 @@ be a bundle, and with a warning in the log. Nothing in it is read or run, and it
 enabled. Its name is shown with characters that draw nothing written out as their code
 (`\u{202e}`), so that it reads as what it is.
 
-The modules folder is read when the server starts. A folder you add later is found at the next
-start. **Installing a module is copying its folder there and restarting**; there is no
-installer for modules as there is for bundles. If the module has npm dependencies, install
-them in its folder yourself (`npm ci --omit=dev`) before you start the server.
+The modules folder is read when the server starts. A folder you copy there by hand is found at
+the next start; one installed with the installer below needs no restart. A module you copy by
+hand that has npm dependencies needs them installed in its folder (`npm ci --omit=dev`) before
+the server starts.
+
+## Installing, updating and removing
+
+Modules are installed the way bundles are ([bundles.md](bundles.md)): fetched, checked, shown,
+and only then put in place. On the **Modules** page (**Install module**, and **Update** and
+**Remove** in the row of a module you installed), or:
+
+```sh
+mooncg module install https://example.org/owner/greeter.git [--ref v1.2.0] [--scripts] [--yes]
+mooncg module install ./greeter.zip
+mooncg module update greeter [<source>] [--on-air]
+mooncg module remove greeter [--purge-data] [--on-air]
+```
+
+1. **Fetch.** From a Git address, from a ZIP archive (uploaded, or a path on the server), or
+   from a folder of the server, with the same checks as a bundle: paths in an archive that
+   lead out of it are refused; the archive, the unpacked files and their number are bounded by
+   the same limits (`--bundle-max-archive-bytes` and the rest); Git runs with the same
+   hardening and time limit; a folder or archive inside the modules, bundles or data folder of
+   the server is refused. It is fetched into `<data-dir>/module-staging/<id>/`.
+2. **Check.** The manifest must say `"kind": "module"`: a bundle is refused here, as a module
+   is refused by the bundle installer. The main file must be there, `engine.mooncg` must allow
+   this MoonCG, and a new module must not have the name of one that is there (update it
+   instead). npm is handled as for a bundle: a module that would make npm do more than fetch
+   packages from the registry (an `.npmrc`, dependencies from elsewhere) is refused unless it
+   was fetched as trusted (`--scripts`, the checkbox), and install scripts run only when that
+   is said.
+3. **Read.** The summary names the source, the main file, whether installing runs code, the
+   npm packages, whether it has settings and its size, and always says: _Its code runs inside
+   the MoonCG server process with full access to the server, its data and secrets, and this
+   machine._
+4. **Decide.** **Install** puts it into `modules/<name>/`. It is listed **disabled** and stays
+   so until someone enables it, also when a module of that name was enabled before it was
+   removed. **Discard** deletes what was fetched; it is deleted by itself after 30 minutes,
+   and at the next start.
+
+**Update** fetches the new version from where the module came from, or from the source given,
+and shows it with the version it replaces. Putting it in place stops the module, swaps its
+folder and, if the module is enabled, starts the new version; if that fails, the earlier
+version is put back and started again, and the job ends as `rolled-back`. A disabled module
+stays disabled. No backups of modules are kept beyond that.
+
+**Remove** stops the module and deletes its folder. Its configuration
+(`<data-dir>/config/modules/<name>.json`) stays for when it is installed again, unless
+`--purge-data` (`"purgeData": true`) is given; the dashboard keeps it. That it was enabled is
+forgotten.
+
+While the installation is **On Air**, updating or removing an **enabled** module is refused
+unless the request says `"forceOnAir": true` (`--on-air`; the dashboard asks). Installing a
+new module, and updating or removing a disabled one, interrupt nothing and are not blocked.
+
+Modules shipped with MoonCG (`auth-local`, `auth-oidc`) are updated with MoonCG: they cannot be
+updated or removed here (409).
+
+**What an update does not reach.** The new main file is loaded anew, but Node keeps every other
+file it has loaded: files that the main file imports stay those of the version that was loaded
+first, until the server restarts. A module of one file is updated in full; for any other,
+restart the server after the update.
 
 ## Enabling and disabling
 
@@ -352,9 +410,19 @@ nothing.
 | Listing modules, enabling, disabling              | `system:modules.manage`                                  |
 | Reading and writing the configuration of a module | `system:modules.manage` **and** `system:settings.manage` |
 | Seeing the list of system permissions             | `system:users.manage`                                    |
-| Putting a module into `modules/`                  | Access to the machine                                    |
+| Installing, updating, removing a module           | `system:modules.manage`                                  |
+| Putting a module into `modules/` by hand          | Access to the machine                                    |
 
-Only `admin` holds `system:modules.manage` unless you grant it.
+Only `admin` holds `system:modules.manage` unless you grant it. Of the grants, only `*`,
+`system:*` and the permission itself cover it.
+
+**It is the power to run code as the server.** Since modules can be installed through the API,
+whoever holds `system:modules.manage` can install a module and enable it, and a module runs
+inside the server process with full access to the server, its data and secrets, and the
+machine. Treat it like `*`. A role or an API token that held it before modules could be
+installed holds that power now: look at which roles and tokens grant it (also through
+`system:*`) and take it away where that is more than was meant. In
+[dev mode](development.md#dev-mode) every process on the machine holds it.
 
 **Why not `system:bundles.manage`.** Whoever manages bundles decides what runs in worker
 threads beside the server. Whoever manages modules decides what runs in the server and, with a
@@ -383,6 +451,27 @@ All of it is JSON. Errors are `{ "error": { "code", "message" } }`.
 | `PUT /api/v1/modules/:name/config` `{ values }` | Stores and starts the module again; `restarted`, `restartNote` |
 | `GET /api/v1/permissions`                       | The system permissions, built-in and of running modules        |
 
+Installing, updating and removing:
+
+| Request                                                                | Does                                                   |
+| ---------------------------------------------------------------------- | ------------------------------------------------------ |
+| `POST /api/v1/modules/-/stage` `{ source, target?, scripts? }`         | Fetches and checks; 202 and a `stage` job              |
+| `PUT /api/v1/modules/-/stage?filename=…&target=…&scripts=true`         | The same for a ZIP archive as the body                 |
+| `GET /api/v1/modules/-/staged`                                         | `{ staged: [...] }`                                    |
+| `POST /api/v1/modules/-/staged/:id/commit` `{ scripts?, forceOnAir? }` | Installs or updates; 202 and a job                     |
+| `DELETE /api/v1/modules/-/staged/:id`                                  | Discards; 204                                          |
+| `GET /api/v1/modules/-/jobs`, `…/jobs/:id`                             | The latest 20 jobs; one job                            |
+| `GET /api/v1/modules/-/sources`                                        | Where each installed module came from, without secrets |
+| `POST /api/v1/modules/:name/update` `{ source?, scripts? }`            | Stages the new version; 202 and a `stage` job          |
+| `POST /api/v1/modules/:name/remove` `{ purgeData?, forceOnAir? }`      | Removes; 202 and a job                                 |
+
+`source` is as for bundles. A job has `id`, `operation` (`stage`, `install`, `update`,
+`remove`), `state` (`queued`, `running`, `succeeded`, `failed`, `rolled-back`), the `step` it is
+at, `module`, and when it is over `error` and `rollbackError`. A `stage` job that succeeded
+carries `staged`. The read-only replicant `system:module-installs` holds `{ jobs, staged }` for
+those who may manage modules. The upload needs the header `X-MoonCG-CSRF` when it is sent with
+a session cookie.
+
 A module:
 
 ```json
@@ -410,14 +499,13 @@ in the list as `failed`, and every request that names it answers 404.
 The plan for MoonCG names more hooks than the context has. They are left out rather than
 shipped as something that does not work:
 
-| Hook                       | State                                                             |
-| -------------------------- | ----------------------------------------------------------------- |
-| `storage.registerAdapter`  | Not there. The server stores in SQLite only                       |
-| `registry.registerSource`  | Not there. There is no bundle registry yet                        |
-| `dashboard.registerPage`   | Not there. A module cannot add a page to the dashboard            |
-| Password providers         | Internal only: `auth-local` registers the one there is            |
-| Installing through the API | Not there. Copy the folder into `modules/` and restart            |
-| Reloading on file changes  | Not there. The watcher watches bundles; modules are read at start |
+| Hook                      | State                                                             |
+| ------------------------- | ----------------------------------------------------------------- |
+| `storage.registerAdapter` | Not there. The server stores in SQLite only                       |
+| `registry.registerSource` | Not there. There is no bundle registry yet                        |
+| `dashboard.registerPage`  | Not there. A module cannot add a page to the dashboard            |
+| Password providers        | Internal only: `auth-local` registers the one there is            |
+| Reloading on file changes | Not there. The watcher watches bundles; modules are read at start |
 
 Of the built-in parts of the server, the local login is a module (`auth-local`): it registers
 its provider in the same registry the providers of modules are in, and the login route asks

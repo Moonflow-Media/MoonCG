@@ -60,9 +60,10 @@ export const SETTINGS_MANAGE = 'system:settings.manage';
 /** Reserved for reading the server log. */
 export const LOGS_VIEW = 'system:logs.view';
 /**
- * Required to enable and disable modules and to change their configuration. A module is code
- * that runs inside the server and may decide who signs in, which is more than a bundle does,
- * so it is a permission of its own and not the one for bundles.
+ * Required to install, update, remove, enable and disable modules and to change their
+ * configuration. A module is code that runs inside the server with full access, which is more
+ * than a bundle does, so it is a permission of its own and not the one for bundles: whoever
+ * holds it can run code as the server process. Only `*`, `system:*` and itself cover it.
  */
 export const MODULES_MANAGE = 'system:modules.manage';
 
@@ -74,7 +75,8 @@ export const SYSTEM_PERMISSIONS: Readonly<Record<string, string>> = {
   [TOKENS_MANAGE]: 'Create, list and revoke API tokens',
   [SETTINGS_MANAGE]: 'Read and change the configuration of bundles',
   [LOGS_VIEW]: 'Read the server log',
-  [MODULES_MANAGE]: 'Enable and disable modules and change their configuration',
+  [MODULES_MANAGE]:
+    'Install, enable and configure modules. Modules run inside the server with full access.',
 };
 
 const MODULE_PERMISSION_NAME = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;

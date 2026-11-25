@@ -145,6 +145,40 @@ const PROXY_HEADERS = [
 ] as const;
 
 /**
+ * What `Sec-Fetch-Site` may say for dev mode to sign a request in. A browser sets the header
+ * itself on every request, and no page can change it:
+ *
+ * - `none`: the user caused the request, by typing the address or opening a bookmark;
+ * - `same-origin`: a page of this server did;
+ * - `same-site`: a page of the same host on another port did, which is another server on
+ *   this machine, such as the development server of a `dev.url`. The request is addressed
+ *   to a loopback name, so a page that is same-site with it was loaded from that name too.
+ *
+ * `cross-site` is a page of another site, and whatever else a browser may come to say is
+ * read as that.
+ */
+const OWN_FETCH_SITES = new Set(['none', 'same-origin', 'same-site']);
+
+/**
+ * Whether a browser says that a page of another site caused the request. A request without
+ * the header was not sent by a browser that knows it: a command line tool, a browser source
+ * in an older OBS. Those are not turned away here.
+ */
+function causedByAnotherSite(headers: IncomingHttpHeaders): boolean {
+  const site = headers['sec-fetch-site'];
+  return site !== undefined && !(typeof site === 'string' && OWN_FETCH_SITES.has(site));
+}
+
+/** Everything `devLoginAllowed` asks for but what the request says about the page behind it. */
+function reachedDirectly({ headers, socket }: Pick<IncomingMessage, 'headers' | 'socket'>) {
+  return (
+    isLoopbackAddress(socket.remoteAddress) &&
+    isLoopbackAuthority(headers.host) &&
+    PROXY_HEADERS.every((name) => headers[name] === undefined)
+  );
+}
+
+/**
  * Whether dev mode may sign a request in without credentials. All of it must hold:
  *
  * - the other end of the socket is this machine. That is the address of the connection
@@ -154,20 +188,50 @@ const PROXY_HEADERS = [
  * - the request is addressed to this machine by a loopback name. A page of another site
  *   whose name was pointed at 127.0.0.1 (DNS rebinding) reaches the socket from loopback,
  *   but its requests still carry its own name as `Host`;
- * - the request does not come from a page of another site: it states no `Origin`, as a
- *   command line tool, OBS or a page that navigates does, or one on this machine, which is
- *   the server's own, that of another server here and that of every `dev.url` (a manifest
- *   takes no other). The visitor's browser is on this machine whatever page it shows, so the
- *   address of the socket says nothing about the page; its origin does. This holds even for
- *   an origin that is allowed to connect: allowed is not signed in.
+ * - the request does not come from a page of another site. The visitor's browser is on this
+ *   machine whatever page it shows, so the address of the socket says nothing about the
+ *   page. Two headers do, and a page can forge neither. A request that states an `Origin`
+ *   is judged by it: it must be one on this machine, which is the server's own, that of
+ *   another server here and that of every `dev.url` (a manifest takes no other). This holds
+ *   even for an origin that is allowed to connect: allowed is not signed in. A request
+ *   without `Origin`, as the `GET` of a tag or of a navigation is, is judged by
+ *   `Sec-Fetch-Site`, which must not say that another site caused it. A request with
+ *   neither header comes from no browser of today: a command line tool, or OBS.
  */
 export function devLoginAllowed(request: Pick<IncomingMessage, 'headers' | 'socket'>): boolean {
-  const { headers, socket } = request;
+  const { headers } = request;
+  if (!reachedDirectly(request)) return false;
+  return headers.origin === undefined
+    ? !causedByAnotherSite(headers)
+    : isLoopbackOrigin(headers.origin);
+}
+
+/**
+ * Where the page for a held back link leads: the address asked for when it is a path on this
+ * server, else the start page. A browser reads `/\host` like `//host`, another site.
+ */
+export function devLinkTarget(url: string | undefined): string {
+  return url !== undefined && /^\/(?![/\\])/.test(url) ? url : '/';
+}
+
+/**
+ * Whether a request is a person following a link from another site to a page here, which
+ * dev mode would have signed in had they typed the address: a top-level navigation without
+ * credentials that nothing but `Sec-Fetch-Site` keeps out. Such a request is not signed in,
+ * but it can be told how to go on.
+ */
+export function devLoginHeldBack(
+  request: Pick<IncomingMessage, 'headers' | 'socket' | 'url'>,
+  secure = false,
+): boolean {
+  const { headers } = request;
   return (
-    isLoopbackAddress(socket.remoteAddress) &&
-    isLoopbackAuthority(headers.host) &&
-    PROXY_HEADERS.every((name) => headers[name] === undefined) &&
-    (headers.origin === undefined || isLoopbackOrigin(headers.origin))
+    headers['sec-fetch-mode'] === 'navigate' &&
+    headers['sec-fetch-dest'] === 'document' &&
+    headers.origin === undefined &&
+    causedByAnotherSite(headers) &&
+    reachedDirectly(request) &&
+    !carriesCredentials(request, secure)
   );
 }
 

@@ -17,11 +17,12 @@ import {
 import type { ModuleResponse } from '@mooncg/sdk/module';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { isExternalProviderId, SESSION_MAX_MS, ThrottledError } from '../auth/auth.js';
-import { redactSecrets } from '../auth/secrets.js';
+import { hashSecret, redactSecrets } from '../auth/secrets.js';
 import type { BundleConfigs } from '../config/bundle-config.js';
 import { errorMessage, type Logger, printable } from '../kernel/logger.js';
 import { type ExternalLogins, FLOW_TTL_MS, safeReturnTo } from '../modules/external-login.js';
 import type { ModuleManager } from '../modules/manager.js';
+import type { SelfLinking } from '../modules/self-linking.js';
 import type { HttpContext } from './app.js';
 import { AUTH_BODY_LIMIT, jsonBody } from './auth-routes.js';
 import { cookieName, SESSION_COOKIE, sessionCookie, TOKEN_PARAMETER } from './identity.js';
@@ -60,7 +61,15 @@ export interface ModuleHttp {
   /** The origin the server is reached at, if it was configured. */
   readonly publicUrl?: string | undefined;
   readonly logger?: Logger | undefined;
+  /** Whether users may link external accounts to themselves. Without it, they may not. */
+  readonly selfLinking?: SelfLinking | undefined;
 }
+
+/**
+ * How recent the session of a user without a password must be to link an account: the
+ * fresh sign-in that stands in for the password others type.
+ */
+export const SELF_LINK_FRESH_MS = 5 * 60 * 1000;
 
 const ICON_TYPES: Readonly<Record<string, string>> = {
   '.svg': 'image/svg+xml',
@@ -182,6 +191,8 @@ export function registerModuleRoutes(
       ticket: cookieValue(request.headers.cookie, name),
       query: flatten(request.query),
       address: context.remoteAddress(request),
+      // For a link: only the session that started it may finish it.
+      session: cookieValue(request.headers.cookie, cookieName(SESSION_COOKIE, secure(request))),
     });
     // The address of this request carried a code. Nobody is told where the browser was.
     reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer');
@@ -191,8 +202,11 @@ export function registerModuleRoutes(
     }
     const used = oauthCookie(request, '', 0);
     if (!result.ok) {
-      return reply.header('set-cookie', used).redirect(`/login?error=${result.reason}`, 302);
+      const page = 'link' in result ? '/account' : '/login';
+      return reply.header('set-cookie', used).redirect(`${page}?error=${result.reason}`, 302);
     }
+    // A link was made: the browser goes back to where it was, signed in as before.
+    if ('linked' in result) return reply.header('set-cookie', used).redirect(result.returnTo, 302);
     // The same cookie, with the same flags and the same lifetime, as a password gets.
     const session = sessionCookie(SESSION_COOKIE, result.session, {
       secure: secure(request),
@@ -302,6 +316,177 @@ export function registerModuleRoutes(
       }
     },
   );
+
+  // --- A user's own links to external accounts. Linking lets whoever has the account act as
+  // the user, so it takes what signing in takes: the password, or for a user without one a
+  // sign-in of the last few minutes. It is started by a POST, which passed the forgery
+  // checks, and finished at the callback by the session that started it and no other.
+  type WithOwnIdentity = FastifyRequest<{ Params: { provider: string; subject?: string } }>;
+  /** The signed-in user a request is from, or why it is refused. */
+  const ownUser = (request: FastifyRequest, reply: FastifyReply) => {
+    const { principal, via } = identityOf(request);
+    if (principal.kind === 'anonymous') return { denied: unauthenticated(reply) };
+    if (via === 'dev') {
+      return {
+        denied: fail(reply, 403, 'forbidden', 'The user of dev mode has no accounts of its own'),
+      };
+    }
+    if (via !== 'session' || !principal.id.startsWith('user:')) {
+      return {
+        denied: fail(reply, 403, 'forbidden', 'Only a signed-in user links accounts to themselves'),
+      };
+    }
+    return { userId: principal.id.slice('user:'.length) };
+  };
+  /**
+   * Linking and unlinking take the user's current password, or for a user without one a
+   * sign-in of the last five minutes, and the session cookie of the user. Throws what
+   * `confirmOwnPassword` throws.
+   */
+  const reauthenticate = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    userId: string,
+    action: 'link' | 'unlink',
+  ): Promise<{ readonly session: string } | { readonly denied: FastifyReply }> => {
+    const session = cookieValue(
+      request.headers.cookie,
+      cookieName(SESSION_COOKIE, secure(request)),
+    );
+    const current = session === undefined ? undefined : auth.sessionOf(session);
+    if (session === undefined || current?.userId !== userId) {
+      return { denied: unauthenticated(reply) };
+    }
+    if (auth.hasPassword(userId)) {
+      await auth.confirmOwnPassword(userId, jsonBody(request).password);
+    } else if (Date.now() - current.createdAt > SELF_LINK_FRESH_MS) {
+      return {
+        denied: fail(
+          reply,
+          403,
+          'forbidden',
+          `Sign out and sign in again, then ${action} the account within five minutes`,
+        ),
+      };
+    }
+    return { session };
+  };
+  const failConfirming = (reply: FastifyReply, error: unknown) => {
+    if (error instanceof ThrottledError) {
+      reply.header('retry-after', String(error.retryAfterSeconds));
+      return fail(reply, 429, 'unavailable', 'Too many attempts. Try again later.');
+    }
+    return failWith(reply, error);
+  };
+  const selfLinkable = (provider: string) =>
+    isExternalProviderId(provider) &&
+    providers.get(provider) !== undefined &&
+    http.selfLinking?.allows(provider) === true;
+
+  app.get('/api/v1/me/identities', async (request, reply) => {
+    const own = ownUser(request, reply);
+    if (own.denied) return own.denied;
+    const { userId } = own;
+    return {
+      identities: auth
+        .listIdentities()
+        .filter((link) => link.userId === userId)
+        .map(({ userId: _user, ...link }) => link),
+      providers: providers.external().map(({ provider: { id, name } }) => ({
+        id,
+        name,
+        selfLink: selfLinkable(id),
+      })),
+      password: auth.hasPassword(userId),
+    };
+  });
+
+  app.post(
+    '/api/v1/me/identities/:provider/link',
+    small,
+    async (request: WithOwnIdentity, reply) => {
+      const own = ownUser(request, reply);
+      if (own.denied) return own.denied;
+      const { userId } = own;
+      const { provider } = request.params;
+      if (!selfLinkable(provider)) {
+        return fail(reply, 403, 'forbidden', 'Linking an account of this provider is switched off');
+      }
+      const origin = ownOrigin(request);
+      if (origin === undefined) {
+        return fail(
+          reply,
+          400,
+          'bad_request',
+          'Open MoonCG at its own address to link an account: the provider sends the browser back there',
+        );
+      }
+      try {
+        const confirmed = await reauthenticate(request, reply, userId, 'link');
+        if ('denied' in confirmed) return confirmed.denied;
+        const { session } = confirmed;
+        const { url, ticket } = await externalLogins.begin(provider, {
+          redirectUri: `${origin}/auth/${provider}/callback`,
+          returnTo: `/account?linked=${encodeURIComponent(provider)}`,
+          address: context.remoteAddress(request),
+          link: { userId, session: hashSecret(session) },
+        });
+        http.logger?.info(`A user started linking an account of "${provider}" to themselves`);
+        return reply
+          .header('cache-control', 'no-store')
+          .header('set-cookie', oauthCookie(request, ticket, Math.floor(FLOW_TTL_MS / 1000)))
+          .send({ url });
+      } catch (error) {
+        return failConfirming(reply, error);
+      }
+    },
+  );
+
+  app.delete(
+    '/api/v1/me/identities/:provider/:subject',
+    small,
+    async (request: WithOwnIdentity, reply) => {
+      const own = ownUser(request, reply);
+      if (own.denied) return own.denied;
+      const { provider, subject = '' } = request.params;
+      try {
+        const confirmed = await reauthenticate(request, reply, own.userId, 'unlink');
+        if ('denied' in confirmed) return confirmed.denied;
+        auth.unlinkOwnIdentity(own.userId, provider, subject);
+        http.logger?.info(
+          `A user unlinked the account ${account(provider, subject)} from themselves`,
+        );
+        return reply.code(204).send();
+      } catch (error) {
+        return failConfirming(reply, error);
+      }
+    },
+  );
+
+  // The switch for self-linking, for whoever manages users.
+  app.get('/api/v1/self-linking', async (request, reply) => {
+    const denied = manageUsers(request, reply);
+    if (denied) return denied;
+    return http.selfLinking?.state ?? { enabled: false, disabledProviders: [] };
+  });
+
+  app.put('/api/v1/self-linking', small, async (request, reply) => {
+    const denied = manageUsers(request, reply);
+    if (denied) return denied;
+    if (!http.selfLinking) return notFound(reply);
+    try {
+      const state = await http.selfLinking.set(jsonBody(request));
+      http.logger?.info(
+        `${actor(request)} switched self-linking ${state.enabled ? 'on' : 'off'}` +
+          (state.disabledProviders.length === 0
+            ? ''
+            : `, off for ${state.disabledProviders.join(', ')}`),
+      );
+      return state;
+    } catch (error) {
+      return failWith(reply, error);
+    }
+  });
 
   // --- Managing modules. A module is code that runs inside the server, so all of it is for
   // whoever may manage modules, and that is asked first: without the permission nothing is

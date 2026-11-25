@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { moduleManifest, startModuleServer } from '../../server/test/module-helpers.js';
 import { temporaryBundles } from '../../server/test/temp-bundles.js';
@@ -93,8 +96,9 @@ describe('mooncg module', () => {
 
   it('prints the usage for anything else', async () => {
     const { mooncg, errors } = await setup();
-    expect(await mooncg(['module', 'remove', 'hello'])).toBe(1);
+    expect(await mooncg(['module', 'frobnicate', 'hello'])).toBe(1);
     expect(await mooncg(['module', 'enable'])).toBe(1);
+    expect(await mooncg(['module', 'install'])).toBe(1);
     expect(await mooncg(['module', 'list', 'extra'])).toBe(1);
     expect(errors.join('\n')).toMatch(/module list/);
   });
@@ -107,5 +111,92 @@ describe('mooncg module', () => {
     );
     expect(code).toBe(1);
     expect(errors.join('\n')).toMatch(/unencrypted/);
+  });
+});
+
+describe('mooncg module install, update and remove', () => {
+  /** A folder with a module `greeter` of `version`. */
+  async function greeter(version: string) {
+    const dir = await mkdtemp(join(tmpdir(), 'mooncg-module-src-'));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, 'mooncg.json'),
+      JSON.stringify(moduleManifest('greeter', { version, title: 'Greeter' })),
+    );
+    await writeFile(
+      join(dir, 'index.js'),
+      `export default (ctx) => ctx.http.register({ method: "GET", path: "/v", public: true, handler: () => ({ body: "${version}" }) });`,
+    );
+    return dir;
+  }
+
+  it('installs a module after showing that it runs inside the server, disabled', async () => {
+    const { mooncg, out, server } = await setup();
+    expect(await mooncg(['module', 'install', await greeter('1.0.0'), '--yes'])).toBe(0);
+    const text = out.join('\n');
+    expect(text).toMatch(/greeter 1\.0\.0 "Greeter", from folder/);
+    expect(text).toMatch(/runs inside the MoonCG server process with full access/);
+    expect(text).toMatch(
+      /Installed greeter 1\.0\.0\. It is disabled: "mooncg module enable greeter" starts it\./,
+    );
+    expect(server.modules.get('greeter')).toMatchObject({ enabled: false, state: 'disabled' });
+  });
+
+  it('asks before it installs, and discards what it fetched on no', async () => {
+    const { io, base, token, server } = await setup();
+    const asked: string[] = [];
+    const answering: CliIo = {
+      ...io,
+      confirm: async (question) => {
+        asked.push(question);
+        return false;
+      },
+    };
+    const dir = await greeter('1.0.0');
+    const argv = [
+      'module',
+      'install',
+      dir,
+      '--url',
+      base,
+      '--token',
+      token('system:modules.manage'),
+    ];
+    expect(await run(argv, answering)).toBe(1);
+    expect(asked).toEqual(['Install module greeter 1.0.0? [y/N] ']);
+    expect(server.modules.get('greeter')).toBeUndefined();
+    expect(server.moduleInstaller.staged()).toEqual([]);
+    // Nobody to ask and no --yes: nothing is installed either.
+    expect(await run(argv, io)).toBe(1);
+    expect(server.moduleInstaller.staged()).toEqual([]);
+  });
+
+  it('updates and removes it', async () => {
+    const { mooncg, out, http, server } = await setup();
+    await mooncg(['module', 'install', await greeter('1.0.0'), '--yes']);
+    await mooncg(['module', 'enable', 'greeter']);
+    out.length = 0;
+    expect(await mooncg(['module', 'update', 'greeter', await greeter('1.1.0'), '--yes'])).toBe(0);
+    expect(out.join('\n')).toMatch(/updates greeter 1\.0\.0/);
+    expect((await http('GET', '/m/greeter/v')).text).toBe('1.1.0');
+
+    expect(await mooncg(['module', 'remove', 'greeter', '--yes'])).toBe(0);
+    expect(out.at(-1)).toBe('Removed module greeter');
+    expect(server.modules.get('greeter')).toBeUndefined();
+  });
+
+  it('keeps to the On Air lock for an enabled module unless --on-air is given', async () => {
+    const { mooncg, errors, server, http } = await setup();
+    await mooncg(['module', 'install', await greeter('1.0.0'), '--yes']);
+    await mooncg(['module', 'enable', 'greeter']);
+    await server.onAir.set(true, 'test');
+    expect(await mooncg(['module', 'update', 'greeter', await greeter('1.1.0'), '--yes'])).toBe(1);
+    expect(errors.join('\n')).toMatch(/on air/);
+    expect(server.moduleInstaller.staged()).toEqual([]);
+    expect(
+      await mooncg(['module', 'update', 'greeter', await greeter('1.1.0'), '--yes', '--on-air']),
+    ).toBe(0);
+    expect((await http('GET', '/m/greeter/v')).text).toBe('1.1.0');
   });
 });

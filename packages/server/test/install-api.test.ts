@@ -126,6 +126,7 @@ const REQUESTS: [method: string, path: string, json?: object][] = [
   ['POST', '/api/v1/bundles/board/update', {}],
   ['POST', '/api/v1/bundles/board/remove', {}],
   ['GET', '/api/v1/bundles/board/backups'],
+  ['GET', '/api/v1/bundles/-/backups'],
   ['POST', '/api/v1/bundles/board/backups/1.0.0-20260101T000000000Z/restore', {}],
 ];
 
@@ -434,6 +435,30 @@ describe('updating and removing through the API', () => {
     expect(deleted.state).toBe('succeeded');
     expect(await readdir(join(dataDir, 'backups', 'ticker'))).toHaveLength(1);
     expect(lines.join('\n')).toMatch(/ada removed ticker 1\.0\.0 \(files deleted, data purged\)/);
+  });
+
+  it('lists the backups of every bundle, also of one that was removed', async () => {
+    const { http, admin, settle, stage, commit } = await setup();
+    const all = async () =>
+      (await http('GET', '/api/v1/bundles/-/backups', admin)).json as {
+        bundles: { name: string; installed: boolean; backups: { version: string }[] }[];
+      };
+    expect(await all()).toEqual({ bundles: [] });
+
+    await commit((await stage(ticker('1.0.0'))).staged);
+    await commit((await stage(ticker('1.1.0'), 'ticker')).staged);
+    expect(await all()).toMatchObject({
+      bundles: [{ name: 'ticker', installed: true, backups: [{ version: '1.0.0' }] }],
+    });
+
+    await settle(await http('POST', '/api/v1/bundles/ticker/remove', { ...admin, json: {} }));
+    const { bundles } = await all();
+    expect(bundles).toHaveLength(1);
+    expect(bundles[0]).toMatchObject({ name: 'ticker', installed: false });
+    expect(bundles[0]?.backups.map(({ version }) => version)).toEqual(['1.1.0', '1.0.0']);
+    // The same entries as the list of one bundle has.
+    const one = await http('GET', '/api/v1/bundles/ticker/backups', admin);
+    expect(one.json).toEqual({ backups: bundles[0]?.backups });
   });
 
   it('purges configuration, assets and replicants only with purgeData', async () => {

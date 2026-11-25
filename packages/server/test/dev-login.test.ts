@@ -5,7 +5,12 @@ import { ReplicantRegistry } from '@mooncg/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { createAuth } from '../src/auth/auth.js';
-import { createIdentify, devLoginAllowed } from '../src/http/identity.js';
+import {
+  createIdentify,
+  devLinkTarget,
+  devLoginAllowed,
+  devLoginHeldBack,
+} from '../src/http/identity.js';
 import { attachWebSocket } from '../src/http/ws.js';
 import type { ServerConfig } from '../src/kernel/config.js';
 import type { ServerOptions } from '../src/server.js';
@@ -46,7 +51,7 @@ function rawGet(
   port: number,
   path: string,
   headers: Record<string, string>,
-): Promise<{ status: number; body: string }> {
+): Promise<{ status: number; body: string; headers: IncomingMessage['headers'] }> {
   return new Promise((resolve, reject) => {
     const request = httpRequest({ host: '127.0.0.1', port, path, headers }, (response) => {
       let body = '';
@@ -54,7 +59,9 @@ function rawGet(
       response.on('data', (chunk: string) => {
         body += chunk;
       });
-      response.on('end', () => resolve({ status: response.statusCode ?? 0, body }));
+      response.on('end', () =>
+        resolve({ status: response.statusCode ?? 0, body, headers: response.headers }),
+      );
     });
     request.on('error', reject);
     request.end();
@@ -133,11 +140,93 @@ describe('devLoginAllowed', () => {
   });
 });
 
+describe('devLoginAllowed and what the browser says caused a request', () => {
+  const request = (headers: Record<string, string>) =>
+    ({
+      socket: { remoteAddress: '127.0.0.1' },
+      headers: { host: 'localhost:9090', ...headers },
+    }) as unknown as IncomingMessage;
+
+  it.each(['none', 'same-origin', 'same-site'])(
+    'lets a request in that states no Origin and Sec-Fetch-Site: %s',
+    (site) => {
+      expect(devLoginAllowed(request({ 'sec-fetch-site': site }))).toBe(true);
+    },
+  );
+
+  it.each(['cross-site', 'CROSS-SITE', 'something-new', ''])(
+    'keeps a request out that states no Origin and Sec-Fetch-Site: "%s"',
+    (site) => {
+      expect(devLoginAllowed(request({ 'sec-fetch-site': site }))).toBe(false);
+    },
+  );
+
+  it('keeps a tag of another site out whatever it asks for', () => {
+    for (const dest of ['image', 'script', 'iframe', 'document', 'style', 'empty']) {
+      const headers = { 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': dest };
+      expect(devLoginAllowed(request(headers))).toBe(false);
+    }
+  });
+
+  it('judges a request that states an Origin by it', () => {
+    // A development server over HTTPS is another site to the browser, and still this machine.
+    const https = { origin: 'https://localhost:5173', 'sec-fetch-site': 'cross-site' };
+    const foreign = { origin: 'https://evil.example', 'sec-fetch-site': 'same-site' };
+    expect(devLoginAllowed(request(https))).toBe(true);
+    expect(devLoginAllowed(request(foreign))).toBe(false);
+  });
+
+  it('holds only a navigation back that a click here could repeat', () => {
+    const link = {
+      'sec-fetch-site': 'cross-site',
+      'sec-fetch-mode': 'navigate',
+      'sec-fetch-dest': 'document',
+    };
+    const held = (headers: Record<string, string>, url = '/bundles') =>
+      devLoginHeldBack({ ...request(headers), url } as IncomingMessage);
+
+    expect(held(link)).toBe(true);
+    expect(held({ ...link, 'sec-fetch-site': 'none' })).toBe(false);
+    expect(held({ ...link, 'sec-fetch-dest': 'iframe' })).toBe(false);
+    expect(held({ ...link, 'sec-fetch-mode': 'no-cors' })).toBe(false);
+    expect(held({ ...link, cookie: 'mooncg_session=stale' })).toBe(false);
+    expect(held({ ...link, host: 'evil.example' })).toBe(false);
+    expect(held({ ...link, 'x-forwarded-for': '10.0.0.1' })).toBe(false);
+    expect(held(link, '/bundles?token=mcg_x')).toBe(false);
+  });
+});
+
+describe('devLinkTarget', () => {
+  it('keeps a path on this server', () => {
+    expect(devLinkTarget('/w/Show?a=1')).toBe('/w/Show?a=1');
+    expect(devLinkTarget('/')).toBe('/');
+  });
+
+  it.each(['//evil.example/x', '/\\evil.example/x', 'http://evil.example/', '', undefined])(
+    'never leads to another site: %s',
+    (url) => {
+      expect(devLinkTarget(url)).toBe('/');
+    },
+  );
+});
+
 describe('without dev mode', () => {
   it('signs nobody in by itself, from this machine or not', async () => {
     const { http, upgrade } = await start(false);
     expect((await http('GET', '/api/v1/me')).status).toBe(401);
     expect(await upgrade()).toBe(401);
+  });
+
+  it('has no page for a link from another site: the login page is where it leads', async () => {
+    const { server } = await start(false);
+    const answer = await rawGet(server.port, '/', {
+      host: `localhost:${server.port}`,
+      'sec-fetch-site': 'cross-site',
+      'sec-fetch-mode': 'navigate',
+      'sec-fetch-dest': 'document',
+    });
+    expect(answer.status).toBe(302);
+    expect(answer.headers.location).toBe('/setup');
   });
 });
 
@@ -346,6 +435,52 @@ describe('dev mode', () => {
     expect((await get('null')).status).toBe(401);
     expect((await get(base)).status).toBe(200);
     expect((await get('http://localhost:5173')).status).toBe(200);
+  });
+
+  it('does not sign in what a tag or a link on another site makes the browser ask for', async () => {
+    const { http } = await start(true);
+    const get = (path: string, site: string, more: Record<string, string> = {}) =>
+      http('GET', path, { headers: { 'sec-fetch-site': site, ...more } });
+
+    // An <img>, <script> or <iframe> of another site states no Origin.
+    expect((await get('/api/v1/me', 'cross-site')).status).toBe(401);
+    expect((await get('/b/board/api/public', 'cross-site')).status).toBe(401);
+    expect((await get('/b/board/graphics/overlay.html', 'cross-site')).status).toBe(401);
+    expect((await get('/sdk/mooncg.js', 'cross-site')).status).toBe(401);
+    // The address bar, a page of this server, and one of a development server here.
+    expect((await get('/api/v1/me', 'none')).status).toBe(200);
+    expect((await get('/b/board/api/public', 'same-origin')).status).toBe(200);
+    expect((await get('/b/board/graphics/overlay.html', 'same-site')).status).toBe(200);
+  });
+
+  it('answers a link on another site to the dashboard with a page to go on from', async () => {
+    const { server } = await start(true);
+    // Sent by hand: `fetch` states a mode of its own.
+    const link = {
+      host: `localhost:${server.port}`,
+      'sec-fetch-site': 'cross-site',
+      'sec-fetch-mode': 'navigate',
+      'sec-fetch-dest': 'document',
+    };
+
+    const held = await rawGet(server.port, '/w/Show?a=1&b=%22%3E<script>', link);
+
+    expect(held.status).toBe(200);
+    expect(held.headers['cache-control']).toBe('no-store');
+    expect(held.headers['content-security-policy']).toContain("default-src 'self'");
+    expect(held.body).toContain('href="/w/Show?a=1&amp;b=%22%3E&lt;script&gt;"');
+    expect(held.body).not.toContain('<script');
+    // The click on that link is a request of a page of this server.
+    const onward = await rawGet(server.port, '/w/Show?a=1', {
+      ...link,
+      'sec-fetch-site': 'same-origin',
+    });
+    expect(onward.status).toBe(200);
+    expect(onward.body).not.toContain('Continue to the dashboard');
+    // A frame is no place to go on from: it is answered like anyone who is not signed in.
+    const framed = await rawGet(server.port, '/', { ...link, 'sec-fetch-dest': 'iframe' });
+    expect(framed.status).toBe(302);
+    expect(framed.headers.location).toBe('/login');
   });
 
   it('refuses the socket of a page of another site and of another host name', async () => {

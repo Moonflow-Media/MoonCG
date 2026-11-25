@@ -66,16 +66,20 @@ parts and each part is equal or `*`:
 
 System permissions:
 
-| Permission                      | Allows                                                                             |
-| ------------------------------- | ---------------------------------------------------------------------------------- |
-| `system:dashboard.view`         | The dashboard page, the bundle list, the replicant `system:revision`               |
-| `system:bundles.manage`         | Installing, updating, removing, enabling, disabling and reloading bundles          |
-| `system:users.manage`           | Users, roles and grants, within what the holder holds (see below)                  |
-| `system:tokens.manage`          | Creating, listing and revoking API tokens                                          |
-| `system:settings.manage`        | Reading and changing the configuration of bundles; the settings page               |
-| `system:logs.view`              | The log page and `GET /api/v1/logs`                                                |
-| `system:modules.manage`         | Enabling and disabling modules; with `system:settings.manage`, their configuration |
-| `system:module.<module>.<name>` | Whatever the module that defined it says. See [modules.md](modules.md#permissions) |
+| Permission                      | Allows                                                                                                             |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `system:dashboard.view`         | The dashboard page, the bundle list, the replicant `system:revision`                                               |
+| `system:bundles.manage`         | Installing, updating, removing, enabling, disabling and reloading bundles                                          |
+| `system:users.manage`           | Users, roles and grants, within what the holder holds (see below)                                                  |
+| `system:tokens.manage`          | Creating, listing and revoking API tokens                                                                          |
+| `system:settings.manage`        | Reading and changing the configuration of bundles; the settings page                                               |
+| `system:logs.view`              | The log page and `GET /api/v1/logs`                                                                                |
+| `system:modules.manage`         | Installing, updating, removing, enabling and disabling modules; with `system:settings.manage`, their configuration |
+| `system:module.<module>.<name>` | Whatever the module that defined it says. See [modules.md](modules.md#permissions)                                 |
+
+**`system:modules.manage` is the power to run code as the server.** A module runs inside the
+server process with full access, and whoever holds the permission can install one and enable
+it. Grant it as you would grant `*`.
 
 `system:users.manage` also covers linking and unlinking the external accounts of users, under
 the same rule as everything about users (see below). A module is code that runs inside the

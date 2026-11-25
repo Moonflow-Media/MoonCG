@@ -371,6 +371,109 @@ export class ModuleManager {
     });
   }
 
+  /**
+   * Takes in a module that was just put into the modules folder. It is listed `disabled` and
+   * stays so until an administrator enables it, also when a module of that name was enabled
+   * once before: an installation is no consent to run it.
+   */
+  add(name: string): Promise<ModuleRecord> {
+    return this.#serialized(async () => {
+      if (!BUNDLE_NAME_PATTERN.test(name) || this.#entries.has(name)) {
+        throw new MoonCGError('conflict', `There is a module "${name}" already`);
+      }
+      const dir = join(this.#options.modulesDir, name);
+      const read = await readModuleManifest(dir, name);
+      await this.#options.store.setEnabled(name, false);
+      const entry: Entry = {
+        found: { name, dir, builtin: false, ...read },
+        enabled: false,
+        state: read.manifest ? 'disabled' : 'failed',
+        ...(read.manifest ? {} : { error: read.errors.join('; ') }),
+      };
+      this.#entries.set(name, entry);
+      return this.#describe(entry);
+    });
+  }
+
+  /**
+   * Puts another version of a module of the modules folder in place: stops it, lets `apply`
+   * swap the files, and starts it again if it is enabled. A module that does not start then
+   * is put back with `revert` and started as it was. A disabled module is swapped and not
+   * started.
+   */
+  replace(
+    name: string,
+    swap: { apply(): Promise<void>; revert(): Promise<void> },
+  ): Promise<{
+    outcome: 'replaced' | 'rolled-back' | 'failed';
+    error?: string | undefined;
+    rollbackError?: string | undefined;
+    module: ModuleRecord;
+  }> {
+    return this.#serialized(async () => {
+      const entry = this.#replaceable(name);
+      const before = entry.found;
+      await this.#stop(entry);
+      try {
+        await swap.apply();
+        await this.#refresh(entry);
+        if (entry.enabled) await this.#start(entry);
+        else {
+          entry.state = entry.found.manifest ? 'disabled' : 'failed';
+          entry.error = entry.found.manifest ? undefined : entry.found.errors.join('; ');
+        }
+        if (entry.state !== 'failed') return { outcome: 'replaced', module: this.#describe(entry) };
+      } catch (error) {
+        entry.state = 'failed';
+        entry.error = errorMessage(error);
+      }
+      const error = entry.error ?? 'The new version does not start';
+      await this.#stop(entry);
+      try {
+        await swap.revert();
+      } catch (failure) {
+        entry.state = 'failed';
+        entry.error = `${error}; the earlier version could not be put back: ${errorMessage(failure)}`;
+        return {
+          outcome: 'failed',
+          error,
+          rollbackError: errorMessage(failure),
+          module: this.#describe(entry),
+        };
+      }
+      entry.found = before;
+      await this.#refresh(entry);
+      if (entry.enabled) await this.#start(entry);
+      else {
+        entry.state = 'disabled';
+        entry.error = undefined;
+      }
+      return { outcome: 'rolled-back', error, module: this.#describe(entry) };
+    });
+  }
+
+  /**
+   * Stops a module of the modules folder, lets `erase` take its files away and forgets it,
+   * including that it was enabled. What `erase` throws leaves the module listed and stopped.
+   */
+  forget(name: string, erase: () => Promise<void>): Promise<void> {
+    return this.#serialized(async () => {
+      const entry = this.#replaceable(name);
+      await this.#stop(entry);
+      entry.state = 'disabled';
+      try {
+        await erase();
+      } catch (error) {
+        entry.state = 'failed';
+        entry.error = `It could not be removed: ${errorMessage(error)}`;
+        throw error;
+      }
+      await this.#options.store.setEnabled(name, false);
+      this.#entries.delete(name);
+      this.#options.logger.info(`Module "${name}" was removed`);
+    });
+  }
+
   /** Every system permission there is: the built-in ones, then what running modules defined. */
   permissions(): (DefinedPermission & { readonly module?: string })[] {
     return [
@@ -412,6 +515,18 @@ export class ModuleManager {
   #existing(name: string): Entry {
     const entry = BUNDLE_NAME_PATTERN.test(name) ? this.#entries.get(name) : undefined;
     if (!entry) throw new MoonCGError('not_found', `There is no module "${name}"`);
+    return entry;
+  }
+
+  /** A module of the modules folder, which may be updated or removed; never a built-in one. */
+  #replaceable(name: string): Entry {
+    const entry = this.#existing(name);
+    if (entry.found.builtin) {
+      throw new MoonCGError(
+        'conflict',
+        `The module "${name}" is shipped with MoonCG and is updated with it`,
+      );
+    }
     return entry;
   }
 

@@ -1,2 +1,8 @@
 packages:
   - "packages/*"
+
+# Security fixes for transitive dev dependencies (via @vue/test-utils -> js-beautify):
+# GHSA-3g3m-2fjr-6pw4 (glob) and GHSA-g3hv-75wg-m249 (minimatch).
+overrides:
+  glob: ^14.0.2
+  minimatch: ^11.0.1

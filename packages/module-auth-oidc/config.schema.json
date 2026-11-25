@@ -45,6 +45,114 @@
         }
       }
     },
+    "oidc2": {
+      "type": "object",
+      "title": "OpenID Connect 2",
+      "description": "A further OpenID Connect provider, beside the first. Register the redirect address <public address>/auth/oidc2/callback with it. An account of it is linked separately from one of any other provider.",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "title": "Enabled",
+          "default": false
+        },
+        "name": {
+          "type": "string",
+          "title": "Name on the button",
+          "default": "Single sign-on 2",
+          "maxLength": 60
+        },
+        "issuer": {
+          "type": "string",
+          "title": "Issuer",
+          "description": "The https:// address of the provider, exactly as it states it itself. Its description is read from <issuer>/.well-known/openid-configuration.",
+          "maxLength": 500
+        },
+        "clientId": {
+          "type": "string",
+          "title": "Client ID",
+          "maxLength": 500
+        },
+        "clientSecret": {
+          "type": "string",
+          "title": "Client secret",
+          "x-secret": true,
+          "maxLength": 2000
+        },
+        "scopes": {
+          "type": "array",
+          "title": "Scopes",
+          "description": "openid is always asked for. profile adds a name for new users.",
+          "items": {
+            "type": "string",
+            "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E]+$"
+          },
+          "default": ["openid", "profile"],
+          "maxItems": 20
+        },
+        "allowSignup": {
+          "type": "boolean",
+          "title": "Create a user for an account nobody has linked",
+          "description": "Off: such an account is refused until an administrator links it. On: it gets a new user without any role.",
+          "default": false
+        }
+      }
+    },
+    "oidc3": {
+      "type": "object",
+      "title": "OpenID Connect 3",
+      "description": "A further OpenID Connect provider, beside the first. Register the redirect address <public address>/auth/oidc3/callback with it. An account of it is linked separately from one of any other provider.",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "title": "Enabled",
+          "default": false
+        },
+        "name": {
+          "type": "string",
+          "title": "Name on the button",
+          "default": "Single sign-on 3",
+          "maxLength": 60
+        },
+        "issuer": {
+          "type": "string",
+          "title": "Issuer",
+          "description": "The https:// address of the provider, exactly as it states it itself. Its description is read from <issuer>/.well-known/openid-configuration.",
+          "maxLength": 500
+        },
+        "clientId": {
+          "type": "string",
+          "title": "Client ID",
+          "maxLength": 500
+        },
+        "clientSecret": {
+          "type": "string",
+          "title": "Client secret",
+          "x-secret": true,
+          "maxLength": 2000
+        },
+        "scopes": {
+          "type": "array",
+          "title": "Scopes",
+          "description": "openid is always asked for. profile adds a name for new users.",
+          "items": {
+            "type": "string",
+            "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E]+$"
+          },
+          "default": ["openid", "profile"],
+          "maxItems": 20
+        },
+        "allowSignup": {
+          "type": "boolean",
+          "title": "Create a user for an account nobody has linked",
+          "description": "Off: such an account is refused until an administrator links it. On: it gets a new user without any role.",
+          "default": false
+        }
+      }
+    },
     "twitch": {
       "type": "object",
       "title": "Twitch",

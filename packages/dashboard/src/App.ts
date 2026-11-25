@@ -198,7 +198,10 @@ export const App = defineComponent({
                 { class: 'avatar', 'aria-hidden': 'true' },
                 session.name.charAt(0).toUpperCase(),
               ),
-              h('span', { class: 'user', 'data-user-name': '' }, session.name),
+              // The own account: name, password and linked accounts.
+              h(RouterLink, { to: '/account', class: 'user-link', title: 'Your account' }, () =>
+                h('span', { class: 'user', 'data-user-name': '' }, session.name),
+              ),
               h(
                 'button',
                 {

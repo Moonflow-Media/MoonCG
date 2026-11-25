@@ -632,7 +632,9 @@ test('the bundle filter, the copied URL, the keyboard and reduced motion', async
   await expect(row).toContainText('1 panel · 1 graphic');
   await choice(/^disabled/).click();
   await expect(row).toHaveCount(0);
-  await expect(admin.locator('.empty')).toHaveText('No bundle is disabled.');
+  await expect(admin.locator('.empty', { hasText: 'No bundle' })).toHaveText(
+    'No bundle is disabled.',
+  );
   await expect(choice(/^disabled/)).toBeFocused();
   await admin.keyboard.press('Home');
   await expect(choice(/^All/)).toHaveAttribute('aria-checked', 'true');
@@ -927,19 +929,27 @@ test('a bundle: installed from a ZIP, updated, rolled back when broken, and remo
     404,
   );
 
-  // --- Removed, after a question: gone from the list and from the server.
+  // --- Removed, after a confirmation in its row that says what is kept: gone from the list
+  // and from the server, and its files are a backup that can be restored.
   await nav(admin, 'Bundles').click();
   await expect(row.locator('.state')).toHaveText('running');
   const questions: string[] = [];
-  admin.once('dialog', (dialog) => {
+  admin.on('dialog', (dialog) => {
     questions.push(dialog.message());
     void dialog.accept();
   });
-  await row.getByRole('button', { name: 'Remove' }).click();
+  await row.getByRole('button', { name: 'Remove', exact: true }).click();
+  const confirmation = row.locator('[data-remove]');
+  await expect(confirmation).toContainText('moved to the backups');
+  await expect(confirmation).toContainText('the role grants for it are kept');
+  await confirmation.getByRole('button', { name: 'Remove e2e-ticker' }).click();
   await expect(row).toHaveCount(0);
   await expect(form.locator('.done')).toHaveText('Removing e2e-ticker is done.');
-  expect(questions).toHaveLength(1);
-  expect(questions[0]).toMatch(/^Remove "e2e-ticker"\?.*kept/);
+  // Nothing needs it and nothing is on air: no further question.
+  expect(questions).toEqual([]);
+  const kept = admin.locator('[data-backup-of="e2e-ticker"]');
+  await expect(kept).toContainText('removed');
+  await expect(kept).toContainText('when it was removed');
   await expect(admin.locator('[data-bundle="scoreboard"] .state')).toHaveText('running');
   const gone = await viewer.request.get(`${base}/b/e2e-ticker/dashboard/lines.html`);
   expect(gone.status()).toBe(404);

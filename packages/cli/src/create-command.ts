@@ -1,16 +1,42 @@
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BUNDLE_NAME_PATTERN, isReservedDeviceName, SYSTEM_BUNDLE } from '@mooncg/core';
 
 /** The bundle templates the command line ships, by the name of their folder in `templates/`. */
-export const TEMPLATES = ['html'] as const;
+export const TEMPLATES = ['html', 'vue'] as const;
 export type Template = (typeof TEMPLATES)[number];
 
 /** The name of the configuration file. The same as the server's `CONFIG_FILE`. */
 const CONFIG_FILE = 'mooncg.config.json';
 
 const templatesDir = fileURLToPath(new URL('../templates/', import.meta.url));
+
+/** Where `@mooncg/sdk` is: the entry of its client, `<sdk>/dist/client/index.js`. */
+const resolveSdkClient = () => createRequire(import.meta.url).resolve('@mooncg/sdk/client');
+
+/**
+ * `@mooncg/sdk` as a bundle with a build step names it: the folder of the copy this command
+ * line uses, since the SDK is not published on npm.
+ */
+function sdkDependency(resolveSdk: () => string): string {
+  let entry: string;
+  try {
+    entry = resolveSdk();
+  } catch (error) {
+    throw new Error(
+      `@mooncg/sdk could not be found beside this command line (${(error as Error).message}). ` +
+        'A bundle with a build step names it by its folder, as it is not on npm. Build the ' +
+        'MoonCG this command line belongs to ("pnpm build"), or use --template html. ' +
+        'Nothing was written.',
+    );
+  }
+  return `file:${dirname(dirname(dirname(entry))).replaceAll('\\', '/')}`;
+}
+
+/** Files a template holds under another name, because npm would leave them out. */
+const RENAMED: Readonly<Record<string, string>> = { gitignore: '.gitignore' };
 
 const exists = (path: string) =>
   stat(path).then(
@@ -45,6 +71,8 @@ export interface CreateBundleOptions {
   readonly template?: string | undefined;
   /** Writes one new file. For tests: stands in for the file system, to make it fail. */
   readonly write?: ((path: string, text: string) => Promise<void>) | undefined;
+  /** Finds the entry of `@mooncg/sdk/client`. For tests: stands in for module resolution. */
+  readonly resolveSdk?: (() => string) | undefined;
 }
 
 /**
@@ -78,6 +106,11 @@ export async function createBundle(
   const source = join(templatesDir, template);
   const files = await filesIn(source);
   const title = titleOf(name);
+  // Before anything is created. It goes into a string of package.json: JSON-escaped, so no
+  // quote or backslash of the path can end the string.
+  const sdk = files.some((file) => file === 'package.json')
+    ? JSON.stringify(sdkDependency(options.resolveSdk ?? resolveSdkClient)).slice(1, -1)
+    : '';
   // `wx`: never over a file that appeared meanwhile.
   const write = options.write ?? ((path, text) => writeFile(path, text, { flag: 'wx' }));
   await mkdir(bundlesDir, { recursive: true });
@@ -90,9 +123,16 @@ export async function createBundle(
   try {
     for (const file of files) {
       const text = await readFile(join(source, file), 'utf8');
-      const target = join(dir, file);
+      const target = join(dir, RENAMED[file] ?? file);
       await mkdir(join(target, '..'), { recursive: true });
-      await write(target, text.replaceAll('{{name}}', name).replaceAll('{{title}}', title));
+      // Replacer functions: a `$` in a value is not a replacement pattern.
+      await write(
+        target,
+        text
+          .replaceAll('{{name}}', () => name)
+          .replaceAll('{{title}}', () => title)
+          .replaceAll('{{sdk}}', () => sdk),
+      );
     }
   } catch (error) {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {});
@@ -100,11 +140,11 @@ export async function createBundle(
       `The bundle "${name}" could not be created, and ${dir} was removed again: ${(error as Error).message}`,
     );
   }
-  return { dir, files };
+  return { dir, files: files.map((file) => RENAMED[file] ?? file) };
 }
 
 /**
- * Creates an installation folder: `bundles/`, `data/`, a configuration file that names them,
+ * Creates an installation folder: `bundles/`, `modules/`, `data/`, a configuration file that names them,
  * and a `.gitignore` that keeps the data, with its password hashes, out of a repository.
  * Refuses a folder that has a configuration file; folders and a `.gitignore` that are there
  * are left as they are. Returns what was created, relative to the folder.
@@ -115,7 +155,7 @@ export async function initInstallation(dir: string): Promise<string[]> {
     throw new Error(`${config} exists already. Nothing was changed.`);
   }
   const created: string[] = [];
-  for (const folder of ['bundles', 'data']) {
+  for (const folder of ['bundles', 'modules', 'data']) {
     if (await exists(join(dir, folder))) continue;
     await mkdir(join(dir, folder), { recursive: true });
     created.push(`${folder}/`);
@@ -124,6 +164,7 @@ export async function initInstallation(dir: string): Promise<string[]> {
     port: 9090,
     host: '127.0.0.1',
     bundlesDir: 'bundles',
+    modulesDir: 'modules',
     dataDir: 'data',
     allowedOrigins: [],
   };

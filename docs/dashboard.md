@@ -32,9 +32,9 @@ scripts can use as well, the REST API under `/api/v1` and the SDK client.
 | Bundle settings: a form from the bundle's config schema       | Done                                    |
 | Assets: upload, list, delete, live list for graphics          | Done                                    |
 | Users, roles and tokens pages                                 | Done                                    |
-| Modules page: state, errors, enable and disable               | Done; installing is copying a folder    |
+| Modules page: state, errors, enable, disable, install, remove | Done                                    |
 | Module settings on the settings page                          | Done                                    |
-| External accounts of users: link, unlink, attempts to link    | Done; no page to link your own account  |
+| External accounts of users: link, unlink, attempts to link    | Done; also your own, on Account         |
 | Log page with level filter, followed while open               | Done                                    |
 
 ## Pages
@@ -127,8 +127,8 @@ two more badges, from `reloadErrors` and `pendingChanges` of the same list:
 
 While On Air, a line above the list says that changes are blocked, and **Reload**, **Disable**
 and **Remove** ask whether to do it anyway before they send the request with
-`"forceOnAir": true`, and with nothing else: a bundle that others still need is not removed for
-it. An update can be fetched without a question, since fetching interrupts nothing; its card
+`"forceOnAir": true`. That question is about the lock alone: removing a bundle that others still
+need is a question of its own (see below), and saying yes to one is no answer to the other. An update can be fetched without a question, since fetching interrupts nothing; its card
 then says that putting it in place is blocked, and its **Update** button asks first. **Enable**
 never asks.
 
@@ -142,6 +142,7 @@ the server does at each step.
 | ------------------- | ------------------------------------------------------------------------------------------- |
 | A row               | The version, and where the bundle was installed from (`from <address> at <ref> (<commit>)`) |
 | A row               | **Update** turns the form below into the update of that bundle; **Remove** asks first       |
+| **Backups**         | The kept earlier versions of every bundle, also of a removed one, each with **Restore**     |
 | **Install bundle**  | A Git address with an optional branch, tag or commit, or a ZIP upload                       |
 | **Update `<name>`** | The same form, plus **Fetch from …** for a bundle whose source can be fetched again         |
 | A fetched bundle    | A card with what it declares, and **Install** (or **Update**) and **Discard**               |
@@ -161,10 +162,36 @@ registry is refused when it is fetched. The card says under "Runs code on instal
 and under "Role grants" which grants the bundle proposes and whether they will be made.
 
 An update that does not start is rolled back by the server; the page then says so, with the
-reason, and the row keeps showing the earlier version as running. **Remove** stops the bundle
-and moves its files to the backups; its settings, assets and stored values are kept. Deleting
-the files, purging the data and installing from a folder of the server are for the command
-line and the API. While something is being done to a bundle, the buttons of its row are held.
+reason, and the row keeps showing the earlier version as running. While something is being
+done to a bundle, the buttons of its row are held. Installing from a folder of the server is for
+the command line and the API.
+
+**Remove** opens a confirmation in the bundle's row. It says what happens and what is lost, and
+changes as the choices do:
+
+- by default the bundle is stopped, its files are moved to the backups and its settings,
+  uploaded assets, stored values and the role grants for it are kept;
+- **Also delete its files instead of keeping a backup** (`"deleteFiles": true`): no backup of
+  this version is kept. The text says how many older backups of the bundle remain to restore
+  from, or that there is none, as the **Backups** card lists them. Where the server keeps no
+  backups the files are deleted anyway; the box is not shown and the text says so;
+- **Also delete its data: settings, uploaded assets, stored values and the role grants for it**
+  (`"purgeData": true`): all of that is deleted for good, the grants of `bundle:<name>:…` from
+  every role included.
+
+**Remove `<name>`** in that confirmation sends the removal. If enabled bundles on the list need
+the bundle, a separate question names them first and says that they fail until it is back;
+only a yes sends `"force": true`. While On Air, the question about the lock follows.
+
+The **Backups** card lists, from `GET /api/v1/bundles/-/backups`, every bundle that has a
+backup, marks one that is no longer installed as `removed`, and shows each backup's version,
+when it was made and why (before an update, when it was removed, when another backup was
+restored). **Restore** asks first and says what happens: an installed version is stopped and
+moved to the backups, and comes back if the restored one does not start; a removed bundle is
+installed again. It says as well that the chosen backup is used up: it is put in place and is
+no longer listed. Replacing an installed version while On Air asks about the lock as well. The
+card is read again whenever an update, removal or restore ends; when it cannot be read, the
+card says why, apart from what the jobs say.
 
 The progress comes from the replicant `system:installs` (`{ jobs, staged }`), which the server
 changes with every step, so a second administrator sees the same staged bundle and the same
@@ -599,3 +626,13 @@ directory given to `node e2e/screenshots.mjs <directory>`. It is for looking at 
 layout or styles and is not part of `pnpm test:e2e`. It takes the pictures twice: with the
 `examples` as they are, and (`-states` in the name) with a bundle that failed and one that is
 disabled beside them.
+
+## Account
+
+The name at the top of every page leads to **Account** (`/account`): the user's name and roles,
+**Change password** for a user who has one, and the accounts of other providers they can sign
+in with, each with **Unlink**, and **Link <provider>** for every provider that allows
+self-linking. Linking and unlinking both take the current password, in the field above the
+buttons, or for a user without a password a sign-in of the last five minutes. A finished link
+is reported only for a provider there is, so a made-up `?linked=` in the address shows
+nothing. See [external-logins.md](external-logins.md#linking-your-own-account).
