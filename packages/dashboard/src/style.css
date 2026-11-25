@@ -1522,3 +1522,46 @@ label.upload.primary:has(input:focus-visible) {
 .identity code {
   overflow-wrap: anywhere;
 }
+
+/* ------------------------------------------------------------------ Catalog */
+/* A link that leads to another page and looks like the buttons beside it. */
+a.button {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-2xs) var(--space-sm);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  background: var(--surface-control);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+}
+a.button:hover {
+  border-color: var(--text-muted);
+}
+.state.index-ok {
+  background: var(--state-running);
+}
+.state.index-stale,
+.state.index-pending {
+  background: var(--state-pending);
+}
+.state.index-error {
+  background: var(--state-failed);
+}
+.search {
+  display: flex;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-lg);
+}
+.search input {
+  flex: 1;
+  min-width: 0;
+}
+.catalog-entry {
+  margin-bottom: var(--space-lg);
+}
+.versions {
+  margin: 0;
+  padding-left: 18px;
+}

@@ -3,8 +3,9 @@ import { mkdir, stat } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { MoonCGError } from '@mooncg/core';
+import { isLoopbackRegistryUrl, MoonCGError } from '@mooncg/core';
 import { errorMessage } from '../kernel/logger.js';
+import { addressProblem, download } from '../registry/https.js';
 import {
   type InstallLimits,
   isInside,
@@ -16,7 +17,13 @@ import {
   storageError,
   storageProblem,
 } from './files.js';
-import { fetchGit, type GitOptions, gitRefProblem, gitUrlProblem } from './git.js';
+import {
+  fetchGit,
+  type GitOptions,
+  gitRefProblem,
+  gitUrlProblem,
+  withoutCredentials,
+} from './git.js';
 import { copyLocalPath } from './local.js';
 import type { BundleSource, FetchableSource } from './sources.js';
 import { bundleRoot, extractZip } from './zip.js';
@@ -57,7 +64,23 @@ export function sourceProblem(
 ): string | undefined {
   const given: Partial<Record<string, unknown>> = source ?? {};
   if (given.type === 'git') {
+    const commit = given.commit;
+    if (commit !== undefined && (typeof commit !== 'string' || !COMMIT.test(commit))) {
+      return 'The commit must be a full commit hash';
+    }
     return gitUrlProblem(given.url, allowFileUrls) ?? gitRefProblem(given.ref);
+  }
+  if (given.type === 'url') {
+    if (typeof given.url !== 'string') return `The address of the ${noun} archive is missing`;
+    // This machine only through an index on this machine; an address of its own never.
+    const index = typeof given.index === 'string' ? given.index : undefined;
+    const problem = addressProblem(given.url, {
+      loopback: index !== undefined && isLoopbackRegistryUrl(index),
+    });
+    if (problem !== undefined) return problem;
+    return typeof given.sha256 === 'string' && SHA256.test(given.sha256)
+      ? undefined
+      : 'An archive from an address needs the SHA-256 it must have, in lowercase hex';
   }
   if (given.type === 'path' || given.type === 'zip') {
     if (typeof given.path !== 'string' || !isAbsolute(given.path)) {
@@ -70,6 +93,9 @@ export function sourceProblem(
   if (given.type === 'upload') return undefined;
   return `The source must be a Git repository, a path on the server or a ZIP archive`;
 }
+
+const SHA256 = /^[0-9a-f]{64}$/;
+const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 
 /** Writes an uploaded archive to `file`, counting what arrives against the limit. */
 export async function receiveUpload(
@@ -131,7 +157,35 @@ export async function fetchSource(
       maxBytes: limits.maxUnpackedBytes * 2,
       ...context.git,
     });
+    // A ref that was pinned to a commit and points elsewhere now is not what was offered.
+    if (source.commit !== undefined && commit !== source.commit) {
+      await removeDir(content);
+      throw refuse(
+        `${withoutCredentials(url)} at ${ref ?? 'HEAD'} is commit ${commit}, not ${source.commit} as the index says; nothing was kept`,
+      );
+    }
     return { type: 'git', url, ...(ref === undefined ? {} : { ref }), commit };
+  }
+  if (source.type === 'url') {
+    const { url, sha256, index } = source;
+    const archive = join(dir, 'download.zip');
+    const got = await download(url, archive, {
+      timeoutMs: context.timeoutMs,
+      maxBytes: limits.maxArchiveBytes,
+      signal: context.signal,
+      index,
+    });
+    // Checked before a single entry is read: an archive that is not the one offered is not
+    // opened at all.
+    if (got.sha256 !== sha256) {
+      await removeDir(archive);
+      throw refuse(
+        `The checksum of the archive from ${withoutCredentials(url)} does not match: it is ${got.sha256}, not ${sha256}. Nothing was unpacked`,
+      );
+    }
+    await unpack(archive);
+    await removeDir(archive);
+    return { type: 'url', url, sha256 };
   }
   if (source.type === 'upload') {
     const archive = join(dir, 'upload.zip');

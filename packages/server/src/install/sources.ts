@@ -3,15 +3,36 @@ import { join } from 'node:path';
 import { errorMessage } from '../kernel/logger.js';
 import { withoutCredentials } from './git.js';
 
+/**
+ * The entry of a registry index something was installed from. Only what was installed from
+ * an index entry is ever offered updates from that index entry: an index that lists the name
+ * of a bundle installed otherwise claims nothing by that.
+ */
+export interface CatalogOrigin {
+  /** The id of the index: a hash of its address without credentials. */
+  readonly index: string;
+  /** The address of the index without credentials, for people. */
+  readonly indexUrl: string;
+  readonly kind: 'bundle' | 'module';
+  readonly name: string;
+  /** The version of the entry that was installed. */
+  readonly version: string;
+}
+
 /** Where the files of an installed bundle came from. */
 export interface BundleSource {
   /**
    * `git`: a repository. `path`: a folder of the server's machine. `zip`: an archive on the
-   * server's machine. `upload`: an archive that was sent to the server.
+   * server's machine. `upload`: an archive that was sent to the server. `url`: an archive
+   * downloaded from an address, checked against its SHA-256.
    */
-  readonly type: 'git' | 'path' | 'zip' | 'upload';
-  /** The address of a repository, as it was given: it may hold credentials. */
+  readonly type: 'git' | 'path' | 'zip' | 'upload' | 'url';
+  /** The address of a repository or an archive, as it was given: it may hold credentials. */
   readonly url?: string | undefined;
+  /** For `url`: the SHA-256 the archive had to have. */
+  readonly sha256?: string | undefined;
+  /** The registry index entry it was installed from, if it was. */
+  readonly catalog?: CatalogOrigin | undefined;
   /** The branch, tag or commit that was asked for, if one was. */
   readonly ref?: string | undefined;
   /** The commit that was checked out. */
@@ -37,39 +58,78 @@ export interface PublicSource {
   readonly location: string;
   readonly ref?: string | undefined;
   readonly commit?: string | undefined;
+  readonly sha256?: string | undefined;
+  readonly catalog?: CatalogOrigin | undefined;
 }
 
 /** A source the server can fetch from by itself. */
 export type FetchableSource =
-  | { readonly type: 'git'; readonly url: string; readonly ref?: string | undefined }
+  | {
+      readonly type: 'git';
+      readonly url: string;
+      readonly ref?: string | undefined;
+      /** The commit the fetched ref must be, as an index pins it. */
+      readonly commit?: string | undefined;
+    }
   | { readonly type: 'path'; readonly path: string }
-  | { readonly type: 'zip'; readonly path: string };
+  | { readonly type: 'zip'; readonly path: string }
+  | {
+      readonly type: 'url';
+      readonly url: string;
+      readonly sha256: string;
+      /**
+       * The address of the registry index that lists the archive, credentials included. Only
+       * an index on this machine may point to this machine, and the credentials of the index
+       * go to its own origin. Set by the server for what comes from the catalog, never taken
+       * from a request, and not kept with the source.
+       */
+      readonly index?: string | undefined;
+    };
 
 export function publicSource(source: BundleSource): PublicSource {
-  const { type, ref, commit } = source;
-  if (type === 'git') {
+  const { type, ref, commit, sha256, catalog } = source;
+  const from = catalog === undefined ? {} : { catalog };
+  if (type === 'git' || type === 'url') {
     return {
       type,
       location: withoutCredentials(source.url ?? ''),
       ...(ref === undefined ? {} : { ref }),
       ...(commit === undefined ? {} : { commit }),
+      ...(sha256 === undefined ? {} : { sha256 }),
+      ...from,
     };
   }
-  if (type === 'upload') return { type, location: source.filename ?? 'uploaded archive' };
-  return { type, location: source.path ?? '' };
+  if (type === 'upload') return { type, location: source.filename ?? 'uploaded archive', ...from };
+  return { type, location: source.path ?? '', ...from };
 }
 
 /**
  * What to fetch to get the bundle again, for an update that names no source. A repository
  * is asked for the same ref as before, which for a branch is its newest commit. An upload
- * cannot be fetched again.
+ * cannot be fetched again. What came from an index entry is fetched as that entry said: a
+ * repository at the commit it named, an archive with the credentials and the rules of the
+ * index, which `indexAddress` gives by its id.
  */
-export function refetchable(source: BundleSource | undefined): FetchableSource | undefined {
+export function refetchable(
+  source: BundleSource | undefined,
+  indexAddress?: ((id: string) => string | undefined) | undefined,
+): FetchableSource | undefined {
+  const listed = source?.catalog;
   if (source?.type === 'git' && source.url !== undefined) {
     return {
       type: 'git',
       url: source.url,
       ...(source.ref === undefined ? {} : { ref: source.ref }),
+      ...(listed === undefined || source.commit === undefined ? {} : { commit: source.commit }),
+    };
+  }
+  if (source?.type === 'url' && source.url !== undefined && source.sha256 !== undefined) {
+    const index = listed === undefined ? undefined : indexAddress?.(listed.index);
+    return {
+      type: 'url',
+      url: source.url,
+      sha256: source.sha256,
+      ...(index === undefined ? {} : { index }),
     };
   }
   if ((source?.type === 'path' || source?.type === 'zip') && source.path !== undefined) {

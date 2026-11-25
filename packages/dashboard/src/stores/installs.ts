@@ -3,12 +3,25 @@ import { ref } from 'vue';
 import { api, messageOf } from '../api.js';
 import { live } from '../live.js';
 
+/** The registry index entry something was installed from. */
+export interface CatalogOriginInfo {
+  readonly index: string;
+  readonly indexUrl: string;
+  readonly kind: 'bundle' | 'module';
+  readonly name: string;
+  readonly version: string;
+}
+
 /** Where a bundle came from, as the server tells it: without credentials. */
 export interface SourceInfo {
-  readonly type: 'git' | 'path' | 'zip' | 'upload';
+  readonly type: 'git' | 'path' | 'zip' | 'upload' | 'url';
   readonly location: string;
   readonly ref?: string | undefined;
   readonly commit?: string | undefined;
+  /** For an archive from an address: the checksum it had to have. */
+  readonly sha256?: string | undefined;
+  /** The registry index entry it was installed from, if it was. */
+  readonly catalog?: CatalogOriginInfo | undefined;
 }
 
 /** A bundle that was fetched and waits for a decision, with what it declares. */
@@ -97,13 +110,25 @@ export interface RemoveOptions {
 }
 
 /** Where a bundle came from, in a few words. */
-export function describeSource({ type, location, ref, commit }: SourceInfo): string {
+export function describeSource(source: SourceInfo): string {
+  const { type, location, ref, commit, sha256, catalog } = source;
+  const listed =
+    catalog === undefined
+      ? ''
+      : `, listed as ${catalog.name} ${catalog.version} in ${catalog.indexUrl}`;
   if (type === 'git') {
-    return `${location}${ref ? ` at ${ref}` : ''}${commit ? ` (${commit.slice(0, 7)})` : ''}`;
+    return `${location}${ref ? ` at ${ref}` : ''}${commit ? ` (${commit.slice(0, 7)})` : ''}${listed}`;
   }
-  if (type === 'path') return `folder ${location}`;
-  return type === 'zip' ? `archive ${location}` : `upload ${location}`;
+  if (type === 'url') {
+    return `archive ${location}${sha256 ? ` (SHA-256 ${sha256.slice(0, 12)}…)` : ''}${listed}`;
+  }
+  if (type === 'path') return `folder ${location}${listed}`;
+  return `${type === 'zip' ? 'archive' : 'upload'} ${location}${listed}`;
 }
+
+/** What every summary says about something listed in a registry index. */
+export const NOT_VETTED =
+  'Entries of an index are not checked by MoonCG: installing this trusts whoever runs that index as much as the code itself.';
 
 /** Whether a job is over, however it ended. */
 export const jobOver = (job: JobInfo) => job.state !== 'queued' && job.state !== 'running';

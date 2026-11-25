@@ -1,6 +1,7 @@
 import { defineComponent, h, onMounted, ref } from 'vue';
 import { api } from '../api.js';
 import { useOnAir } from '../stores/onAir.js';
+import { useRegistry } from '../stores/registry.js';
 import { part, sure, useActions } from './admin.js';
 import { ModuleInstall, outcomeOf, settled } from './ModuleInstall.js';
 import { pageHead } from './parts.js';
@@ -42,9 +43,14 @@ export const ModulesView = defineComponent({
     const { run, send, alert } = useActions(async () => {
       modules.value = (await api.request<{ modules: Module[] }>('GET', '/api/v1/modules')).modules;
     });
+    const registry = useRegistry();
     onMounted(() => run(async () => {}));
+    onMounted(() => registry.loadUpdates());
     const onAir = useOnAir();
-    const installer = ref<{ update(name: string): Promise<void> }>();
+    const installer = ref<{
+      update(name: string): Promise<void>;
+      updateFromIndex(name: string, index: string): Promise<void>;
+    }>();
     const removed = ref<{ text: string; ok: boolean }>();
 
     const remove = (module: Module) => {
@@ -84,9 +90,23 @@ export const ModulesView = defineComponent({
     const actions = (module: Module) => {
       if (module.internal) return h('span', { class: 'muted' }, 'part of the server');
       // What came with MoonCG is updated with it; what was installed can be updated here.
+      const hint = registry.updateFor('module', module.name);
       const installed = module.builtin
         ? []
         : [
+            hint
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    class: 'small primary',
+                    'data-action': 'update-from-index',
+                    title: `From ${hint.index.url}`,
+                    onClick: () => installer.value?.updateFromIndex(module.name, hint.index.id),
+                  },
+                  `Update to ${hint.available}`,
+                )
+              : null,
             h(
               'button',
               {
@@ -153,6 +173,13 @@ export const ModulesView = defineComponent({
         h('strong', module.title ?? module.name),
         h('span', { class: ['state', module.state] }, module.state),
         module.builtin ? h('span', { class: 'badge' }, 'built in') : null,
+        registry.updateFor('module', module.name)
+          ? h(
+              'span',
+              { class: 'badge accent', 'data-badge': 'update' },
+              `Update available: ${registry.updateFor('module', module.name)?.available}`,
+            )
+          : null,
         h(
           'span',
           { class: 'muted' },
@@ -172,6 +199,11 @@ export const ModulesView = defineComponent({
         pageHead('Modules', {
           description:
             'Code that runs inside the server, such as sign-in with an external account.',
+          actions: h(
+            'a',
+            { class: 'button small', href: '/bundles/catalog?kind=module' },
+            'Catalog',
+          ),
         }),
         alert(),
         removed.value
@@ -196,7 +228,13 @@ export const ModulesView = defineComponent({
             ),
           ]),
         ]),
-        h(ModuleInstall, { ref: installer, onChanged: () => run(async () => {}) }),
+        h(ModuleInstall, {
+          ref: installer,
+          onChanged: () => {
+            void run(async () => {});
+            void registry.loadUpdates();
+          },
+        }),
       ]);
   },
 });

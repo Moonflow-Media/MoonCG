@@ -1,6 +1,6 @@
 {
   "name": "@mooncg/core",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "description": "Pure MoonCG logic: manifest, replicants, protocol, permissions, session.",
   "type": "module",

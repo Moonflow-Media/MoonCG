@@ -5,7 +5,7 @@ A **bundle** brings dashboard panels, graphics for OBS or vMix, and an optional 
 extension. Bundles share state through **replicants**: values the server owns and syncs to every
 panel and graphic over a WebSocket.
 
-This repository has finished milestones 1 to 8 of its plan. It loads bundles from a folder, serves their
+This repository has finished milestones 1 to 9 of its plan. It loads bundles from a folder, serves their
 panels and graphics, syncs replicants and messages, runs each bundle's extension in its own
 worker thread, can enable, disable and reload bundles while it runs, and has users, roles,
 permissions and API tokens. Its dashboard has workspaces, pages for bundles, graphics, users,
@@ -19,6 +19,9 @@ and a new bundle, and an **On Air** lock that keeps all of that away from a runn
 sign in, routes and permissions, and one is shipped: sign-in with OpenID Connect, Twitch or
 Discord, with accounts linked to users by an administrator. See
 [docs/modules.md](docs/modules.md) and [docs/external-logins.md](docs/external-logins.md).
+**Registry indexes**, static JSON files anyone can host, fill a **catalog** of bundles and
+modules to install by name, and tell when something installed from them has a newer version:
+see [docs/registry.md](docs/registry.md).
 
 ## Run the example
 
@@ -98,6 +101,8 @@ never sit behind a proxy or a tunnel, and is never for a show. [docs/development
 | `--bundle-backups-kept`            | `MOONCG_BUNDLE_BACKUPS_KEPT`            | `3`         | Earlier versions kept of each bundle               |
 | `--bundle-install-timeout-ms`      | `MOONCG_BUNDLE_INSTALL_TIMEOUT_MS`      | `300000`    | How long Git, and npm, may each take               |
 | `--bundle-npm-registry`            | `MOONCG_BUNDLE_NPM_REGISTRY`            | npm's own   | Registry for the npm packages of bundles (https)   |
+| `--registry-index`                 | `MOONCG_REGISTRY_INDEXES`               | none        | Registry index for the catalog (https); repeatable |
+| `--registry-refresh-ms`            | `MOONCG_REGISTRY_REFRESH_MS`            | `21600000`  | How often the registry indexes are fetched again   |
 | `--extension-start-timeout-ms`     | `MOONCG_EXTENSION_START_TIMEOUT_MS`     | `10000`     | How long an extension may take to start            |
 | `--extension-heartbeat-timeout-ms` | `MOONCG_EXTENSION_HEARTBEAT_TIMEOUT_MS` | `10000`     | How long a running extension may stay unresponsive |
 | `--secure-cookies`                 | `MOONCG_SECURE_COOKIES`                 | off         | Marks session cookies `Secure` (HTTPS only)        |
@@ -107,12 +112,14 @@ never sit behind a proxy or a tunnel, and is never for a show. [docs/development
 | `--config`                         | `MOONCG_CONFIG`                         | see below   | The configuration file to read                     |
 
 Flags win over environment variables. Relative paths resolve against the working directory.
-`--allowed-origin` can be repeated; the environment variable takes a comma-separated list.
+`--allowed-origin` and `--registry-index` can be repeated; their environment variables take a
+comma-separated list.
 The switches are on in the environment as `1` or `true`, and each can be turned off on the
 command line with `--no-` in front, such as `--no-watch`. For `watch`, the flag wins over
 `MOONCG_WATCH` (where `0` turns it off), which wins over the file.
 
-`port`, `host`, `bundlesDir`, `dataDir`, `modulesDir`, `publicUrl`, `allowedOrigins` and `watch`
+`port`, `host`, `bundlesDir`, `dataDir`, `modulesDir`, `publicUrl`, `allowedOrigins`,
+`registryIndexes` and `watch`
 can also be set in
 `mooncg.config.json` in the directory the server is started in; `mooncg init` writes one.
 Flags and environment variables win over the file, and relative paths in it start at the
@@ -141,8 +148,8 @@ Deleting it resets all of that, and the next start offers the setup again. Besid
 database it holds `config/` of the bundles and, in `config/modules/`, of the modules, `assets/`
 of the bundles, `staging/` for bundles that are being
 installed, `backups/` with the earlier versions of updated and removed bundles, and
-`bundle-sources.json`, which remembers where each bundle was installed from. `data/` is
-git-ignored.
+`bundle-sources.json`, which remembers where each bundle was installed from, and `registry/`
+with the last good copy of each registry index. `data/` is git-ignored.
 
 To run the built server yourself:
 
@@ -270,6 +277,8 @@ export MOONCG_TOKEN=mcg_…   # an API token that holds system:bundles.manage
 mooncg bundle install https://example.org/owner/scoreboard.git --ref v1.2.0
 mooncg bundle update scoreboard
 mooncg bundle remove scoreboard
+mooncg bundle install scoreboard        # by name, from the catalog of the registry indexes
+mooncg bundle outdated                  # what has a newer version in its index
 ```
 
 - A bundle comes from a Git repository (`https://`, `ssh://` or `user@host:path`), a ZIP
@@ -287,6 +296,10 @@ mooncg bundle remove scoreboard
   asked otherwise, through a removal.
 - `"engine": { "mooncg": ">=0.6.0" }` in the manifest says which MoonCG a bundle runs on; a
   bundle that asks for another is refused.
+- Registry indexes list bundles and modules with a ZIP (checked against its SHA-256) or a Git
+  commit per version. The dashboard's **Catalog** installs from them through the same steps,
+  and what was installed from an index entry gets **Update available** from that entry only.
+  See [docs/registry.md](docs/registry.md).
 
 [docs/bundles.md](docs/bundles.md) has the sources, the limits, the rollback, the API and what
 is kept.

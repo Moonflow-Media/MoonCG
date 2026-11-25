@@ -43,6 +43,8 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     bundleBackupsKept: 3,
     bundleInstallTimeoutMs: 300_000,
     bundleNpmRegistry: undefined,
+    registryIndexes: [],
+    registryRefreshMs: 6 * 60 * 60_000,
     secureCookies: false,
     trustProxy: false,
     dev: false,

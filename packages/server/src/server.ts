@@ -33,6 +33,7 @@ import { DEFAULT_INSTALL_LIMITS } from './install/files.js';
 import { BundleInstaller } from './install/installer.js';
 import { ModuleInstaller } from './install/module-installer.js';
 import type { NpmInstall } from './install/npm.js';
+import type { PublicSource } from './install/sources.js';
 import { devModeProblem, type ServerConfig } from './kernel/config.js';
 import { createLifecycle } from './kernel/lifecycle.js';
 import {
@@ -48,6 +49,7 @@ import { ExternalLogins } from './modules/external-login.js';
 import { type BuiltinModule, ModuleManager } from './modules/manager.js';
 import { ProviderRegistry } from './modules/providers.js';
 import { SelfLinking } from './modules/self-linking.js';
+import { Registry } from './registry/registry.js';
 import { createPersistence } from './replicants/persistence.js';
 import { openSqliteStorage, type Storage } from './storage/replicant-store.js';
 
@@ -132,6 +134,8 @@ export interface RunningServer {
   readonly installer: BundleInstaller;
   /** Installs, updates and removes the modules of the modules folder. */
   readonly moduleInstaller: ModuleInstaller;
+  /** The registry indexes the catalog is built from. */
+  readonly registry: Registry;
   readonly host: ExtensionHost;
   /** Accounts, sessions, tokens and roles. */
   readonly auth: Auth;
@@ -373,7 +377,18 @@ export async function startServer(
           ),
       );
     applyDefaults();
+    // The registry indexes, taken up below. The installers ask it for the address of an
+    // index, credentials included, when they fetch again what was installed from it.
+    const catalogRegistry = new Registry({
+      dataDir: config.dataDir,
+      store: storage.settings,
+      configured: config.registryIndexes,
+      refreshMs: config.registryRefreshMs,
+      logger,
+    });
+    const indexAddress = (id: string) => catalogRegistry.address(id);
     const installer = new BundleInstaller({
+      indexAddress,
       dataDir: config.dataDir,
       bundlesDir: config.bundlesDir,
       manager,
@@ -453,6 +468,7 @@ export async function startServer(
     lifecycle.add('modules', () => modules.close());
     await modules.load();
     const moduleInstaller = new ModuleInstaller({
+      indexAddress,
       dataDir: config.dataDir,
       modulesDir: config.modulesDir,
       bundlesDir: config.bundlesDir,
@@ -477,6 +493,33 @@ export async function startServer(
     // Closed before the modules are: a job that still runs ends first.
     lifecycle.add('module-installer', () => moduleInstaller.close());
     await moduleInstaller.start();
+    // The catalog. Its indexes are fetched in the background: an index that is slow or gone
+    // keeps the server from nothing.
+    lifecycle.add('registry', () => catalogRegistry.close());
+    await catalogRegistry.start();
+    /** What is installed of each kind, with the index entry it came from, if it did. */
+    const installedItems = async () => {
+      const [bundleSources, moduleSources] = await Promise.all([
+        installer.sources().catch(() => ({})),
+        moduleInstaller.sources().catch(() => ({})),
+      ]);
+      const of = (
+        items: readonly { name: string; version?: string | undefined }[],
+        sources: Record<string, PublicSource>,
+      ) =>
+        new Map(
+          items.flatMap(({ name, version }) =>
+            version === undefined ? [] : [[name, { version, catalog: sources[name]?.catalog }]],
+          ),
+        );
+      return {
+        bundle: of(
+          manager.list().map(({ name, manifest }) => ({ name, version: manifest?.version })),
+          bundleSources,
+        ),
+        module: of(modules.list(), moduleSources),
+      };
+    };
 
     const app = await createApp({
       bundles: () => manager.list(),
@@ -492,6 +535,11 @@ export async function startServer(
       lifecycle: bundleLifecycle,
       installer,
       moduleInstaller,
+      registry: {
+        registry: catalogRegistry,
+        installed: installedItems,
+        mooncgVersion: MOONCG_VERSION,
+      },
       instances,
       assets,
       config: configs,
@@ -575,6 +623,7 @@ export async function startServer(
       manager,
       installer,
       moduleInstaller,
+      registry: catalogRegistry,
       host,
       started,
       stats: () => ({

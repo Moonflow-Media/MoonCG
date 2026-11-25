@@ -34,6 +34,10 @@ export interface BundleArgs {
   readonly purgeData: boolean;
   /** Send the token over plain http also to a server on another machine. */
   readonly insecure: boolean;
+  /** The version of a catalog entry to install, by name. Without it, the newest that runs. */
+  readonly version?: string | undefined;
+  /** The registry index, by id or address, when more than one lists the name. */
+  readonly index?: string | undefined;
 }
 
 export interface BundleDeps {
@@ -51,11 +55,27 @@ export interface BundleDeps {
 
 /** A source as the server tells it. */
 interface Source {
-  readonly type: 'git' | 'path' | 'zip' | 'upload';
+  readonly type: 'git' | 'path' | 'zip' | 'upload' | 'url';
   readonly location: string;
   readonly ref?: string;
   readonly commit?: string;
+  readonly sha256?: string;
+  readonly catalog?: {
+    readonly indexUrl: string;
+    readonly name: string;
+    readonly version: string;
+  };
 }
+
+/** What every summary says of something listed in a registry index. */
+export const NOT_VETTED =
+  'entries of an index are not checked by MoonCG: installing this trusts whoever runs that index';
+
+/** The warning about an index entry, for a summary, if the source is one. */
+export const catalogWarning = (source: Source): string[] =>
+  source.catalog === undefined
+    ? []
+    : [`  WARNING: listed in ${source.catalog.indexUrl}; ${NOT_VETTED}`];
 
 /** A fetched bundle and what it declares, as the server tells it. */
 interface Staged {
@@ -101,6 +121,13 @@ interface Listed {
   readonly source?: Source;
 }
 
+/** An entry of the catalog, as far as installing by name needs it. */
+interface CatalogLine {
+  readonly name: string;
+  readonly index: { readonly id: string; readonly url: string };
+  readonly installed?: { readonly version: string } | undefined;
+}
+
 const POLL_MS = 500;
 const API = '/api/v1/bundles';
 const part = encodeURIComponent;
@@ -135,7 +162,7 @@ export function installFlow(options: {
   readonly locked: (target: string) => Promise<boolean>;
   /** What is said once a new one is installed. */
   readonly installed?: ((staged: StagedCommon) => string) | undefined;
-  readonly args: Pick<BundleArgs, 'yes' | 'ref' | 'scripts' | 'onAir'>;
+  readonly args: Pick<BundleArgs, 'yes' | 'ref' | 'scripts' | 'onAir' | 'version' | 'index'>;
   readonly deps: Pick<BundleDeps, 'cwd' | 'confirm' | 'pollMs'>;
   readonly call: ReturnType<typeof createApiClient>;
   readonly log: (line: string) => void;
@@ -181,11 +208,78 @@ export function installFlow(options: {
     return deps.confirm(printable(question));
   };
 
+  const kind = noun === 'module' ? 'module' : 'bundle';
+  /** The entries of the catalog of this kind with exactly this name. */
+  const listed = async (name: string) =>
+    (
+      await call<{ entries: CatalogLine[] }>(
+        'GET',
+        `/api/v1/registry/catalog?kind=${kind}&q=${part(name)}`,
+      )
+    ).entries.filter((entry) => entry.name === name);
+
+  /**
+   * Fetches an entry of the catalog into staging, as an install or as an update. `index`, the
+   * id of the index something was installed from, wins over `--index`.
+   */
+  const stageFromCatalog = async (
+    name: string,
+    target: string | undefined,
+    why: string,
+    index = args.index,
+  ) => {
+    const found = (await listed(name)).filter(
+      (entry) => index === undefined || entry.index.id === index || entry.index.url === index,
+    );
+    if (found.length === 0) throw new Error(`${why}, and the catalog has no ${noun} "${name}".`);
+    if (found.length > 1) {
+      throw new Error(
+        `Several indexes list the ${noun} "${name}": ${found.map((entry) => entry.index.url).join(', ')}. Choose one with --index.`,
+      );
+    }
+    const [entry] = found as [CatalogLine];
+    if (target === undefined && entry.installed !== undefined) {
+      throw new Error(`The ${noun} "${name}" is installed already; update it instead.`);
+    }
+    log(`From the registry index ${entry.index.url}`);
+    // Never taken unless asked for by name: it is said what that means.
+    if (args.version !== undefined && /^[^+]*-/.test(args.version)) {
+      log(
+        `Warning: ${args.version} is a pre-release, which its author does not offer as finished.`,
+      );
+    }
+    return finished(
+      await call('POST', '/api/v1/registry/stage', {
+        kind,
+        index: entry.index.id,
+        name,
+        ...(args.version === undefined ? {} : { version: args.version }),
+        ...(target === undefined ? {} : { update: true }),
+        scripts: args.scripts,
+      }),
+    );
+  };
+
   /** Fetches a bundle into staging: from `text`, or for an update from where it came from. */
   const stage = async (text: string | undefined, target: string | undefined): Promise<Job> => {
     const { scripts } = args;
     if (text === undefined) {
       if (args.ref !== undefined) throw new Error('--ref needs a Git address to go with');
+      // What was installed from an index is updated from it, to the version it offers.
+      // From the index it was installed from, not from another that lists the same name.
+      const hints = await call<{
+        updates?: { kind: string; name: string; index: { id: string } }[];
+      }>('GET', '/api/v1/registry/updates').catch(() => undefined);
+      const hint = hints?.updates?.find((update) => update.kind === kind && update.name === target);
+      if (hint !== undefined && target !== undefined) {
+        return stageFromCatalog(
+          target,
+          target,
+          'It is not known where it came from',
+          hint.index.id,
+        );
+      }
+      if (args.version !== undefined) throw new Error('--version is for the catalog only');
       return finished(await call('POST', `${api}/${part(target ?? '')}/update`, { scripts }));
     }
     const isGit =
@@ -203,6 +297,18 @@ export function installFlow(options: {
     if (args.ref !== undefined) throw new Error('--ref is for Git addresses only');
     const path = resolve(deps.cwd, text);
     const stats = await stat(path).catch(() => undefined);
+    // A plain name that is no file or folder here is looked up in the catalog; with --index,
+    // it is taken from there in any case.
+    const plainName = /^[a-z0-9]+(-[a-z0-9]+)*$/.test(text);
+    if (plainName && (!stats || args.index !== undefined)) {
+      return stageFromCatalog(text, target, `There is no file or folder "${text}"`);
+    }
+    // Both a folder here and an entry of the catalog: which one is meant is not guessed.
+    if (plainName && stats && (await listed(text).catch(() => [])).length > 0) {
+      throw new Error(
+        `"${text}" is both a ${stats.isDirectory() ? 'folder' : 'file'} here and an entry of the catalog. Give ./${text} for the one here, or --index <id|url> for the catalog.`,
+      );
+    }
     if (!stats) {
       throw new Error(
         `There is no file or folder "${text}". A Git address starts with https:// or ssh://, or looks like user@host:path.`,
@@ -312,16 +418,45 @@ export function installFlow(options: {
   return { finished, failure, confirmed, stage, install, override, isOnAir };
 }
 
+/** `outdated`: what was installed from an index and has a newer version there. */
+export async function outdated(
+  call: ReturnType<typeof createApiClient>,
+  kind: 'bundle' | 'module',
+  log: (line: string) => void,
+): Promise<void> {
+  const { updates } = await call<{
+    updates: {
+      kind: string;
+      name: string;
+      installed: string;
+      available: string;
+      index: { url: string };
+    }[];
+  }>('GET', '/api/v1/registry/updates');
+  const mine = updates.filter((update) => update.kind === kind);
+  if (mine.length === 0) log('Everything installed from an index is up to date.');
+  for (const update of mine) {
+    log(`${update.name}  ${update.installed} -> ${update.available}  (${update.index.url})`);
+  }
+}
+
 const counted = (count: number, one: string, many = `${one}s`) =>
   `${count} ${count === 1 ? one : many}`;
 
-export function describeSource({ type, location, ref, commit }: Source): string {
+export function describeSource({ type, location, ref, commit, sha256, catalog }: Source): string {
+  const listed =
+    catalog === undefined
+      ? ''
+      : `, listed as ${catalog.name} ${catalog.version} in ${catalog.indexUrl}`;
   if (type === 'git') {
     const at = ref === undefined ? '' : ` at ${ref}`;
-    return `Git repository ${location}${at}${commit === undefined ? '' : ` (${commit.slice(0, 10)})`}`;
+    return `Git repository ${location}${at}${commit === undefined ? '' : ` (${commit.slice(0, 10)})`}${listed}`;
   }
-  if (type === 'path') return `folder ${location}`;
-  return type === 'zip' ? `archive ${location}` : `uploaded archive ${location}`;
+  if (type === 'url') {
+    return `archive ${location}${sha256 === undefined ? '' : ` (SHA-256 ${sha256})`}${listed}`;
+  }
+  if (type === 'path') return `folder ${location}${listed}`;
+  return `${type === 'zip' ? 'archive' : 'uploaded archive'} ${location}${listed}`;
 }
 
 /** Whether installing the bundle runs code on the server before the bundle is started. */
@@ -356,6 +491,7 @@ function summary(staged: Staged, scripts: boolean): string[] {
     ...(staged.target === undefined
       ? []
       : [`  updates ${staged.target} ${staged.replaces ?? '(unknown version)'}`]),
+    ...catalogWarning(staged.source),
     `  server code: ${staged.extension ? 'yes, an extension that runs on the server' : 'no'}`,
     `  runs code while it is installed: ${installCode(staged, scripts)}`,
     `  permissions: ${list(
@@ -449,6 +585,9 @@ export async function bundleCommand(
     case 'install':
       takes(1);
       return install(first, undefined);
+    case 'outdated':
+      takes(0);
+      return outdated(call, 'bundle', log);
     case 'update':
       takes(1, 2);
       return install(second, first);

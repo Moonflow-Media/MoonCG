@@ -86,7 +86,7 @@ A bundle is refused at the stage step, with the reason, when
   permissions, panels, dialogs or graphics, and so on),
 - it would make npm do more than fetch packages from the registry, and was not fetched as
   trusted (see [npm dependencies](#npm-dependencies)),
-- `engine.mooncg` does not allow this MoonCG (`engine.mooncg: needs MoonCG >=1.0.0, but this is 0.10.0`),
+- `engine.mooncg` does not allow this MoonCG (`engine.mooncg: needs MoonCG >=1.0.0, but this is 0.11.0`),
 - a bundle it depends on is not installed or has the wrong version, or it would close a
   dependency cycle,
 - a bundle of that name is installed already (install), or its name is not the name of the
@@ -95,12 +95,27 @@ A bundle is refused at the stage step, with the reason, when
 
 ## Sources
 
-| Source        | Given as                                   | Where from                                                                                   |
-| ------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| Git           | `https://…`, `ssh://…` or `user@host:path` | Dashboard, command line, API                                                                 |
-| ZIP, uploaded | A file sent to the server                  | Dashboard, command line (a local file is uploaded), API                                      |
-| ZIP, by path  | An absolute path on the server's machine   | API only                                                                                     |
-| Folder        | An absolute path on the server's machine   | Command line (a folder is read by the server under the same path) and API; not the dashboard |
+| Source        | Given as                                                                      | Where from                                                                                   |
+| ------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Git           | `https://…`, `ssh://…` or `user@host:path`                                    | Dashboard, command line, API                                                                 |
+| ZIP, uploaded | A file sent to the server                                                     | Dashboard, command line (a local file is uploaded), API                                      |
+| ZIP, by path  | An absolute path on the server's machine                                      | API only                                                                                     |
+| Folder        | An absolute path on the server's machine                                      | Command line (a folder is read by the server under the same path) and API; not the dashboard |
+| ZIP, by URL   | An `https://` address (not this machine, no internal address) and its SHA-256 | API; and from a registry index through the catalog and `mooncg bundle install <name>`        |
+
+A registry index names one of these per version: a ZIP by URL, or a Git repository pinned to a
+commit. Installing from the **Catalog** (or by name on the command line) goes through every
+step and check of this page; the summary also says which index listed it and that MoonCG does
+not check what an index lists. See [registry.md](registry.md).
+
+### ZIP by URL
+
+- Downloaded over `https://` only (plain `http://` only from this machine), with at most five
+  redirects, each checked again, within the install timeout, and no larger than an archive may
+  be, counted while it arrives.
+- Its SHA-256 must be the one given; an archive that differs is deleted before it is opened.
+  Then it is unpacked with every check of an uploaded ZIP.
+- Credentials in the address are sent to that origin only and never shown or logged.
 
 ### Git
 
@@ -409,8 +424,10 @@ with the `id` to commit or discard.
 | `GET /api/v1/bundles/-/backups`                    |                                                             | `{ bundles: [{ name, installed, backups }] }`   |
 | `POST /api/v1/bundles/<name>/backups/<id>/restore` | `{ "forceOnAir"?: true }`                                   | 202, a job                                      |
 
-A `source` is `{ "type": "git", "url": …, "ref"?: … }`, `{ "type": "path", "path": … }` or
-`{ "type": "zip", "path": … }`. `target` names the installed bundle the staged one is to
+A `source` is `{ "type": "git", "url": …, "ref"?: … }`, `{ "type": "path", "path": … }`,
+`{ "type": "zip", "path": … }` or `{ "type": "url", "url": "https://…", "sha256": … }`. To stage
+an entry of a registry index, see [`POST /api/v1/registry/stage`](registry.md#the-api); a source
+taken from an index carries `catalog` (`index`, `indexUrl`, `kind`, `name`, `version`). `target` names the installed bundle the staged one is to
 update. `"scripts": true` in a stage or update request (`?scripts=true` for the upload) fetches
 the bundle as trusted to run code while it is installed. The dash in the path is not the name of a bundle, so no bundle can be in its way.
 

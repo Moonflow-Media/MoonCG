@@ -14,6 +14,79 @@ initial commit of the repository.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-25
+
+Milestone 9: registry indexes, the catalog and update hints. See `docs/registry.md`.
+
+### Added
+
+- Registry indexes: static JSON files (`{ "index": 1, "entries": [...] }`) that list bundles
+  and modules with a title, description, author, homepage, license, tags and versions, each
+  with its `engine.mooncg` range, optional `dependencies` and a source: a ZIP by `https://`
+  address (or a path next to the index) with its SHA-256, or an `https://` Git repository
+  pinned to a full `commit`, with an optional `ref` to fetch it by. Validated in
+  `@mooncg/core` (`parseRegistryIndex`) with bounds on sizes, counts and texts, no control or
+  invisible format characters (such as a change of writing direction), names by the bundle
+  name rules, versions by the semver.org grammar (no leading zeros), refs by the rule of the
+  installer, `https://` only and no credentials in sources. Plain `http://` and addresses of
+  this machine are taken only in an index that is itself on this machine. Addresses are read as
+  `fetch` reads them and refused when that differs from how they are written (a backslash, a
+  host such as `2130706433` or `0x7f.1`, a percent-encoded host). The JSON Schema is
+  `docs/registry-index.schema.json`; an example index with the scoreboard is in
+  `e2e/registry/`.
+- Indexes come from the configuration (`--registry-index`, `MOONCG_REGISTRY_INDEXES`,
+  `"registryIndexes"` in `mooncg.config.json`) and from administrators at run time (kept in
+  the database, at most 20 in all). They are fetched at start and every 6 hours
+  (`--registry-refresh-ms`, `MOONCG_REGISTRY_REFRESH_MS`) and on request, at most every
+  30 seconds (`429` with `Retry-After` otherwise): `https://` only, at most five redirects,
+  each checked again, a 30 s timeout, at most 2 MiB counted while it arrives, a JSON content
+  type, conditional requests with ETag and Last-Modified. Credentials in an index address are
+  sent as a header to its own origin only (for the index and for archives it lists there) and
+  appear in no message; they are kept only in the setting of the index, never with what was
+  installed. The last good copy of each is kept in `data/registry/` and used when a fetch
+  fails; the dashboard and the API say per index why, without control or format characters and
+  at most 500 characters long. An index makes the server fetch nothing but itself until an
+  administrator installs from it.
+- Where the registry connects: never to a private, shared, link-local, unique-local,
+  unspecified, multicast or reserved address, checked for an IP address in the address before
+  anything connects and for every address a name resolves to when the connection is made (so
+  a name that is pointed elsewhere after it was checked is caught too), for indexes, the
+  archives they list, ZIP sources of their own and every redirect. This machine only for an
+  index on this machine and what it lists; a redirect never leads from elsewhere to here. Done
+  with `node:http`/`node:https` and a resolver of their own, without a new dependency.
+- A ZIP archive from an address as a source of bundles and modules
+  (`{ "type": "url", "url", "sha256" }`, `https://` only and never this machine): downloaded
+  with the archive size limit, refused before it is opened when its SHA-256 differs, then
+  unpacked with every check of an upload; a download that fails, also because the file cannot
+  be written, leaves no file behind. A Git source from an index is pinned to the commit the
+  index names: a ref that points elsewhere is refused.
+- The catalog: `GET /api/v1/registry/catalog` and the dashboard page `/bundles/catalog` (also
+  for modules, with a kind filter and a search) with each entry's versions, whether they run on
+  this MoonCG, and what is installed of that name. **Install** starts the usual stage → summary
+  → commit flow (`POST /api/v1/registry/stage`); the summary names the index and says that
+  MoonCG does not check what an index lists. What is fetched must have the name and the
+  version the entry names. Modules from the catalog keep every module rule. No picture is
+  loaded from other sites.
+- Update hints: what was installed from an index entry, and only that, is offered the newest
+  version of that same entry that is newer by semver and runs on this MoonCG
+  (`GET /api/v1/registry/updates`): an **Update available** badge and **Update to x.y.z** on the
+  Bundles and Modules pages and in the catalog. An index that lists the name of something
+  installed otherwise offers it nothing and cannot update it (409). The catalog never
+  downgrades (409): going back a version is a removal and an install. An update that names no
+  source fetches what came from an index again as that entry said, and stays tied to it.
+  Versions that are no semantic version never sort or hide an update.
+- Permissions: reading the catalog of bundles or modules and installing from it takes
+  `system:bundles.manage` or `system:modules.manage`; adding and removing an index takes
+  `system:settings.manage` as well.
+- Command line: `mooncg registry list|add|remove|refresh|search|info`,
+  `mooncg bundle install <name>` and `mooncg module install <name>` from the catalog when the
+  argument is no file, folder or address (`--version`, `--index`), `mooncg bundle outdated` and
+  `mooncg module outdated`; `bundle update <name>` and `module update <name>` without a source
+  take the newer version from the index something was installed from, also when other indexes
+  list the name. A name that is both a file or folder here and an entry of the catalog is
+  refused with a hint to `./name` or `--index`; `--version` naming a pre-release says so.
+  Everything the server says is printed without control or invisible format characters.
+
 ## [0.10.0] - 2026-11-25
 
 ### Added

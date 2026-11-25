@@ -109,13 +109,15 @@ my-show/
 │   │   └── <id>/bundle/  a bundle that was fetched and waits to be installed or discarded
 │   ├── backups/
 │   │   └── <bundle>/<version>-<time>/   an earlier version: bundle/ and backup.json
-│   └── bundle-sources.json   where each bundle was installed from, for updates
-└── mooncg.config.json    server config: port, host, bundles dir, data dir, modules dir, public URL, origins, watch
+│   ├── registry/
+│   │   └── <id>.json     the last good copy of a registry index, used when a fetch fails
+│   └── bundle-sources.json   where each bundle was installed from (and from which index entry), for updates
+└── mooncg.config.json    server config: port, host, bundles dir, data dir, modules dir, public URL, origins, registry indexes, watch
 ```
 
 `mooncg init` creates this folder: `bundles/`, `data/`, `mooncg.config.json` and a
 `.gitignore` for `data/`. The server reads the file from the directory it is started in;
-flags and environment variables win over it. Everything but the eight settings named above is
+flags and environment variables win over it. Everything but the nine settings named above is
 configured with flags and environment variables only. See
 [development.md](development.md#the-configuration-file).
 

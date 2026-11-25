@@ -1,7 +1,8 @@
-import { defineComponent, h, nextTick, onMounted, reactive, ref } from 'vue';
+import { defineComponent, h, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import { type BundleAction, type BundleInfo, useBundles } from '../stores/bundles.js';
-import { describeSource, useInstalls } from '../stores/installs.js';
+import { describeSource, jobOver, useInstalls } from '../stores/installs.js';
 import { useOnAir } from '../stores/onAir.js';
+import { useRegistry } from '../stores/registry.js';
 import { sure } from './admin.js';
 import { BundleBackupsCard } from './BundleBackups.js';
 import { BundleInstall } from './BundleInstall.js';
@@ -147,7 +148,22 @@ export const BundlesView = defineComponent({
         ]),
       ]);
     };
-    onMounted(() => void bundles.refresh());
+    const registry = useRegistry();
+    onMounted(async () => {
+      await bundles.refresh();
+      // Update hints are for those who could act on them.
+      if (bundles.canManage) await registry.loadUpdates();
+    });
+    // What an index offers changes once something was installed or updated.
+    watch(
+      () => installs.jobs.filter((job) => job.operation !== 'stage' && jobOver(job)).length,
+      () => {
+        if (bundles.canManage) void registry.loadUpdates();
+      },
+    );
+    /** Fetches the newer version an index offers, as the update of the bundle. */
+    const updateFromIndex = (name: string, index: string) =>
+      registry.stage('bundle', index, name, { update: true });
     const actions = (bundle: BundleInfo): BundleAction[] =>
       bundle.state === 'disabled' ? ['enable'] : ['reload', 'disable'];
     const inState = (state: string) => bundles.list.filter((bundle) => bundle.state === state);
@@ -189,6 +205,13 @@ export const BundlesView = defineComponent({
               bundle.reloadErrors?.length
                 ? h('span', { class: 'badge failed', 'data-badge': 'not-reloaded' }, 'not reloaded')
                 : null,
+              bundles.canManage && registry.updateFor('bundle', bundle.name)
+                ? h(
+                    'span',
+                    { class: 'badge accent', 'data-badge': 'update' },
+                    `Update available: ${registry.updateFor('bundle', bundle.name)?.available}`,
+                  )
+                : null,
               bundle.pendingChanges?.length
                 ? h(
                     'span',
@@ -219,6 +242,24 @@ export const BundlesView = defineComponent({
                         },
                         LABELS[action],
                       ),
+                    ),
+                    ...[registry.updateFor('bundle', bundle.name)].flatMap((hint) =>
+                      hint
+                        ? [
+                            h(
+                              'button',
+                              {
+                                type: 'button',
+                                class: 'small primary',
+                                'data-action': 'update-from-index',
+                                disabled: installs.busy(bundle.name) || registry.sending,
+                                title: `From ${hint.index.url}`,
+                                onClick: () => updateFromIndex(bundle.name, hint.index.id),
+                              },
+                              `Update to ${hint.available}`,
+                            ),
+                          ]
+                        : [],
                     ),
                     h(
                       'button',
@@ -292,23 +333,29 @@ export const BundlesView = defineComponent({
         pageHead('Bundles', {
           description:
             'Reload a bundle to start it from what is on disk now. A disabled bundle stays disabled across restarts.',
-          actions: segmented<Filter>({
-            label: 'Filter',
-            value: filter.value,
-            choices: [
-              { value: 'all', label: 'All', count: bundles.list.length },
-              ...STATES.map((state) => ({
-                value: state,
-                label: state,
-                count: inState(state).length,
-              })),
-            ],
-            onChange: (value) => {
-              filter.value = value;
-            },
-          }),
+          actions: [
+            bundles.canManage
+              ? h('a', { class: 'button small', href: '/bundles/catalog' }, 'Catalog')
+              : null,
+            segmented<Filter>({
+              label: 'Filter',
+              value: filter.value,
+              choices: [
+                { value: 'all', label: 'All', count: bundles.list.length },
+                ...STATES.map((state) => ({
+                  value: state,
+                  label: state,
+                  count: inState(state).length,
+                })),
+              ],
+              onChange: (value) => {
+                filter.value = value;
+              },
+            }),
+          ],
         }),
         bundles.problem ? h('p', { class: 'problem', role: 'alert' }, bundles.problem) : null,
+        registry.problem ? h('p', { class: 'problem', role: 'alert' }, registry.problem) : null,
         onAir.onAir
           ? h(
               'p',

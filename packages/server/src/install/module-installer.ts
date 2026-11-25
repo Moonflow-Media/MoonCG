@@ -37,6 +37,7 @@ import { createNpmInstall, type NpmInstall, type NpmNeed, npmNeed } from './npm.
 import {
   type BundleSource,
   BundleSources,
+  type CatalogOrigin,
   type PublicSource,
   publicSource,
   refetchable,
@@ -121,6 +122,11 @@ export interface ModuleInstallerOptions {
   readonly uploadIdleMs?: number | undefined;
   readonly npmInstall?: NpmInstall | undefined;
   readonly npmRegistry?: string | undefined;
+  /**
+   * The address of a registry index by its id, credentials included, for fetching again what
+   * was installed from it. Without it, that is fetched as an address of its own.
+   */
+  readonly indexAddress?: ((id: string) => string | undefined) | undefined;
   readonly git?: Pick<GitOptions, 'allowFileUrls' | 'command' | 'env'> | undefined;
   /** Deletes what a module stored: its configuration. */
   readonly purge?: ((module: string) => Promise<void>) | undefined;
@@ -214,16 +220,18 @@ export class ModuleInstaller {
   /**
    * Fetches a module into staging and checks it. `target` makes it the update of an
    * installed module, which it must be named like. `scripts` trusts it to run code while it
-   * is installed; without it a module that would steer npm is refused.
+   * is installed; without it a module that would steer npm is refused. `catalog` says which
+   * registry index entry the source was taken from.
    */
   stage(request: {
     readonly source: StageSource;
     readonly target?: string | undefined;
     readonly scripts?: boolean | undefined;
+    readonly catalog?: CatalogOrigin | undefined;
     readonly by: string;
   }): Promise<ModuleJob> {
     return this.#guarded(async () => {
-      const { source, target, by } = request;
+      const { source, target, by, catalog } = request;
       const trusted = request.scripts === true;
       if (target !== undefined) this.#replaceable(target);
       const problem = sourceProblem(source, 'module', this.#options.git?.allowFileUrls === true);
@@ -253,7 +261,7 @@ export class ModuleInstaller {
         try {
           step('fetch');
           const content = join(dir, 'module');
-          const stored = await fetchSource(source, dir, content, {
+          const fetched = await fetchSource(source, dir, content, {
             limits: this.#limits,
             timeoutMs: this.#timeoutMs,
             signal: this.#shutdown.signal,
@@ -261,11 +269,23 @@ export class ModuleInstaller {
             forbidden: [this.#options.modulesDir, this.#options.bundlesDir, this.#options.dataDir],
             noun: 'module',
           });
+          const stored: BundleSource = catalog === undefined ? fetched : { ...fetched, catalog };
           step('validate');
           // A bundle is refused here: it says `"kind": "bundle"`.
           const { manifest, errors } = await readModuleManifest(content);
           if (!manifest) throw refuse(errors.join('; '));
           job.module = manifest.name;
+          if (catalog !== undefined && manifest.name !== catalog.name) {
+            throw refuse(
+              `The index entry "${catalog.name}" brought module "${manifest.name}"; nothing was staged`,
+            );
+          }
+          // Nor is a version that the index claims for an archive of another one.
+          if (catalog !== undefined && manifest.version !== catalog.version) {
+            throw refuse(
+              `The index lists "${catalog.name}" ${catalog.version}, but the module it brought is version ${manifest.version}; nothing was staged`,
+            );
+          }
           const problems = await this.#problems(manifest, content, target);
           if (problems.length > 0) throw refuse(problems.join('; '));
           const npm = await npmNeed(content, this.#options.npmRegistry);
@@ -472,9 +492,12 @@ export class ModuleInstaller {
   ): Promise<ModuleJob> {
     this.#replaceable(name);
     let { source } = options;
+    let catalog: CatalogOrigin | undefined;
     if (source === undefined) {
       const known = (await this.#sources.get(name))?.source;
-      source = refetchable(known);
+      source = refetchable(known, this.#options.indexAddress);
+      // Fetched again from an index entry, it stays tied to that entry.
+      catalog = known?.catalog;
       if (source === undefined) {
         throw new MoonCGError(
           'conflict',
@@ -482,7 +505,13 @@ export class ModuleInstaller {
         );
       }
     }
-    return this.stage({ source, target: name, scripts: options.scripts, by: options.by });
+    return this.stage({
+      source,
+      target: name,
+      scripts: options.scripts,
+      by: options.by,
+      ...(catalog === undefined ? {} : { catalog }),
+    });
   }
 
   /**
@@ -817,5 +846,5 @@ function describe(source: BundleSource): string {
   const { type, location, ref } = publicSource(source);
   if (type === 'git') return `Git repository ${location}${ref === undefined ? '' : ` at ${ref}`}`;
   if (type === 'path') return `folder ${location}`;
-  return type === 'zip' ? `archive ${location}` : `uploaded archive ${location}`;
+  return type === 'zip' || type === 'url' ? `archive ${location}` : `uploaded archive ${location}`;
 }

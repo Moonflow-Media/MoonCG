@@ -20,7 +20,7 @@ milestone numbers.
 | 6   | Live reload and developer use | File watcher, page reloads, `dev.url`, `mooncg start`/`dev`/`init`/`bundle create`, `mooncg.config.json`, On Air lock              | Done   | 0.8.0       |
 | 7   | Bundle management             | Install from a folder, ZIP or Git, npm dependencies, update with backup and rollback, remove, restore, CLI and dashboard           | Done   | 0.7.0       |
 | 8   | Modules and external logins   | Modules in `modules/`, `@mooncg/sdk/module`, the `auth-oidc` module (OpenID Connect, Twitch, Discord), linking external accounts   | Done   | 0.9.0       |
-| 9   | Registry and catalog          | Static JSON bundle index (several URLs, pluggable source), catalog page, update checks at start and every 6 hours, update hints    | Next   | —           |
+| 9   | Registry and catalog          | Static JSON bundle index (several URLs, pluggable source), catalog page, update checks at start and every 6 hours, update hints    | Done   | 0.11.0      |
 
 ## Gaps closed after 0.9.0 (released in 0.10.0)
 
@@ -54,7 +54,9 @@ Planned, but not part of milestones 0–9:
 - Storage adapters other than SQLite.
 - Sandboxing bundles; installed bundles are trusted code.
 - Translations of the dashboard.
-- Module hooks for storage adapters, registry sources and dashboard pages.
+- Module hooks for storage adapters, registry sources and dashboard pages. Milestone 9 has a
+  small `RegistrySource` interface in the server, but no `registry.registerSource` for modules.
+- Signed registry indexes and archives.
 - MoonCG publish to npm.
 - A public registry with a catalog of bundles and modules, and a way to publish them.
 - Detailed documentation of the MoonCG like https://www.nodecg.dev/ just better.

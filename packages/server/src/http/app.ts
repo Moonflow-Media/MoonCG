@@ -56,6 +56,7 @@ import {
 import { escapeHtml } from './login-page.js';
 import { type ModuleHttp, registerModuleRoutes } from './module-routes.js';
 import { devOrigins, devServerUrl, originAllowed } from './origin.js';
+import { type RegistryHttp, registerRegistryRoutes } from './registry-routes.js';
 import {
   ASSET_CSP,
   CONNECTION_HEADERS,
@@ -159,6 +160,8 @@ export interface AppOptions {
   readonly installer?: BundleInstalls | undefined;
   /** Installs, updates and removes modules. Without it that part of the API answers 404. */
   readonly moduleInstaller?: ModuleInstalls | undefined;
+  /** The registry indexes and the catalog. Without it their API answers 404. */
+  readonly registry?: RegistryHttp | undefined;
   /** The connected graphic pages. Without it no instance can be reloaded. */
   readonly instances?: Pick<GraphicInstances, 'get' | 'reload' | 'disconnect' | 'of'> | undefined;
   /** The files uploaded for each bundle. Without it there are no assets. */
@@ -206,6 +209,7 @@ export const DASHBOARD_ROUTES = [
   '/',
   '/w/:workspace',
   '/bundles',
+  '/bundles/catalog',
   '/graphics',
   '/assets',
   '/admin/users',
@@ -231,14 +235,17 @@ const INSTALLS = '/api/v1/bundles/-';
 function fetchableSource(value: unknown): FetchableSource {
   const given =
     typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
-  const { type, url, ref, path } = given;
+  const { type, url, ref, path, sha256 } = given;
   if (type === 'git' && typeof url === 'string' && (ref === undefined || typeof ref === 'string')) {
     return { type, url, ...(ref === undefined ? {} : { ref }) };
   }
   if ((type === 'path' || type === 'zip') && typeof path === 'string') return { type, path };
+  if (type === 'url' && typeof url === 'string' && typeof sha256 === 'string') {
+    return { type, url, sha256 };
+  }
   throw new MoonCGError(
     'invalid',
-    '"source" must be { type: "git", url, ref? }, { type: "path", path } or { type: "zip", path }',
+    '"source" must be { type: "git", url, ref? }, { type: "path", path }, { type: "zip", path } or { type: "url", url, sha256 }',
   );
 }
 
@@ -1005,6 +1012,13 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
       }
     },
   );
+
+  if (options.registry) {
+    registerRegistryRoutes(app, { can, deny, fail, failWith, actor }, options.registry, {
+      bundle: installer,
+      module: moduleInstaller,
+    });
+  }
 
   // A bundle's configuration holds secrets, and changing it restarts the bundle's extension.
   // So it is for whoever may manage the server's settings, and for nobody else, whatever

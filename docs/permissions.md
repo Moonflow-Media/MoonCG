@@ -145,6 +145,9 @@ on the machine. That is the boundary, and one permission guards all of it:
 | Switching On Air (`PUT /api/v1/on-air`)                                    | `system:bundles.manage`                                                    |
 | Making a change although the installation is on air (`"forceOnAir": true`) | `system:bundles.manage`, as the change itself                              |
 | Reading where On Air stands (`GET /api/v1/on-air`, `system:onAir`)         | `system:dashboard.view`; who switched it only with `system:bundles.manage` |
+| Reading the catalog of bundles, installing or updating from it             | `system:bundles.manage` (modules: `system:modules.manage`)                 |
+| Listing the registry indexes, checking them now                            | `system:bundles.manage` or `system:modules.manage`                         |
+| Adding or removing a registry index                                        | `system:settings.manage` and one of the two above                          |
 
 Without it these requests answer 403 (401 when not signed in) before anything is looked at,
 so they do not tell whether a bundle, a job or a backup exists. The server log records who did
@@ -156,6 +159,15 @@ an option or a command, a folder inside the bundles or data folder is refused, a
 passes through a shell. What the permission does include, by its nature: the server fetches
 from any host a Git address names, also one only it can reach, and reads any folder its account
 can read when given a path. [bundles.md](bundles.md) has the details and the limits.
+
+**Registry indexes.** Reading the catalog of a kind takes the permission to install that kind,
+since installing is all there is to do with it; nobody else learns what the indexes list. The
+list of indexes is server configuration, so changing it takes `system:settings.manage`, and a
+manage permission besides, as an index only matters to whoever installs from it. Adding an
+index grants nothing: installing from it still takes the permission of its kind, and the
+server fetches only the index until someone installs. An index can never claim a bundle it
+did not install: updates are offered only to what was installed from that very entry. See
+[registry.md](registry.md#who-may-do-this).
 
 Even a holder is not surprised by a bundle: before it is installed, the summary says whether it
 brings server code, whether installing it runs code (install scripts, its own `.npmrc`,

@@ -4,6 +4,7 @@ import {
   describeSource,
   type JobInfo,
   jobOver,
+  NOT_VETTED,
   type StagedInfo,
   useInstalls,
 } from '../stores/installs.js';
@@ -58,6 +59,14 @@ function facts(staged: StagedInfo): [term: string, value: string][] {
   const { npm } = staged;
   return [
     ['Source', describeSource(staged.source)],
+    ...(staged.source.catalog === undefined
+      ? []
+      : [
+          ['Registry index', `${staged.source.catalog.indexUrl}. ${NOT_VETTED}`] as [
+            string,
+            string,
+          ],
+        ]),
     [
       'Server code',
       staged.extension ? 'Yes: it brings an extension that runs on the server' : 'No',

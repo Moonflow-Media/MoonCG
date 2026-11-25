@@ -4,6 +4,7 @@ import { DEFAULT_WORKSPACE, useBundles } from './stores/bundles.js';
 import { AccountView } from './views/Account.js';
 import { AssetsView } from './views/Assets.js';
 import { BundlesView } from './views/Bundles.js';
+import { CatalogView } from './views/Catalog.js';
 import { GraphicsView } from './views/Graphics.js';
 import { LogsView } from './views/Logs.js';
 import { ModulesView } from './views/Modules.js';
@@ -26,6 +27,7 @@ export const routes: RouteRecordRaw[] = [
   { path: '/', component: Home },
   { path: '/w/:workspace', component: WorkspaceView, props: true },
   { path: '/bundles', component: BundlesView },
+  { path: '/bundles/catalog', component: CatalogView },
   { path: '/graphics', component: GraphicsView },
   { path: '/assets', component: AssetsView },
   { path: '/admin/users', component: UsersView },

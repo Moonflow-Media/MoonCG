@@ -21,11 +21,12 @@ export type ApiCall = <T>(method: string, path: string, body?: unknown | Blob) =
 /**
  * What the server said, as it may be printed: on one line and without control characters.
  * A manifest is written by whoever wrote the bundle; an escape sequence in it could redraw
- * the terminal and hide what is being asked.
+ * the terminal and hide what is being asked, and a change of writing direction or a
+ * zero-width character could make a line read as something else.
  */
 export function printable(text: string): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are the point
-  return text.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ');
+  return text.replace(/[\u0000-\u001f\u007f-\u009f\p{Cf}\u2028\u2029]+/gu, ' ');
 }
 
 /** An address as it may be shown: without the user name and password in it. */

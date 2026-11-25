@@ -1,6 +1,6 @@
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { MoonCGError } from '@mooncg/core';
+import { gitRefProblem, MoonCGError } from '@mooncg/core';
 import { refuse, removeDir } from './files.js';
 import { runTool } from './process.js';
 
@@ -68,23 +68,8 @@ export function gitUrlProblem(url: unknown, allowFileUrls = false): string | und
   return undefined;
 }
 
-const MAX_REF_LENGTH = 200;
-const REF = /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/;
-
-/** Why a ref is not asked for, or `undefined` if it is: a plain branch, tag or commit name. */
-export function gitRefProblem(ref: unknown): string | undefined {
-  if (ref === undefined) return undefined;
-  const usable =
-    typeof ref === 'string' &&
-    ref.length <= MAX_REF_LENGTH &&
-    REF.test(ref) &&
-    !ref.includes('..') &&
-    !ref.includes('//') &&
-    !ref.endsWith('/') &&
-    !ref.endsWith('.') &&
-    !ref.endsWith('.lock');
-  return usable ? undefined : 'The ref must be the plain name of a branch, a tag or a commit';
-}
+/** The rule of a ref is the one of an index entry: kept in `@mooncg/core`. */
+export { gitRefProblem };
 
 /**
  * Takes what may be a secret out of every URL in a text, for whatever is shown, logged or

@@ -30,6 +30,8 @@ describe('loadConfig', () => {
       bundleBackupsKept: 3,
       bundleInstallTimeoutMs: 300_000,
       bundleNpmRegistry: undefined,
+      registryIndexes: [],
+      registryRefreshMs: 6 * 60 * 60_000,
       secureCookies: false,
       trustProxy: false,
       dev: false,
@@ -60,6 +62,8 @@ describe('loadConfig', () => {
       bundleBackupsKept: 3,
       bundleInstallTimeoutMs: 300_000,
       bundleNpmRegistry: undefined,
+      registryIndexes: [],
+      registryRefreshMs: 6 * 60 * 60_000,
       secureCookies: false,
       trustProxy: false,
       dev: false,
@@ -91,6 +95,8 @@ describe('loadConfig', () => {
       bundleBackupsKept: 3,
       bundleInstallTimeoutMs: 300_000,
       bundleNpmRegistry: undefined,
+      registryIndexes: [],
+      registryRefreshMs: 6 * 60 * 60_000,
       secureCookies: false,
       trustProxy: false,
       dev: false,
@@ -121,6 +127,30 @@ describe('loadConfig', () => {
 
   it('rejects unknown flags', () => {
     expect(() => loadConfig({ argv: ['--prot', '1'], env: {}, cwd })).toThrow(/prot/);
+  });
+
+  it('takes registry indexes from flags, the environment and the file, in that order', () => {
+    const one = 'https://one.example.org/index.json';
+    const two = 'https://two.example.org/index.json';
+    const file = { values: { registryIndexes: [two] }, dir: cwd, path: resolve(cwd, 'm.json') };
+    expect(loadConfig({ argv: [], env: {}, cwd, file }).registryIndexes).toEqual([two]);
+    expect(
+      loadConfig({ argv: [], env: { MOONCG_REGISTRY_INDEXES: `${one},${two}` }, cwd, file })
+        .registryIndexes,
+    ).toEqual([one, two]);
+    const argv = ['--registry-index', one, '--registry-refresh-ms', '60000'];
+    expect(loadConfig({ argv, env: {}, cwd, file })).toMatchObject({
+      registryIndexes: [one],
+      registryRefreshMs: 60_000,
+    });
+  });
+
+  it('refuses a registry index that is not https, without saying its credentials', () => {
+    const argv = ['--registry-index', 'http://reader:s3cret@example.org/index.json'];
+    expect(() => loadConfig({ argv, env: {}, cwd })).toThrow(/https/);
+    expect(() => loadConfig({ argv, env: {}, cwd })).not.toThrow(/s3cret/);
+    const file = { values: { registryIndexes: 'x' }, dir: cwd, path: resolve(cwd, 'm.json') };
+    expect(() => loadConfig({ argv: [], env: {}, cwd, file })).toThrow(/registryIndexes/);
   });
 });
 

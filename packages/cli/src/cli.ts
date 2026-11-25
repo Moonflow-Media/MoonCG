@@ -5,6 +5,7 @@ import { type AccountArgs, tokenCommand, UsageError, userCommand } from './accou
 import { bundleCommand } from './bundle-command.js';
 import { createBundle, initInstallation, shownPath } from './create-command.js';
 import { moduleCommand } from './module-command.js';
+import { registryCommand } from './registry-command.js';
 import { writeTypes } from './types-command.js';
 
 const USAGE = `Usage: mooncg <command>
@@ -49,6 +50,8 @@ const USAGE = `Usage: mooncg <command>
 
   bundle list
   bundle install <git-url|zip|folder> [--ref <branch|tag|commit>] [--scripts] [--yes]
+  bundle install <name> [--version <version>] [--index <id|url>] [--scripts] [--yes]
+  bundle outdated
   bundle update <name> [<git-url|zip|folder>] [--ref <ref>] [--scripts] [--yes] [--on-air]
   bundle remove <name> [--force] [--delete-files] [--purge-data] [--yes] [--on-air]
   bundle enable <name>
@@ -68,11 +71,16 @@ const USAGE = `Usage: mooncg <command>
       overrides nothing else. While the installation is on air, update, remove, disable,
       reload and restore are refused unless --on-air is given, which takes the same
       permission as the change itself. A removal that both stand in the way of takes both.
+      A plain name that is no file or folder here is installed from the catalog of the
+      registry indexes: the newest version that runs on this MoonCG, or --version. What
+      was installed from an index is updated from it; outdated lists what has a newer
+      version there.
 
   module list
   module enable <name>
   module disable <name>
-  module install <git-url|zip|folder> [--ref <ref>] [--scripts] [--yes]
+  module install <git-url|zip|folder|name> [--ref <ref>] [--version <version>] [--scripts] [--yes]
+  module outdated
   module update <name> [<git-url|zip|folder>] [--ref <ref>] [--scripts] [--yes] [--on-air]
   module remove <name> [--purge-data] [--yes] [--on-air]
       Manage the modules of a running server through its API. A module is code that runs
@@ -83,7 +91,17 @@ const USAGE = `Usage: mooncg <command>
       its files and keeps its configuration unless --purge-data is given. While the
       installation is on air, updating or removing an enabled module takes --on-air.
 
-  bundle and module commands take --url <url> (default: http://127.0.0.1:9090, or
+  registry list
+  registry add <url>
+  registry remove <id|url>
+  registry refresh
+  registry search [<text>] [--kind bundle|module]
+  registry info <name>
+      The registry indexes of a running server, static JSON files that list bundles and
+      modules, and what they list. An index is not checked by MoonCG: add only those whose
+      authors you trust. Adding and removing takes system:settings.manage as well.
+
+  bundle, module and registry commands take --url <url> (default: http://127.0.0.1:9090, or
   MOONCG_URL) and an API token, from MOONCG_TOKEN or --token <token>, that holds
   system:bundles.manage for bundles and system:modules.manage for modules. Prefer
   MOONCG_TOKEN: an argument shows in the process list and the shell history. The token is
@@ -193,6 +211,8 @@ export async function run(
           deleteFiles: values['delete-files'] ?? false,
           purgeData: values['purge-data'] ?? false,
           insecure: values.insecure ?? false,
+          version: values.version,
+          index: values.index,
         },
         {
           cwd: io.cwd,
@@ -221,6 +241,8 @@ export async function run(
           scripts: values.scripts ?? false,
           onAir: values['on-air'] ?? false,
           purgeData: values['purge-data'] ?? false,
+          version: values.version,
+          index: values.index,
         },
         {
           cwd: io.cwd,
@@ -233,6 +255,20 @@ export async function run(
               : (question) => io.confirm?.(question) ?? Promise.resolve(false),
           pollMs: options.pollMs,
         },
+      );
+      return 0;
+    }
+    if (command === 'registry') {
+      await registryCommand(
+        first,
+        positionals.slice(2),
+        {
+          url: values.url ?? env.MOONCG_URL ?? 'http://127.0.0.1:9090',
+          token: values.token ?? env.MOONCG_TOKEN,
+          insecure: values.insecure ?? false,
+          kind: values.kind,
+        },
+        { log: (line) => io.log(line), warn: (line) => io.error(line), fetch: io.fetch },
       );
       return 0;
     }
@@ -314,6 +350,9 @@ function parse(argv: readonly string[]) {
       template: { type: 'string' },
       dir: { type: 'string' },
       config: { type: 'string' },
+      version: { type: 'string' },
+      index: { type: 'string' },
+      kind: { type: 'string' },
     },
   });
 }

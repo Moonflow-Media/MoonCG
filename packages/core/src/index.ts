@@ -12,6 +12,7 @@ export * from './paths.js';
 export * from './permissions/authorize.js';
 export * from './permissions/capabilities.js';
 export * from './protocol/protocol.js';
+export * from './registry/index-format.js';
 export * from './replicant/handle.js';
 export * from './replicant/patch.js';
 export * from './replicant/registry.js';

@@ -43,6 +43,7 @@ import { createNpmInstall, type NpmInstall, type NpmNeed, npmNeed } from './npm.
 import {
   type BundleSource,
   BundleSources,
+  type CatalogOrigin,
   type PublicSource,
   publicSource,
   refetchable,
@@ -181,6 +182,11 @@ export interface InstallerOptions {
   readonly npmInstall?: NpmInstall | undefined;
   /** The registry npm packages are fetched from. Without it, npm's own. */
   readonly npmRegistry?: string | undefined;
+  /**
+   * The address of a registry index by its id, credentials included, for fetching again what
+   * was installed from it. Without it, that is fetched as an address of its own.
+   */
+  readonly indexAddress?: ((id: string) => string | undefined) | undefined;
   /** For tests: how Git is run, and whether `file://` addresses are taken. */
   readonly git?: Pick<GitOptions, 'allowFileUrls' | 'command' | 'env'> | undefined;
   /** Deletes what a bundle stored: configuration, assets, replicants and role grants. */
@@ -245,7 +251,7 @@ interface BackupMeta {
 const STAGING_ID = /^[0-9a-f]{24}$/;
 /** The note in a staging folder that lets a restart take the bundle up again. */
 const STAGED_NOTE = 'staged.json';
-const SOURCE_TYPES = new Set(['git', 'path', 'zip', 'upload']);
+const SOURCE_TYPES = new Set(['git', 'path', 'zip', 'upload', 'url']);
 
 /** How a bundle was fetched and decided about, as a restart needs it. */
 interface StagedNote {
@@ -265,6 +271,7 @@ const NOTE_LIMITS = {
   commit: 64,
   path: 4096,
   filename: 255,
+  sha256: 64,
   by: 200,
 } as const;
 
@@ -305,12 +312,15 @@ function parseNote(
     !noteText(source.ref, NOTE_LIMITS.ref) ||
     !noteText(source.commit, NOTE_LIMITS.commit) ||
     !noteText(source.path, NOTE_LIMITS.path) ||
-    !noteText(source.filename, NOTE_LIMITS.filename)
+    !noteText(source.filename, NOTE_LIMITS.filename) ||
+    !noteText(source.sha256, NOTE_LIMITS.sha256) ||
+    !(source.catalog === undefined || parseCatalogOrigin(source.catalog))
   ) {
     return undefined;
   }
-  const field = (name: 'url' | 'ref' | 'commit' | 'path' | 'filename') =>
+  const field = (name: 'url' | 'ref' | 'commit' | 'path' | 'filename' | 'sha256') =>
     source[name] === undefined ? {} : { [name]: source[name] as string };
+  const catalog = parseCatalogOrigin(source.catalog);
   return {
     id,
     source: {
@@ -320,12 +330,37 @@ function parseNote(
       ...field('commit'),
       ...field('path'),
       ...field('filename'),
+      ...field('sha256'),
+      ...(catalog === undefined ? {} : { catalog }),
     },
     trusted: note.trusted,
     by: note.by,
     stagedAt,
     expiresAt,
     ...(note.target === undefined ? {} : { target: note.target as string }),
+  };
+}
+/** The index entry a note says a staged bundle came from, built anew from its fields. */
+export function parseCatalogOrigin(value: unknown): CatalogOrigin | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const given = value as Record<string, unknown>;
+  const text = (field: unknown, limit: number) =>
+    typeof field === 'string' && field.length > 0 && field.length <= limit;
+  if (
+    !text(given.index, 64) ||
+    !text(given.indexUrl, 2048) ||
+    (given.kind !== 'bundle' && given.kind !== 'module') ||
+    !text(given.name, 214) ||
+    !text(given.version, 64)
+  ) {
+    return undefined;
+  }
+  return {
+    index: given.index as string,
+    indexUrl: given.indexUrl as string,
+    kind: given.kind,
+    name: given.name as string,
+    version: given.version as string,
   };
 }
 const BACKUP_META = 'backup.json';
@@ -342,7 +377,7 @@ function describeSource(source: BundleSource): string {
   const { type, location, ref } = publicSource(source);
   if (type === 'git') return `Git repository ${location}${ref === undefined ? '' : ` at ${ref}`}`;
   if (type === 'path') return `folder ${location}`;
-  return type === 'zip' ? `archive ${location}` : `uploaded archive ${location}`;
+  return type === 'zip' || type === 'url' ? `archive ${location}` : `uploaded archive ${location}`;
 }
 
 /**
@@ -464,16 +499,18 @@ export class BundleInstaller {
    * job, for a request that names no usable source, or while as much is being fetched or
    * waits fetched as may. `target` makes it the update of an installed bundle: the fetched
    * bundle must have that name. `scripts` says that the bundle is trusted to run code while
-   * it is installed; without it a bundle that would steer npm is refused.
+   * it is installed; without it a bundle that would steer npm is refused. `catalog` says which
+   * registry index entry the source was taken from: it is remembered with the source.
    */
   stage(request: {
     readonly source: StageSource;
     readonly target?: string | undefined;
     readonly scripts?: boolean | undefined;
+    readonly catalog?: CatalogOrigin | undefined;
     readonly by: string;
   }): Promise<InstallJob> {
     return this.#guarded(async () => {
-      const { source, target, by } = request;
+      const { source, target, by, catalog } = request;
       const trusted = request.scripts === true;
       if (target !== undefined) this.#installed(target);
       const problem = this.#sourceProblem(source);
@@ -499,11 +536,24 @@ export class BundleInstaller {
         try {
           step('fetch');
           const content = join(dir, 'bundle');
-          const stored = await this.#fetch(source, dir, content);
+          const fetched = await this.#fetch(source, dir, content);
+          const stored: BundleSource = catalog === undefined ? fetched : { ...fetched, catalog };
           step('validate');
           const { manifest, errors } = await readManifest(content);
           if (!manifest) throw refuse(errors.join('; '));
           job.bundle = manifest.name;
+          // An index entry names what it offers; an archive that is something else is not it.
+          if (catalog !== undefined && manifest.name !== catalog.name) {
+            throw refuse(
+              `The index entry "${catalog.name}" brought bundle "${manifest.name}"; nothing was staged`,
+            );
+          }
+          // Nor is a version that the index claims for an archive of another one.
+          if (catalog !== undefined && manifest.version !== catalog.version) {
+            throw refuse(
+              `The index lists "${catalog.name}" ${catalog.version}, but the bundle it brought is version ${manifest.version}; nothing was staged`,
+            );
+          }
           const problems = this.#problems(manifest, target);
           if (problems.length > 0) throw refuse(problems.join('; '));
           const now = this.#now();
@@ -639,9 +689,12 @@ export class BundleInstaller {
   ): Promise<InstallJob> {
     this.#installed(name);
     let { source } = options;
+    let catalog: CatalogOrigin | undefined;
     if (source === undefined) {
       const known = (await this.#sources.get(name))?.source;
-      source = refetchable(known);
+      source = refetchable(known, this.#options.indexAddress);
+      // Fetched again from an index entry, it stays tied to that entry.
+      catalog = known?.catalog;
       if (source === undefined) {
         throw new MoonCGError(
           'conflict',
@@ -651,7 +704,13 @@ export class BundleInstaller {
         );
       }
     }
-    return this.stage({ source, target: name, scripts: options.scripts, by: options.by });
+    return this.stage({
+      source,
+      target: name,
+      scripts: options.scripts,
+      by: options.by,
+      ...(catalog === undefined ? {} : { catalog }),
+    });
   }
 
   /**

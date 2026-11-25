@@ -2,8 +2,10 @@ import { UsageError } from './accounts-command.js';
 import { type ApiArgs, type ApiDeps, createApiClient, printable } from './api-client.js';
 import {
   type BundleArgs,
+  catalogWarning,
   describeSource,
   installFlow,
+  outdated,
   type StagedCommon,
 } from './bundle-command.js';
 
@@ -18,7 +20,7 @@ export interface ModuleDeps extends ApiDeps {
 
 /** What the module commands were given besides the server and the token. */
 export type ModuleArgs = ApiArgs &
-  Pick<BundleArgs, 'yes' | 'ref' | 'scripts' | 'onAir' | 'purgeData'>;
+  Pick<BundleArgs, 'yes' | 'ref' | 'scripts' | 'onAir' | 'purgeData' | 'version' | 'index'>;
 
 /** A module as the server tells it. */
 interface Listed {
@@ -66,6 +68,7 @@ function summary(staged: StagedModule, scripts: boolean): string[] {
           }`,
         ]),
     `  WARNING: ${staged.access}`,
+    ...catalogWarning(staged.source),
     `  main file: ${staged.main}`,
     `  runs code while it is installed: ${code}`,
     ...(staged.engine === undefined ? [] : [`  needs MoonCG: ${staged.engine}`]),
@@ -120,6 +123,10 @@ export async function moduleCommand(
       );
     }
     return;
+  }
+  if (action === 'outdated') {
+    if (subjects.length > 0) throw new UsageError();
+    return outdated(call, 'module', log);
   }
   if (action === 'install' || action === 'update') {
     const [source] = action === 'install' ? subjects : rest;

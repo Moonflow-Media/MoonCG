@@ -1,0 +1,29 @@
+{
+  "$schema": "../../docs/registry-index.schema.json",
+  "index": 1,
+  "title": "MoonCG example index",
+  "entries": [
+    {
+      "name": "scoreboard",
+      "kind": "bundle",
+      "title": "Scoreboard",
+      "description": "The example bundle of MoonCG: a score with a panel and a graphic.",
+      "author": "MoonCG",
+      "license": "MIT",
+      "tags": ["example", "sports"],
+      "versions": [
+        {
+          "version": "0.1.0",
+          "engine": {
+            "mooncg": ">=0.10.0"
+          },
+          "source": {
+            "type": "zip",
+            "url": "scoreboard-0.1.0.zip",
+            "sha256": "2fb654add918ce0ff8df68d9d8a7c89834d0c684124b2f218ca4175888c9eff5"
+          }
+        }
+      ]
+    }
+  ]
+}

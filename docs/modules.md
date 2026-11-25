@@ -139,6 +139,14 @@ mooncg module remove greeter [--purge-data] [--on-air]
    removed. **Discard** deletes what was fetched; it is deleted by itself after 30 minutes,
    and at the next start.
 
+A module can also be installed **from the catalog** of the registry indexes
+(`/bundles/catalog?kind=module`, or `mooncg module install <name> [--version <v>]`): the same
+steps, with a source the index names (a ZIP checked against its SHA-256, or a Git commit). Its
+summary says which index listed it and that MoonCG does not check what an index lists. A
+module installed from an index entry shows **Update available** when that entry has a newer
+version that runs on this MoonCG; `mooncg module outdated` lists them. See
+[registry.md](registry.md).
+
 **Update** fetches the new version from where the module came from, or from the source given,
 and shows it with the version it replaces. Putting it in place stops the module, swaps its
 folder and, if the module is enabled, starts the new version; if that fails, the earlier
@@ -405,13 +413,15 @@ nothing.
 
 ## Who may do this
 
-| What                                              | Needs                                                    |
-| ------------------------------------------------- | -------------------------------------------------------- |
-| Listing modules, enabling, disabling              | `system:modules.manage`                                  |
-| Reading and writing the configuration of a module | `system:modules.manage` **and** `system:settings.manage` |
-| Seeing the list of system permissions             | `system:users.manage`                                    |
-| Installing, updating, removing a module           | `system:modules.manage`                                  |
-| Putting a module into `modules/` by hand          | Access to the machine                                    |
+| What                                               | Needs                                                    |
+| -------------------------------------------------- | -------------------------------------------------------- |
+| Listing modules, enabling, disabling               | `system:modules.manage`                                  |
+| Reading and writing the configuration of a module  | `system:modules.manage` **and** `system:settings.manage` |
+| Seeing the list of system permissions              | `system:users.manage`                                    |
+| Installing, updating, removing a module            | `system:modules.manage`                                  |
+| Reading the catalog of modules, installing from it | `system:modules.manage`                                  |
+| Adding or removing a registry index                | `system:settings.manage` and a manage permission         |
+| Putting a module into `modules/` by hand           | Access to the machine                                    |
 
 Only `admin` holds `system:modules.manage` unless you grant it. Of the grants, only `*`,
 `system:*` and the permission itself cover it.

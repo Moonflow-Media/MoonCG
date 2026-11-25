@@ -6,8 +6,11 @@ import {
   isLoopbackHost,
   isLoopbackOrigin,
   isPlainObject,
+  registryUrlProblem,
 } from '@mooncg/core';
 import { DEFAULT_INSTALL_LIMITS } from '../install/files.js';
+import { withoutCredentials } from '../install/git.js';
+import { DEFAULT_REGISTRY_REFRESH_MS } from '../registry/registry.js';
 
 /** How long Git and npm may each take while a bundle is installed, unless configured. */
 export const DEFAULT_BUNDLE_INSTALL_TIMEOUT_MS = 5 * 60_000;
@@ -73,6 +76,14 @@ export interface ServerConfig {
    * `.npmrc`, so this is where another registry is named.
    */
   readonly bundleNpmRegistry: string | undefined;
+  /**
+   * The registry indexes the catalog is built from, as `https://` addresses (plain `http://`
+   * on this machine only). Administrators can add more at run time; these cannot be removed
+   * there. An address may hold credentials, which are sent to that index alone.
+   */
+  readonly registryIndexes: readonly string[];
+  /** How often the registry indexes are fetched again, in milliseconds. */
+  readonly registryRefreshMs: number;
   /**
    * Marks the session cookies `Secure`, so browsers send them over HTTPS only. Turn it on
    * whenever people reach the server through HTTPS.
@@ -140,6 +151,8 @@ const FLAGS = {
   'bundle-backups-kept': { type: 'string' },
   'bundle-install-timeout-ms': { type: 'string' },
   'bundle-npm-registry': { type: 'string' },
+  'registry-index': { type: 'string', multiple: true },
+  'registry-refresh-ms': { type: 'string' },
   'allowed-origin': { type: 'string', multiple: true },
   'secure-cookies': { type: 'boolean' },
   'trust-proxy': { type: 'boolean' },
@@ -193,6 +206,7 @@ interface FileValues {
   readonly modulesDir?: string;
   readonly publicUrl?: string;
   readonly allowedOrigins?: readonly string[];
+  readonly registryIndexes?: readonly string[];
   readonly watch?: boolean;
 }
 
@@ -212,6 +226,7 @@ function fileValues(file: ConfigFile | undefined): FileValues {
     'modulesDir',
     'publicUrl',
     'allowedOrigins',
+    'registryIndexes',
     'watch',
   ];
   for (const key of Object.keys(values)) {
@@ -229,7 +244,15 @@ function fileValues(file: ConfigFile | undefined): FileValues {
     if (typeof value !== 'string' || value === '') throw wrong(`"${key}" must be a path`);
     return resolve(file.dir, value);
   };
-  const { port, host, allowedOrigins, watch, publicUrl } = values;
+  const { port, host, allowedOrigins, watch, publicUrl, registryIndexes } = values;
+  if (
+    registryIndexes !== undefined &&
+    (!Array.isArray(registryIndexes) || !registryIndexes.every((item) => typeof item === 'string'))
+  ) {
+    throw wrong(
+      '"registryIndexes" must be a list of addresses such as "https://example.org/index.json"',
+    );
+  }
   if (publicUrl !== undefined && typeof publicUrl !== 'string') {
     throw wrong('"publicUrl" must be an address such as "https://show.example"');
   }
@@ -269,6 +292,7 @@ function fileValues(file: ConfigFile | undefined): FileValues {
     ...(modulesDir === undefined ? {} : { modulesDir }),
     ...(publicUrl === undefined ? {} : { publicUrl }),
     ...(allowedOrigins === undefined ? {} : { allowedOrigins: allowedOrigins as string[] }),
+    ...(registryIndexes === undefined ? {} : { registryIndexes: registryIndexes as string[] }),
     ...(watch === undefined ? {} : { watch }),
   };
 }
@@ -276,7 +300,7 @@ function fileValues(file: ConfigFile | undefined): FileValues {
 /**
  * Builds the configuration from four places, the earlier one winning: command line flags,
  * environment variables, the configuration file (`port`, `host`, `dataDir`, `bundlesDir`,
- * `modulesDir`, `publicUrl`, `allowedOrigins`, `watch`; see `readConfigFile`) and the defaults. `--dev` turns dev mode
+ * `modulesDir`, `publicUrl`, `allowedOrigins`, `registryIndexes`, `watch`; see `readConfigFile`) and the defaults. `--dev` turns dev mode
  * on and exists as a flag only; `--watch` (`MOONCG_WATCH`) turns on the watcher alone, and
  * `--no-watch` (`MOONCG_WATCH=0`) turns it off whatever the later places say.
  *
@@ -284,7 +308,9 @@ function fileValues(file: ConfigFile | undefined): FileValues {
  * `--extension-memory-mb`, `--extension-start-timeout-ms`, `--extension-heartbeat-timeout-ms`,
  * `--max-body-bytes`, `--asset-max-file-bytes`, `--asset-quota-bytes`, `--asset-max-files`,
  * `--bundle-max-archive-bytes`, `--bundle-max-unpacked-bytes`, `--bundle-max-files`,
- * `--bundle-backups-kept`, `--bundle-install-timeout-ms`, `--bundle-npm-registry`, repeatable `--allowed-origin`, and the switches `--secure-cookies` and
+ * `--bundle-backups-kept`, `--bundle-install-timeout-ms`, `--bundle-npm-registry`, `--registry-refresh-ms`,
+ * repeatable `--allowed-origin` and `--registry-index` (`MOONCG_REGISTRY_INDEXES`, a
+ * comma-separated list), and the switches `--secure-cookies` and
  * `--trust-proxy`) wins over its environment variable: the flag in capitals with `MOONCG_` in
  * front and underscores for dashes, such as `MOONCG_DATA_DIR`, and `MOONCG_ALLOWED_ORIGINS` as
  * a comma-separated list. A switch is on in the environment as `1` or `true`, and can be
@@ -395,9 +421,33 @@ export function loadConfig({ argv, env, cwd, file }: ConfigSources): ServerConfi
     bundleNpmRegistry: parseRegistry(
       values['bundle-npm-registry'] ?? env.MOONCG_BUNDLE_NPM_REGISTRY,
     ),
+    registryIndexes: parseIndexes(
+      values['registry-index'] ??
+        env.MOONCG_REGISTRY_INDEXES?.split(',').filter((url) => url.trim() !== '') ??
+        fromFile.registryIndexes ??
+        [],
+    ),
+    registryRefreshMs: parsePositive(
+      'registry refresh interval',
+      values['registry-refresh-ms'] ??
+        env.MOONCG_REGISTRY_REFRESH_MS ??
+        String(DEFAULT_REGISTRY_REFRESH_MS),
+    ),
     secureCookies: values['secure-cookies'] ?? on(env.MOONCG_SECURE_COOKIES),
     trustProxy,
   };
+}
+
+/** The registry indexes, each checked; an unusable one stops the start with the reason. */
+function parseIndexes(urls: readonly string[]): string[] {
+  return urls.map((given) => {
+    const url = given.trim();
+    const problem = registryUrlProblem(url);
+    if (problem !== undefined) {
+      throw new Error(`The registry index "${withoutCredentials(url)}" cannot be used: ${problem}`);
+    }
+    return url;
+  });
 }
 
 /**

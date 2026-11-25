@@ -39,18 +39,19 @@ scripts can use as well, the REST API under `/api/v1` and the SDK client.
 
 ## Pages
 
-| Path                           | Shows                                        | Needs                    |
-| ------------------------------ | -------------------------------------------- | ------------------------ |
-| `/`                            | The first workspace                          | `system:dashboard.view`  |
-| `/w/<workspace>`               | The panels of that workspace                 | `system:dashboard.view`  |
-| `/bundles`                     | Bundles with state and errors; installing    | `system:dashboard.view`  |
-| `/graphics`                    | Graphics with their URLs and connected pages | `system:dashboard.view`  |
-| `/assets`                      | The asset categories of each bundle          | `system:dashboard.view`  |
-| `/settings`                    | A form for each bundle that has a config     | `system:settings.manage` |
-| `/modules`                     | Modules with state and errors; on and off    | `system:modules.manage`  |
-| `/admin/users`, `/admin/roles` | Users and roles                              | `system:users.manage`    |
-| `/admin/tokens`                | API tokens                                   | `system:tokens.manage`   |
-| `/logs`                        | The latest lines of the server log           | `system:logs.view`       |
+| Path                           | Shows                                        | Needs                                              |
+| ------------------------------ | -------------------------------------------- | -------------------------------------------------- |
+| `/`                            | The first workspace                          | `system:dashboard.view`                            |
+| `/w/<workspace>`               | The panels of that workspace                 | `system:dashboard.view`                            |
+| `/bundles`                     | Bundles with state and errors; installing    | `system:dashboard.view`                            |
+| `/bundles/catalog`             | The catalog of the registry indexes          | `system:bundles.manage` or `system:modules.manage` |
+| `/graphics`                    | Graphics with their URLs and connected pages | `system:dashboard.view`                            |
+| `/assets`                      | The asset categories of each bundle          | `system:dashboard.view`                            |
+| `/settings`                    | A form for each bundle that has a config     | `system:settings.manage`                           |
+| `/modules`                     | Modules with state and errors; on and off    | `system:modules.manage`                            |
+| `/admin/users`, `/admin/roles` | Users and roles                              | `system:users.manage`                              |
+| `/admin/tokens`                | API tokens                                   | `system:tokens.manage`                             |
+| `/logs`                        | The latest lines of the server log           | `system:logs.view`                                 |
 
 The settings page also has a form for each [module](modules.md) with a config, for whoever
 holds `system:modules.manage` as well. The users page shows the
@@ -131,6 +132,27 @@ and **Remove** ask whether to do it anyway before they send the request with
 need is a question of its own (see below), and saying yes to one is no answer to the other. An update can be fetched without a question, since fetching interrupts nothing; its card
 then says that putting it in place is blocked, and its **Update** button asks first. **Enable**
 never asks.
+
+#### The catalog and update hints
+
+**Catalog** in the head of the Bundles page (and of the Modules page, which opens it on
+modules) leads to `/bundles/catalog`. It lists what the registry indexes list, of the kinds you
+may manage: title, description, author, license, tags, the index, each version with whether it
+runs on this MoonCG (and why not), and what is installed of that name. A search and a kind
+filter narrow it. **Install** fetches the newest version that runs into staging and says where
+to decide: the summary on the Bundles or Modules page, which names the index and says that
+MoonCG does not check what an index lists. Something installed of that name from elsewhere is
+marked so and offered nothing. The page loads no picture from another site.
+
+Below the entries, **Indexes** shows each index with how it stands: how many entries and when
+it was fetched; or why the last fetch failed and from when the copy in use is; or that it could
+not be fetched at all. **Check now** fetches them all. Whoever holds `system:settings.manage`
+as well adds an index by its address and removes one that was added; one of the server's
+configuration is marked so and changed there.
+
+A bundle or module installed from an index entry that has a newer version that runs shows an
+**Update available: x.y.z** badge in its row, and **Update to x.y.z** stages that version as
+an update, which is then put in place like any update. See [registry.md](registry.md).
 
 #### Installing, updating and removing
 

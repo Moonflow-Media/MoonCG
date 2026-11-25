@@ -1,6 +1,6 @@
-import { defineComponent, h, ref } from 'vue';
+import { defineComponent, h, onMounted, ref } from 'vue';
 import { api, messageOf } from '../api.js';
-import { describeSource, type SourceInfo } from '../stores/installs.js';
+import { describeSource, NOT_VETTED, type SourceInfo } from '../stores/installs.js';
 import { useOnAir } from '../stores/onAir.js';
 import { readableSize } from './Assets.js';
 import { field, part } from './admin.js';
@@ -84,6 +84,14 @@ export function outcomeOf(job: ModuleJob): { text: string; ok: boolean } {
 function facts(staged: StagedModule): [string, string][] {
   return [
     ['Source', describeSource(staged.source)],
+    ...(staged.source.catalog === undefined
+      ? []
+      : [
+          ['Registry index', `${staged.source.catalog.indexUrl}. ${NOT_VETTED}`] as [
+            string,
+            string,
+          ],
+        ]),
     ['Main file', staged.main],
     [
       'Runs code on install',
@@ -177,7 +185,30 @@ export const ModuleInstall = defineComponent({
     /** Fetches the new version of an installed module from where it came from. */
     const update = (name: string) =>
       follow(() => api.request('POST', `/api/v1/modules/${part(name)}/update`, {}));
-    expose({ update });
+    /** Fetches what an index offers as the update of an installed module. */
+    const updateFromIndex = (name: string, index: string) =>
+      follow(() =>
+        api.request('POST', '/api/v1/registry/stage', {
+          kind: 'module',
+          index,
+          name,
+          update: true,
+        }),
+      );
+    expose({ update, updateFromIndex });
+    // What was fetched elsewhere, such as from the catalog, waits here for a decision too.
+    onMounted(async () => {
+      try {
+        const answer = await api.request<{ staged?: StagedModule[] }>('GET', `${INSTALLS}/staged`);
+        const known = new Set(staged.value.map((entry) => entry.id));
+        staged.value = [
+          ...staged.value,
+          ...(answer?.staged ?? []).filter((entry) => !known.has(entry.id)),
+        ];
+      } catch {
+        // Nothing waits that can be shown; fetching anew still works.
+      }
+    });
 
     const drop = (id: string) => {
       staged.value = staged.value.filter((entry) => entry.id !== id);
